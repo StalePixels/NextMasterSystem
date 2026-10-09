@@ -121,7 +121,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tracedef  # noqa: E402
 
 RASTER_ORG, RASTER_MAX = 0x3C00, 0x400   # rast_code in src/runtime/fw2.asm
-FILE_MAX = 0x1E00                         # OVL_BUF in src/shell/nm.h
 ENTRY = {'out_n': 0xE000, 'in_n': 0xE003, 'ed': 0xE006, 'ld_de_a': 0xE009, 'outi_run': 0xE012, 'io': 0xE015}
 # Names every asm block can use. The addresses are fixed by src/runtime/fw.asm
 # (the jump table, then "state that tools read from outside"). The jt_ names
@@ -551,8 +550,6 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     body += chunk('CONF', conf)
     body += chunk('META', metab)
     body += chunk('END ', struct.pack('<I', crc32(body)))
-    if len(body) > FILE_MAX:
-        raise SystemExit(f'{spec}: {len(body)} bytes, more than the loader reads ({FILE_MAX})')
     out = os.path.join(outdir, f'{crc:08X}.nms')
     open(out, 'wb').write(body)
     print(f'{out}: {meta.get("title", "")}, CRC32 {crc:08X}, {len(cart)} bytes, ABI {r["abi"]}, '

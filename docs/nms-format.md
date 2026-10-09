@@ -40,6 +40,8 @@ Every chunk starts with an 8-byte chunk header:
 
 The chunk data follows the header. Chunks may appear in any order, but `END ` is always last. A reader skips any chunk whose tag it does not know, using the length. Each tag may appear only once. `PAGE` is the exception.
 
+A file has no size limit, and neither has a chunk. NextMasterSystem never holds a whole file in memory: it reads the file in order through a small buffer, and seeks back to the chunks it needs. It refuses a file that has `CRCS`, `PTCH`, `CONF` or `META` twice.
+
 | Tag | Required | Content |
 |---|---|---|
 | `CRCS` | yes | every cart CRC32 this file accepts |
@@ -53,7 +55,7 @@ The chunk data follows the header. Chunks may appear in any order, but `END ` is
 
 ## `CRCS`: accepted carts
 
-A list of `u32` CRC32 values. The first is the primary CRC32 from the header. This file also fits these other dumps of the same game. They are other regions, other revisions, or dumps that differ only in bytes the file does not touch.
+A list of `u32` CRC32 values, of any length. The first is the primary CRC32 from the header. This file also fits these other dumps of the same game. They are other regions, other revisions, or dumps that differ only in bytes the file does not touch.
 
 Listing a CRC32 here claims that the `CHECK` operations in `PTCH` pass for that dump. The file's tools must prove the claim before they add a CRC32. The loader refuses a file whose `CRCS` does not list the cart's CRC32.
 
@@ -67,7 +69,7 @@ NextMasterSystem does not open every file to find a match. A tool builds `/nm/ov
 | 4 | u16 | number of entries |
 | 6 | 8 per entry | `u32` accepted CRC32, `u32` primary CRC32, which is the file name |
 
-Entries are sorted by accepted CRC32. A reader can therefore search them with a binary search. A cart whose CRC32 is not in the index has no overlay. Without an index, NextMasterSystem looks only for the file named after the cart's own CRC32.
+Entries are sorted by accepted CRC32. A reader can therefore search them with a binary search. NextMasterSystem searches the file in place: it reads only the entries it probes. A cart whose CRC32 is not in the index has no overlay. Without an index, NextMasterSystem looks only for the file named after the cart's own CRC32.
 
 ## `PTCH`: operations
 
@@ -82,7 +84,7 @@ The section holds a sequence of operations. Each operation starts with a `u8` op
 | `$04` | `RAMSITES` | `u16` continuation, `u8` n, n entries | patches for code the game builds in RAM; see `RAMSITES` below |
 | `$05` | `RASTER` | `u16` length, the routine | the per-line horizontal scroll routine; see `RASTER` below |
 
-The loader runs every `CHECK` before it applies any `PATCH`. If one fails, the loader applies none of them and reports the cart as a different dump. Every byte a `PATCH` writes must lie inside a range that a `CHECK` covers.
+The loader reads `PTCH` twice. The first pass runs every `CHECK` and checks every other operation. The second pass applies the operations. If a `CHECK` fails, the loader applies none of them and reports the cart as a different dump. Every byte a `PATCH` writes must lie inside a range that a `CHECK` covers.
 
 A `PATCH` holds only the new bytes, and only the bytes that differ from the cart. A `CHECK` holds only a CRC32 of the original bytes, so the file never carries code or data from the game. A `CHECK` range must lie inside the cart image; a range past its end fails.
 

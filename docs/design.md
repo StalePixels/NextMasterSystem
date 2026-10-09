@@ -18,7 +18,8 @@ The Next has 8K pages. The CPU sees eight of them at a time, one in each 8K slot
 | `$0000` to `$3FFF` | 0, 1 | NextZXOS ROM. The shell never changes it. |
 | `$4000` to `$7FFF` | 2, 3 | NextZXOS bank 5: screen and system variables. The shell writes here only on the information screen, and only to the ULA screen from `$4000` to `$5AFF`. |
 | `$8000` to `$9FFF` | 4 | Resident part: C start-up code, `main`, far-call code, operating system glue, shared state, library routines. |
-| `$A000` to `$BDFF` | 5 | `OVL_BUF`: the overlay index, then the overlay file, is read here whole. |
+| `$A000` to `$A0FF` | 5 | `OVL_BUF`: the loader reads the overlay index and the overlay file through these 256 bytes (`OVL_BUFSIZE`). |
+| `$A100` to `$BDFF` | 5 | Free. |
 | `$BE00` to `$BFDF` | 5 | Stack. It grows down from `$BFE0`. |
 | `$C000` to `$DFFF` | 6 | A data window. The loader maps the cart's RAM pages here one at a time. |
 | `$E000` to `$FFFF` | 7 | The **banked code window**. A far call maps a module's page here. |
@@ -98,7 +99,7 @@ After `loader_load` has read the cart, found the overlay and applied it without 
 
 - the file name. It is `nm_lname`, the long name that the browser gives in DE. `glue.asm` copies it next to the short name, cut to 127 characters. If the browser gave no long name, it is `nm_name`.
 - the CRC32 and size, from `nm.launch`.
-- from the overlay file in `OVL_BUF`: the `title` from its `META` chunk, cut to 48 characters and broken over lines at spaces; the format version from the header, as major.minor; and the framework ABI the file needs.
+- from the overlay file, as the loader read it into `nm`: the `title` from its `META` chunk (`nm.title`), cut to 48 characters and broken over lines at spaces; the format version from the header, as major.minor; and the framework ABI the file needs (both in `nm.nms_ver`).
 - the flags, in words: `priority tiles`, `line-0 palette`, or `none`. They are the `CONF` switches as the loader read them, from `nm.launch.flags`.
 
 It then waits. First it waits, for at most a short time, until no key and no joystick fire is held. This stops the key that picked the cart in the browser from counting. Then it polls every keyboard row, from port `$00FE`, and the Kempston joystick 1 fire bit, from port `$1F`, bit 4. It returns when one is pressed. Interrupts are off, so this is a polling loop. The game then starts as before.
@@ -107,14 +108,30 @@ It then waits. First it waits, for at most a short time, until no key and no joy
 
 `loader_load` in `src/shell/loader/loader.c` does this, in order. The file format is [nms-format.md](nms-format.md).
 
+The loader never holds a whole file in memory. It reads the index and the overlay file through `OVL_BUF`, 256 bytes, so a file or a chunk can be of any size. A small reader in `loader.c` (`struct rd`) hands out the bytes of one run of the file in order: `rd_take` gives the next few bytes in one piece, and `rd_piece` gives the next bytes in pieces for long data such as a `PATCH` or a `RASTER` routine. An operation may cross the end of the buffer: the reader moves the bytes not yet used to the start and reads more after them. `nm_seek` (esxDOS `F_SEEK`) starts a run anywhere in the file.
+
 1. It reads the cart into pages 32 and up and computes its CRC32.
-2. It reads `/nm/ovl/index` into `OVL_BUF`, if the file is there, and looks up the cart's CRC32 with a binary search. The entry gives the primary CRC32, which names the overlay file. A cart that is not in the index has no overlay. Without an index, the overlay file is the one named after the cart's own CRC32.
-3. It reads `/nm/ovl/<CRC32>.nms` into `OVL_BUF` and checks the header: the magic, format major version 1, and a framework ABI not higher than `FW_ABI`. It walks the chunks and checks that each fits in the file and that `END ` is last, with the right CRC32. It checks that `CRCS` lists the cart's CRC32.
-4. It runs every `CHECK` operation and checks the bounds of every other operation. Nothing is written yet, so a dump that fails a `CHECK` is left as it was read.
-5. It applies the operations: `PATCH` into the cart pages, `START` into the start address and stack pointer, and `RAMSITES` or `RASTER` into the framework's second page from `$3C00`, through MMU6. For `RAMSITES` it writes the table the framework reads: the continuation, the count, and for each entry the address, the two original bytes and the two new bytes. It sets the hook addresses that the runtime reads, `rast_hook` and `ramp_hook`.
-6. It reads the `CONF` switches `priority=1` and `toppal=1` into the runtime's flags.
+2. It finds the overlay file in `/nm/ovl/index`, if the file is there. It searches the index in place with a binary search: for each entry it probes, it seeks to the entry and reads its 8 bytes. The entry gives the primary CRC32, which names the overlay file. A cart that is not in the index has no overlay. Without an index, the overlay file is the one named after the cart's own CRC32.
+3. The walk. It reads `/nm/ovl/<CRC32>.nms` once from the start to the end, and every byte up to the `END ` chunk goes through the running CRC32. It checks the header: the magic, format major version 1, and a framework ABI not higher than `FW_ABI`. It reads each chunk header, checks that the chunk fits in the file, and notes where `CRCS`, `PTCH`, `CONF` and `META` start. It reads every other chunk only for the CRC32. `END ` must be last, with the right CRC32, and nothing may follow it. `CRCS` and `PTCH` must be there, and each of the four chunks may appear only once.
+4. It seeks back to `CRCS` and checks that it lists the cart's CRC32. A list of any length works.
+5. It seeks to `META` and keeps the `title` in `nm.title`, and seeks to `CONF` and keeps the switches `priority=1` and `toppal=1` in the runtime's flags.
+6. `PTCH`, first pass. It runs every `CHECK` operation against the cart pages, checks the bounds of every other operation, and works out the original instruction of every `RAMSITES` entry. Nothing is written yet, so a dump that fails a `CHECK` is left as it was read.
+7. `PTCH`, second pass. It seeks back to the start of `PTCH` and applies the operations: `PATCH` into the cart pages, `START` into the start address and stack pointer, and `RAMSITES` or `RASTER` into the framework's second page from `$3C00`, through MMU6. For `RAMSITES` it writes the table the framework reads: the continuation, the count, and for each entry the address, the two original bytes and the two new bytes. It sets the hook addresses that the runtime reads, `rast_hook` and `ramp_hook`.
+
+Only a failed read can stop the second pass. The cart is then part patched, and the loader reports the file as damaged. Picking the cart again reads it again from the card.
 
 The failure codes and their messages are in `src/shell/nm.h` and `src/shell/session/session.c`. "Unknown game" names the file that the loader looked for.
+
+#### Loading `PAGE` chunks
+
+The loader does not load `PAGE` chunks yet. The walk reads them for the CRC32 like any other chunk it does not use. Loading one is an addition to the walk, at the place in `walk()` marked for it:
+
+1. Read the chunk's own header, the page number and the entry addresses, through `OVL_BUF` and the running CRC32, like any other chunk data.
+2. Pick a free 8K RAM page for the chunk and map it at `$C000` with MMU6.
+3. Copy the part of the page's code that is already in `OVL_BUF` to the start of the page, then read the rest of the chunk with `nm_read` straight into the page.
+4. Run the CRC32 over the page's bytes where they are, in place of reading them through `OVL_BUF`.
+
+The code goes into its page once, during the walk, and is never read twice. If the walk then fails, the file is refused and the page is not used.
 
 ### Starting a game
 
@@ -184,5 +201,4 @@ If a module needs data larger than a few hundred bytes, such as icons or a font,
 
 - The memory plan limits a cart to 512K. A cart between 512K and 512K plus 255 bytes passes the size check. It then uses one page too many. This is the prototype's check, kept as it was.
 - A `PATCH` must stay inside one 8K cart page. A `RASTER` routine or a `RAMSITES` table must fit in the 1024 bytes from `$3C00` in the runtime's second page. The shell refuses an overlay file that breaks these rules, and reports failure 7. It does not write past the page.
-- `OVL_BUF` is 7680 bytes. The loader refuses an overlay file larger than that, and an index of more than 959 entries, as damaged.
 - `$E01B` to `$E01D` was unused in the runtime's page. It now holds `fw_resume`. Overlays do not touch it.
