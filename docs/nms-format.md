@@ -2,7 +2,7 @@
 
 An `.nms` file tells NextMasterSystem how to run one Master System game. The file holds the changes NextMasterSystem makes to the player's own cart image, the settings for the game, the game's details for the browser, a 32x32 icon, and any code pages of our own that the game needs. The file never holds bytes copied from a game.
 
-Files live in `/nm/ovl/` on the SD card. Each file is named after the CRC32 of the cart it was made for, in upper-case hex: `/nm/ovl/2728FAA3.nms`.
+Files live in `/nm/ovl/` on the SD card. Each file is named after the CRC32 of the cart it was made for, in upper-case hex: `/nm/ovl/0123ABCD.nms`.
 
 ## Conventions
 
@@ -27,7 +27,7 @@ An `.nms` file has a fixed header, then a sequence of chunks, then the `END ` ch
 | 6 | u8 | framework ABI the file needs; see "Versions" |
 | 7 | u8 | reserved, 0 |
 | 8 | u32 | primary cart CRC32: the cart the file was made for |
-| 12 | u32 | cart size in bytes |
+| 12 | u32 | size in bytes of the primary cart. The loader does not check it, because another accepted dump may have another size. |
 
 ### Chunks
 
@@ -47,7 +47,7 @@ The chunk data follows the header. Chunks may appear in any order, but `END ` is
 | `CONF` | no | settings |
 | `META` | no | the game's details for the browser |
 | `ICON` | no | a 32x32 icon |
-| `PAGE` | no, any number | an 8K page of code of our own |
+| `PAGE` | no, any number | a whole 8K bank of code of our own; not read by the loader yet |
 | `SIGN` | no | reserved for a signature; readers ignore it for now |
 | `END ` | yes | the CRC32 of the file up to this chunk |
 
@@ -55,7 +55,7 @@ The chunk data follows the header. Chunks may appear in any order, but `END ` is
 
 A list of `u32` CRC32 values. The first is the primary CRC32 from the header. This file also fits these other dumps of the same game. They are other regions, other revisions, or dumps that differ only in bytes the file does not touch.
 
-Listing a CRC32 here claims that the `CHECK` operations in `PTCH` pass for that dump. The file's tools must prove the claim before they add a CRC32.
+Listing a CRC32 here claims that the `CHECK` operations in `PTCH` pass for that dump. The file's tools must prove the claim before they add a CRC32. The loader refuses a file whose `CRCS` does not list the cart's CRC32.
 
 ### The alias index
 
@@ -77,14 +77,16 @@ The section holds a sequence of operations. Each operation starts with a `u8` op
 |---|---|---|---|
 | `$00` | `END` | | end of the operations |
 | `$01` | `CHECK` | `u24` cart offset, `u16` length, `u32` CRC32 | the CRC32 of that range of the cart image must equal the value |
-| `$02` | `PATCH` | `u24` cart offset, `u8` n, n bytes | write the bytes into the cart image |
+| `$02` | `PATCH` | `u24` cart offset, `u8` n, n bytes | write the bytes into the cart image. The n bytes stay inside one 8K page of the cart: offset mod 8192, plus n, is at most 8192. |
 | `$03` | `START` | `u16` address, `u16` stack pointer | the game starts at this address instead of `$0000`, with this SP. An SP of 0 means `$DFF0`. |
 | `$04` | `RAMSITES` | `u16` continuation, `u8` n, n entries | patches for code the game builds in RAM; see `RAMSITES` below |
-| `$05` | `RASTER` | `u8` page, `u8` entry | the per-line horizontal scroll routine is entry `entry` of code page `page` |
+| `$05` | `RASTER` | `u16` length, the routine | the per-line horizontal scroll routine; see `RASTER` below |
 
 The loader runs every `CHECK` before it applies any `PATCH`. If one fails, the loader applies none of them and reports the cart as a different dump. Every byte a `PATCH` writes must lie inside a range that a `CHECK` covers.
 
-A `PATCH` holds only the new bytes. A `CHECK` holds only a CRC32 of the original bytes, so the file never carries code or data from the game.
+A `PATCH` holds only the new bytes, and only the bytes that differ from the cart. A `CHECK` holds only a CRC32 of the original bytes, so the file never carries code or data from the game. A `CHECK` range must lie inside the cart image; a range past its end fails.
+
+A file has at most one `RAMSITES` and at most one `RASTER`, and not both: the framework keeps the `RAMSITES` table and the `RASTER` routine in the same place.
 
 ### `RAMSITES`
 
@@ -97,7 +99,21 @@ Some games build code in RAM, so its I/O instructions are not in the cart image.
 | u16 | low 16 bits of the CRC32 of the original n bytes |
 | n | the new bytes |
 
-The framework checks each entry and patches the RAM code, then jumps to the continuation.
+The framework compares the RAM with the original bytes, writes the new bytes where they match, then jumps to the continuation.
+
+The current framework takes entries of 2 bytes only: an `RST` to the I/O entry and an inline code. The loader refuses other lengths. It works out the original instruction from the inline code and the CRC32:
+
+- codes `$00-$07`: `OUT (n),A`, `D3 n`, with n in that port class;
+- codes `$08-$0F`: `IN A,(n)`, `DB n`, with n in that port class;
+- any other code: the `ED`-prefixed instruction `ED` code.
+
+Of these candidates, the original is the one whose CRC32 has the entry's low 16 bits. The file's tools make sure exactly one candidate matches. The loader refuses an entry that no candidate matches.
+
+### `RASTER`
+
+Some games set the horizontal scroll on nearly every line from a line interrupt. The Next cannot deliver an interrupt on every line in time, so the file brings a routine that works out each line's scroll value from the game's RAM. The routine is code of our own, assembled to run at `$3C00` in the framework's second page, at most 1024 bytes long. The loader copies it there. Its entry is its first byte.
+
+The framework calls the routine once a frame with HL pointing to a table of 192 bytes, one per line, IX pointing to the framework's copy of VDP registers 0 to 10, and the game's RAM at `$C000`. The routine fills the table with the value of VDP register 8 for each line, and returns with carry set when the table is valid for this frame. With carry clear, the framework uses its normal scroll handling.
 
 ## `CONF`: settings
 
@@ -111,9 +127,11 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 | `toppal` | `0`, `1` | show the palette the frame handler leaves from line 0 of the picture |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
 
+NextMasterSystem acts on `priority` and `toppal`. It does not act on the other keys yet.
+
 ## `META`: the game's details
 
-The section is text, with one `key=value` per line. The browser shows these values. Unknown keys are ignored.
+The section is text, with one `key=value` per line. The browser shows these values. Unknown keys are ignored. For now, the information screen before a game starts shows the `title`.
 
 | Key | Meaning |
 |---|---|
@@ -134,9 +152,13 @@ The icon is 1024 bytes: 32 rows of 32 pixels. The top row comes first. In each r
 
 All icons share this one palette, so the browser can show any number of icons at once.
 
+NextMasterSystem does not read the `ICON` chunk yet.
+
 ## `PAGE`: code pages
 
-A page is 8K of Z80N code of our own for this game. It can replace a slow routine of the game, hold a per-line raster routine, or act as a library of helpers. A file may hold any number of pages.
+A page is a whole 8K bank of Z80N code of our own for this game. It can replace a slow routine of the game or act as a library of helpers. A file may hold any number of pages.
+
+The loader does not read `PAGE` chunks yet. It skips them, and the far-call inline code below has no value yet. The rest of this section is the design.
 
 | Offset | Size | Field |
 |---|---|---|
