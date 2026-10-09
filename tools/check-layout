@@ -1,0 +1,55 @@
+#!/bin/sh
+# check-layout MAPFILE_OF_RUNTIME MAPFILE_OF_SHELL
+# The runtime's size and alignment rules that the assembler cannot check,
+# and the shell's placement rules. Prints one line per failure and exits 1.
+RT=$1
+SH=$2
+fail=0
+
+# value of a symbol in a z80asm map file, as a decimal number
+sym() {
+	h=$(awk -v n="$2" '$1 == n { print $3; exit }' "$1")
+	[ -n "$h" ] && echo $(( 0x${h#\$} ))
+}
+
+need() {
+	v=$(sym "$1" "$2")
+	if [ -z "$v" ]; then echo "check-layout: symbol $2 not found in $1"; fail=1; fi
+	echo "$v"
+}
+
+expect() {	# expect "message" expression-that-is-true
+	if ! [ "$2" = 1 ]; then echo "check-layout: $1"; fail=1; fi
+}
+
+fw_stack_top=$(need $RT fw_stack_top)
+trvars_end=$(need $RT trvars_end)
+region_tab=$(need $RT region_tab)
+fw_code_end=$(need $RT fw_code_end)
+tr_tg=$(need $RT tr_tg)
+tr_fx=$(need $RT tr_fx)
+tile_slot=$(need $RT tile_slot)
+slot_stamp=$(need $RT slot_stamp)
+pri_chg=$(need $RT pri_chg)
+pri_lf=$(need $RT pri_lf)
+fw2_end=$(need $RT fw2_end)
+fw3_end=$(need $RT fw3_end)
+
+expect "reg_addr needs the runtime stack frame inside one page" $(( (fw_stack_top & 255) >= 8 ))
+expect "trvars.inc runs into region_tab's page" $(( trvars_end <= region_tab ))
+expect "runtime code overflows into the IM2 table" $(( fw_code_end <= 0xFD00 ))
+expect "trace buffers overlap" $(( tr_tg >= 0xFF00 + 0x70 && tr_fx >= tr_tg + 32 && tr_fx + 32 <= 0xFFFC ))
+expect "spr_update indexes tile_slot by page" $(( (tile_slot & 255) == 0 ))
+expect "spr_update indexes slot_stamp by page" $(( (slot_stamp & 255) == 0 ))
+expect "fw2_switches clears pri_lf and its two followers together" $(( pri_chg == pri_lf + 256 ))
+expect "fw2 overflows into rast_code" $(( fw2_end <= 0x3C00 ))
+expect "fw3 overflows its page" $(( fw3_end <= 0x2000 ))
+
+if [ -n "$SH" ]; then
+	crc=$(need $SH CRC32Table)
+	sp=$(need $SH __register_sp)
+	expect "CRC32Table is not 256-byte aligned: link crc32.o first in its bank" $(( (crc & 255) == 0 ))
+	expect "the C stack top must be 0xBFE0 (NM_STACK_TOP)" $(( sp == 0xBFE0 ))
+fi
+
+exit $fail
