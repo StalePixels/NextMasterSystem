@@ -7,8 +7,19 @@
  *
  * The overlay file format is docs/nms-format.md. The loader finds the file
  * through /nm/ovl/index, or by the cart's own CRC32 when there is no index.
- * It checks the whole file (header, chunks, END) and runs every CHECK
- * before it writes anything, so a file that fails changes nothing.
+ * Neither file is ever held whole in memory. Both are read through OVL_BUF,
+ * which holds OVL_BUFSIZE bytes, so a file or a chunk may be of any size.
+ *
+ * The overlay file is read in these steps:
+ *   1. The walk reads every byte from the start of the file to END, in
+ *      order, into the running CRC32. It checks the header and every chunk
+ *      header and notes where CRCS, PTCH, CONF and META start. Other chunks
+ *      are read only for the CRC32. END must be last and must match.
+ *   2. CRCS, META and CONF are read again from their start (F_SEEK).
+ *   3. PTCH, first pass: every CHECK runs against the cart, and every
+ *      operation is checked. Nothing is written.
+ *   4. PTCH, second pass: the operations are applied.
+ * A file that fails at any step before the last changes nothing.
  *
  * loader_load returns a failure code (NM_E_*). On success it does not
  * return: it calls nm_launch.
@@ -29,6 +40,7 @@ uint32_t crc32_final(void);
 
 /* .nms header */
 #define NMS_MAJOR   4
+#define NMS_MINOR   5
 #define NMS_ABI     6
 #define NMS_HDR     16
 
@@ -49,19 +61,40 @@ uint32_t crc32_final(void);
 #define WINDOW      ((uint8_t *)0xC000)   /* MMU 6 */
 #define PAGE_SIZE   0x2000u
 
-/* where the chunks are in OVL_BUF */
+/* The chunks the loader reads after the walk, in the order of chunk_tags. */
+#define C_CRCS      0
+#define C_PTCH      1
+#define C_CONF      2
+#define C_META      3
+#define C_N         4
+
+/* A META or CONF line is cut to this length: "title=" and the title. */
+#define LINE_MAX    (6 + NM_TITLE_MAX)
+
+/* An open overlay file and where its chunks are. at[] is the file offset
+ * of a chunk's data, len[] its length, seen has bit 1 << C_x set for each
+ * chunk the file has. */
 struct nms {
-    uint16_t len;
-    const uint8_t *crcs;
-    uint16_t crcs_len;
-    const uint8_t *ptch;
-    uint16_t ptch_len;
-    const uint8_t *conf;
-    uint16_t conf_len;
+    uint8_t  h;
+    uint8_t  seen;
+    uint32_t size;
+    uint32_t at[C_N];
+    uint32_t len[C_N];
+};
+
+/* A run of bytes of a file, read in order through OVL_BUF. The bytes from
+ * OVL_BUF + at to OVL_BUF + fill are read but not handed out yet. left is
+ * the number of bytes of the run still in the file. */
+struct rd {
+    uint8_t  h;
+    uint16_t at;
+    uint16_t fill;
+    uint32_t left;
 };
 
 static const char hex_digits[] = "0123456789ABCDEF";
 static const char index_name[] = "/nm/ovl/index";
+static const char chunk_tags[] = "CRCSPTCHCONFMETA";
 
 static void put_hex32(char *out, uint32_t v)
 {
@@ -115,7 +148,7 @@ static uint8_t read_cart(void)
 
     /* a 512-byte copier header: size mod 16384 is 512 */
     if ((size & 0x3FFF) == 0x200) {
-        if (nm_read((uint8_t)h, OVL_BUF, 512) < 0) { code = NM_E_READ; goto out; }
+        if (nm_seek((uint8_t)h, 512)) { code = NM_E_READ; goto out; }
         size -= 512;
     }
     if ((size >> 24) != 0 || (size >> 8) >= (uint32_t)MAX_PAGES * 32 + 1) {
@@ -145,97 +178,291 @@ out:
     return code;
 }
 
-/* Read a whole file into OVL_BUF. Returns its length, 0 if the file is
- * missing or unreadable, or 0xFFFF if it is larger than OVL_MAX. The path
- * must be in resident memory. */
-static uint16_t read_file(const char *path)
-{
-    uint8_t extra;
-    int16_t h, got;
+/* ---- reading a file through OVL_BUF ------------------------------------- */
 
-    h = nm_open(path);
-    if (h < 0) return 0;
-    got = nm_read((uint8_t)h, OVL_BUF, OVL_MAX);
-    if (got == (int16_t)OVL_MAX && nm_read((uint8_t)h, &extra, 1) == 1) got = -2;
-    nm_close((uint8_t)h);
-    if (got == -2) return 0xFFFF;
-    return got < 0 ? 0 : (uint16_t)got;
+/* Start a run of len bytes of the file from offset pos. Returns 0, or 1
+ * when the seek fails. */
+static uint8_t rd_open(struct rd *r, uint8_t h, uint32_t pos, uint32_t len)
+{
+    r->h = h;
+    r->at = 0;
+    r->fill = 0;
+    r->left = len;
+    return nm_seek(h, pos) != 0;
 }
+
+/* The bytes of the run not handed out yet. */
+static uint32_t rd_left(const struct rd *r)
+{
+    return r->left + (r->fill - r->at);
+}
+
+/* Move the bytes not handed out yet to the start of OVL_BUF and read more
+ * of the run after them. A failed read ends the run. */
+static void rd_more(struct rd *r)
+{
+    uint16_t keep = r->fill - r->at;
+    uint16_t k;
+
+    if (keep && r->at) memmove(OVL_BUF, OVL_BUF + r->at, keep);
+    r->at = 0;
+    r->fill = keep;
+    k = OVL_BUFSIZE - keep;
+    if (k > r->left) k = (uint16_t)r->left;
+    if (!k) return;
+    if (nm_read(r->h, OVL_BUF + keep, k) != (int16_t)k) {
+        r->left = 0;
+        return;
+    }
+    r->fill += k;
+    r->left -= k;
+}
+
+/* The next n bytes of the run, n at most OVL_BUFSIZE, in one piece. Returns
+ * 0 when the run has fewer. The pointer is good until the next call. */
+static const uint8_t *rd_take(struct rd *r, uint16_t n)
+{
+    const uint8_t *p;
+
+    if (r->fill - r->at < n) {
+        rd_more(r);
+        if (r->fill - r->at < n) return 0;
+    }
+    p = OVL_BUF + r->at;
+    r->at += n;
+    return p;
+}
+
+/* The next bytes of the run: at least 1 and at most n, the number in *got.
+ * Returns 0 when the run is over. */
+static const uint8_t *rd_piece(struct rd *r, uint16_t n, uint16_t *got)
+{
+    const uint8_t *p;
+    uint16_t k;
+
+    if (r->fill == r->at) {
+        rd_more(r);
+        if (r->fill == r->at) return 0;
+    }
+    k = r->fill - r->at;
+    if (k > n) k = n;
+    p = OVL_BUF + r->at;
+    r->at += k;
+    *got = k;
+    return p;
+}
+
+/* Skip n bytes of the run. Returns 0, or 1 when the run has fewer. */
+static uint8_t rd_skip(struct rd *r, uint16_t n)
+{
+    uint16_t k;
+
+    while (n) {
+        if (!rd_piece(r, n, &k)) return 1;
+        n -= k;
+    }
+    return 0;
+}
+
+/* The next line of the run, without its $0A, into line, cut to LINE_MAX
+ * bytes. Returns the line's whole length, or -1 when the run is over. */
+static int16_t rd_line(struct rd *r, char *line)
+{
+    const uint8_t *p;
+    int16_t n = 0;
+
+    if (!rd_left(r)) return -1;
+    while ((p = rd_take(r, 1)) != 0 && *p != '\n') {
+        if (n < LINE_MAX) line[n] = (char)*p;
+        if (n < 0x7FFF) n++;
+    }
+    return n;
+}
+
+/* ---- the alias index ------------------------------------------------------ */
 
 /* The primary CRC32 of the overlay file for this cart: from the index, or
  * the cart's own CRC32 without one. Sets the name in nm.ovl_name. Returns
- * 0 or a failure code. */
+ * 0 or a failure code.
+ *
+ * The index is searched in place: a binary search that seeks to each probed
+ * entry and reads its 8 bytes. */
 static uint8_t find_overlay(void)
 {
     char path[sizeof index_name];
-    uint32_t primary = nm.launch.crc;
-    uint16_t len, n, lo, hi, mid;
-    const uint8_t *e;
+    uint8_t stat[16];
+    uint16_t n, lo, hi, mid;
     uint32_t c;
+    int16_t h;
+    uint8_t code = NM_E_NOOVL;
 
     put_hex32(nm.ovl_name + 8, nm.launch.crc);
     memcpy(path, index_name, sizeof index_name);
-    len = read_file(path);
-    if (len == 0) return 0;       /* no index: the file named after the cart */
-    if (len < 6 || memcmp(OVL_BUF, "NMSI", 4) != 0) return NM_E_BADOVL;
+    h = nm_open(path);
+    if (h < 0) return 0;          /* no index: the file named after the cart */
+    if (nm_fstat((uint8_t)h, stat) || nm_read((uint8_t)h, OVL_BUF, 6) != 6 ||
+        memcmp(OVL_BUF, "NMSI", 4) != 0) {
+        code = NM_E_BADOVL;
+        goto out;
+    }
     n = rd16(OVL_BUF + 4);
-    if (len == 0xFFFF || (uint32_t)n * 8 + 6 > len) return NM_E_BADOVL;
+    if ((uint32_t)n * 8 + 6 > *(uint32_t *)(stat + 7)) { code = NM_E_BADOVL; goto out; }
     lo = 0;
     hi = n;
     while (lo < hi) {
-        mid = (lo + hi) >> 1;
-        e = OVL_BUF + 6 + mid * 8;
-        c = rd32(e);
+        mid = lo + ((hi - lo) >> 1);
+        if (nm_seek((uint8_t)h, 6 + (uint32_t)mid * 8) ||
+            nm_read((uint8_t)h, OVL_BUF, 8) != 8) {
+            code = NM_E_BADOVL;
+            break;
+        }
+        c = rd32(OVL_BUF);
         if (c == nm.launch.crc) {
-            primary = rd32(e + 4);
-            put_hex32(nm.ovl_name + 8, primary);
-            return 0;
+            put_hex32(nm.ovl_name + 8, rd32(OVL_BUF + 4));
+            code = 0;
+            break;
         }
         if (c < nm.launch.crc) lo = mid + 1;
         else hi = mid;
     }
-    return NM_E_NOOVL;
+out:
+    nm_close((uint8_t)h);
+    return code;
 }
 
-/* Read the overlay file and check its header, chunks and END. Fills f.
- * Returns 0 or a failure code. */
-static uint8_t read_overlay(struct nms *f)
+/* ---- the overlay file ------------------------------------------------------- */
+
+/* Step 1, the walk: the header, every chunk and END, through the running
+ * CRC32. Fills f. Returns 0 or a failure code. */
+static uint8_t walk(struct nms *f)
 {
-    const uint8_t *o = OVL_BUF;
-    uint16_t p, n;
+    struct rd r;
+    struct crc_job job;
+    const uint8_t *p;
+    uint32_t n;
+    uint16_t k;
     uint8_t i;
 
-    f->len = read_file(nm.ovl_name);
-    if (f->len == 0) return NM_E_NOOVL;
-    if (f->len == 0xFFFF || f->len < NMS_HDR + 12) return NM_E_BADOVL;
-    if (o[0] != 'N' || o[1] != 'M' || o[2] != 'S' || o[3] != 0x1A) return NM_E_BADOVL;
-    if (o[NMS_MAJOR] != 1) return NM_E_BADOVL;
-    if (o[NMS_ABI] > FW_ABI) return NM_E_BADOVL;     /* needs a newer runtime */
+    if (rd_open(&r, f->h, 0, f->size)) return NM_E_BADOVL;
+    p = rd_take(&r, NMS_HDR);
+    if (!p || p[0] != 'N' || p[1] != 'M' || p[2] != 'S' || p[3] != 0x1A) return NM_E_BADOVL;
+    if (p[NMS_MAJOR] != 1) return NM_E_BADOVL;
+    if (p[NMS_ABI] > FW_ABI) return NM_E_BADOVL;     /* needs a newer runtime */
+    nm.nms_ver[0] = p[NMS_MAJOR];
+    nm.nms_ver[1] = p[NMS_MINOR];
+    nm.nms_ver[2] = p[NMS_ABI];
+    crc32_init();
+    job.data = p;
+    job.len = NMS_HDR;
+    crc32_update(&job);
 
-    f->crcs = f->ptch = f->conf = 0;
-    f->crcs_len = f->ptch_len = f->conf_len = 0;
-    p = NMS_HDR;
+    f->seen = 0;
     for (;;) {
-        if (p + 8 > f->len) return NM_E_BADOVL;
-        if (o[p + 6] || o[p + 7]) return NM_E_BADOVL;
-        n = rd16(o + p + 4);
-        if (n > f->len - p - 8) return NM_E_BADOVL;
-        if (!memcmp(o + p, "END ", 4)) {
-            if (n != 4 || p + 12 != f->len) return NM_E_BADOVL;
-            if (crc_of(o, p) != rd32(o + p + 8)) return NM_E_BADOVL;
-            break;
+        p = rd_take(&r, 8);
+        if (!p) return NM_E_BADOVL;
+        n = rd32(p + 4);
+        if (n > rd_left(&r)) return NM_E_BADOVL;
+        if (!memcmp(p, "END ", 4)) break;
+        for (i = 0; i < C_N; i++) {
+            if (memcmp(p, chunk_tags + 4 * i, 4)) continue;
+            if (f->seen & (1 << i)) return NM_E_BADOVL;   /* each only once */
+            f->seen |= 1 << i;
+            f->at[i] = f->size - rd_left(&r);
+            f->len[i] = n;
         }
-        if (!memcmp(o + p, "CRCS", 4)) { f->crcs = o + p + 8; f->crcs_len = n; }
-        else if (!memcmp(o + p, "PTCH", 4)) { f->ptch = o + p + 8; f->ptch_len = n; }
-        else if (!memcmp(o + p, "CONF", 4)) { f->conf = o + p + 8; f->conf_len = n; }
-        p += 8 + n;
+        job.data = p;
+        job.len = 8;
+        crc32_update(&job);
+        /* The chunk's data. Loading PAGE chunks slots in here: see
+         * docs/design.md, "Loading an overlay file". */
+        while (n) {
+            job.data = rd_piece(&r, n > OVL_BUFSIZE ? OVL_BUFSIZE : (uint16_t)n, &k);
+            if (!job.data) return NM_E_BADOVL;
+            job.len = k;
+            crc32_update(&job);
+            n -= k;
+        }
     }
-    if (!f->crcs || !f->ptch || f->ptch_len == 0) return NM_E_BADOVL;
 
-    /* the cart must be one the file accepts */
-    for (i = 0; (uint16_t)(i + 1) * 4 <= f->crcs_len; i++)
-        if (rd32(f->crcs + i * 4) == nm.launch.crc) return 0;
+    /* END: the CRC32 of every byte before its header, and nothing after it */
+    if (n != 4) return NM_E_BADOVL;
+    p = rd_take(&r, 4);
+    if (!p || rd_left(&r) != 0) return NM_E_BADOVL;
+    if (crc32_final() != rd32(p)) return NM_E_BADOVL;
+    if ((f->seen & ((1 << C_CRCS) | (1 << C_PTCH))) != ((1 << C_CRCS) | (1 << C_PTCH)))
+        return NM_E_BADOVL;
+    if (f->len[C_PTCH] == 0) return NM_E_BADOVL;
+    return 0;
+}
+
+/* Start a run over chunk c of f. Returns 0 or 1 when the seek fails. */
+static uint8_t open_chunk(struct rd *r, const struct nms *f, uint8_t c)
+{
+    return rd_open(r, f->h, f->at[c], f->len[c]);
+}
+
+/* Does CRCS list the cart? Returns 0 or a failure code. */
+static uint8_t accepts(const struct nms *f)
+{
+    struct rd r;
+    const uint8_t *p;
+    uint32_t n = f->len[C_CRCS] >> 2;
+
+    if (open_chunk(&r, f, C_CRCS)) return NM_E_BADOVL;
+    while (n--) {
+        p = rd_take(&r, 4);
+        if (!p) return NM_E_BADOVL;
+        if (rd32(p) == nm.launch.crc) return 0;
+    }
     return NM_E_OTHER;
+}
+
+/* The META title into nm.title, cut to NM_TITLE_MAX characters; empty if
+ * the file has none. Returns 0 or a failure code. */
+static uint8_t read_title(const struct nms *f)
+{
+    struct rd r;
+    char line[LINE_MAX];
+    int16_t n;
+
+    nm.title[0] = 0;
+    if (!(f->seen & (1 << C_META))) return 0;
+    if (open_chunk(&r, f, C_META)) return NM_E_BADOVL;
+    while ((n = rd_line(&r, line)) >= 0) {
+        if (n < 6 || memcmp(line, "title=", 6)) continue;
+        n -= 6;
+        if (n > NM_TITLE_MAX) n = NM_TITLE_MAX;
+        memcpy(nm.title, line + 6, n);
+        nm.title[n] = 0;
+        break;
+    }
+    return 0;
+}
+
+/* Is the CONF line in line, of length n, equal to s? */
+static uint8_t conf_is(const char *line, int16_t n, const char *s)
+{
+    int16_t l = (int16_t)strlen(s);
+
+    return n == l && !memcmp(line, s, l);
+}
+
+/* CONF switches: priority=1 and toppal=1. Unknown keys are skipped.
+ * Returns 0 or a failure code. */
+static uint8_t read_conf(const struct nms *f)
+{
+    struct rd r;
+    char line[LINE_MAX];
+    int16_t n;
+
+    nm.launch.flags = 0;
+    if (!(f->seen & (1 << C_CONF))) return 0;
+    if (open_chunk(&r, f, C_CONF)) return NM_E_BADOVL;
+    while ((n = rd_line(&r, line)) >= 0) {
+        if (conf_is(line, n, "priority=1")) nm.launch.flags |= 1;
+        if (conf_is(line, n, "toppal=1")) nm.launch.flags |= 2;
+    }
+    return 0;
 }
 
 /* CRC32 of len bytes of the cart from offset off. Returns 1 when it equals
@@ -288,57 +515,60 @@ static uint8_t ramsite_old(const uint8_t *new, uint16_t crc16, uint8_t *out)
     return 0;
 }
 
-/* First pass: every CHECK, and the bounds of every operation. Writes
- * nothing. Returns 0 or a failure code. */
+/* Step 3, PTCH first pass: every CHECK, the bounds of every operation and
+ * the original of every RAMSITES entry. Writes nothing. Returns 0 or a
+ * failure code. */
 static uint8_t check_ops(const struct nms *f)
 {
-    const uint8_t *op = f->ptch;
-    const uint8_t *end = f->ptch + f->ptch_len;
+    struct rd r;
+    const uint8_t *p;
     uint32_t off;
-    uint16_t len, k;
-    uint8_t hook = 0;
+    uint16_t len;
+    uint8_t k, hook = 0, old[2];
 
+    if (open_chunk(&r, f, C_PTCH)) return NM_E_BADOVL;
     for (;;) {
-        if (op >= end) return NM_E_BADOP;
-        switch (op[0]) {
+        p = rd_take(&r, 1);
+        if (!p) return NM_E_BADOP;
+        switch (*p) {
         case OP_END:
             return 0;
         case OP_CHECK:      /* u24 offset, u16 length, u32 CRC32 */
-            if (op + 10 > end) return NM_E_BADOP;
-            if (!check_range(rd24(op + 1), rd16(op + 4), rd32(op + 6))) return NM_E_DIFFER;
-            op += 10;
+            p = rd_take(&r, 9);
+            if (!p) return NM_E_BADOP;
+            if (!check_range(rd24(p), rd16(p + 3), rd32(p + 5))) return NM_E_DIFFER;
             break;
         case OP_PATCH:      /* u24 offset, u8 n, n bytes */
-            if (op + 5 > end) return NM_E_BADOP;
-            off = rd24(op + 1);
-            len = op[4];
-            if (op + 5 + len > end) return NM_E_BADOP;
+            p = rd_take(&r, 4);
+            if (!p) return NM_E_BADOP;
+            off = rd24(p);
+            len = p[3];
             if ((off >> 13) >= nm.launch.npages) return NM_E_BADOP;
             if (((uint16_t)off & (PAGE_SIZE - 1)) + len > PAGE_SIZE) return NM_E_BADOP;
-            op += 5 + len;
+            if (rd_skip(&r, len)) return NM_E_BADOP;
             break;
         case OP_START:      /* u16 address, u16 SP */
-            if (op + 5 > end) return NM_E_BADOP;
-            op += 5;
+            if (!rd_take(&r, 4)) return NM_E_BADOP;
             break;
         case OP_RAMSITES:   /* u16 continuation, u8 n, n entries */
-            if (op + 4 > end || hook) return NM_E_BADOP;
+            p = rd_take(&r, 3);
+            if (!p || hook) return NM_E_BADOP;
             hook = 1;
-            k = op[3];
-            if (3 + 6 * k > FW2_HOOKMAX) return NM_E_BADOP;
-            op += 4;
+            k = p[2];
+            if (3 + 6 * (uint16_t)k > FW2_HOOKMAX) return NM_E_BADOP;
             while (k--) {
                 /* u16 address, u8 length (2), u16 CRC, 2 new bytes */
-                if (op + 7 > end || op[2] != 2) return NM_E_BADOP;
-                op += 7;
+                p = rd_take(&r, 7);
+                if (!p || p[2] != 2) return NM_E_BADOP;
+                if (!ramsite_old(p + 5, rd16(p + 3), old)) return NM_E_BADOP;
             }
             break;
         case OP_RASTER:     /* u16 length, the routine */
-            if (op + 3 > end || hook) return NM_E_BADOP;
+            p = rd_take(&r, 2);
+            if (!p || hook) return NM_E_BADOP;
             hook = 1;
-            len = rd16(op + 1);
-            if (len > FW2_HOOKMAX || op + 3 + len > end) return NM_E_BADOP;
-            op += 3 + len;
+            len = rd16(p);
+            if (len > FW2_HOOKMAX || rd_skip(&r, len)) return NM_E_BADOP;
             break;
         default:
             return NM_E_BADOP;
@@ -346,11 +576,29 @@ static uint8_t check_ops(const struct nms *f)
     }
 }
 
-/* Second pass: apply the operations. check_ops has passed. Returns 0 or a
- * failure code. */
+/* Copy the next len bytes of the run to dst. Returns 0, or 1 when the run
+ * has fewer. */
+static uint8_t rd_copy(struct rd *r, uint8_t *dst, uint16_t len)
+{
+    const uint8_t *p;
+    uint16_t k;
+
+    while (len) {
+        p = rd_piece(r, len, &k);
+        if (!p) return 1;
+        memcpy(dst, p, k);
+        dst += k;
+        len -= k;
+    }
+    return 0;
+}
+
+/* Step 4, PTCH second pass: apply the operations. check_ops has passed, so
+ * only a failed read can stop it. Returns 0 or a failure code. */
 static uint8_t apply_ops(const struct nms *f)
 {
-    const uint8_t *op = f->ptch;
+    struct rd r;
+    const uint8_t *p;
     uint8_t *dst;
     uint32_t off;
     uint16_t len;
@@ -361,99 +609,102 @@ static uint8_t apply_ops(const struct nms *f)
     nm.launch.hook = 0;
     nm.launch.hook2 = 0;
 
+    if (open_chunk(&r, f, C_PTCH)) return NM_E_BADOVL;
     for (;;) {
-        switch (op[0]) {
+        p = rd_take(&r, 1);
+        if (!p) return NM_E_BADOVL;
+        switch (*p) {
         case OP_END:
             return 0;
         case OP_CHECK:
-            op += 10;
+            if (!rd_take(&r, 9)) return NM_E_BADOVL;
             break;
         case OP_PATCH:
-            off = rd24(op + 1);
-            len = op[4];
+            p = rd_take(&r, 4);
+            if (!p) return NM_E_BADOVL;
+            off = rd24(p);
+            len = p[3];
             ZXN_WRITE_MMU6(CART_PAGE + (uint8_t)(off >> 13));
-            memcpy(WINDOW + ((uint16_t)off & (PAGE_SIZE - 1)), op + 5, len);
-            op += 5 + len;
+            if (rd_copy(&r, WINDOW + ((uint16_t)off & (PAGE_SIZE - 1)), len)) return NM_E_BADOVL;
             break;
         case OP_START:
-            nm.launch.start = rd16(op + 1);
-            nm.launch.sp = rd16(op + 3);
+            p = rd_take(&r, 4);
+            if (!p) return NM_E_BADOVL;
+            nm.launch.start = rd16(p);
+            nm.launch.sp = rd16(p + 2);
             if (nm.launch.sp == 0) nm.launch.sp = 0xDFF0;
-            op += 5;
             break;
         case OP_RAMSITES:
             /* the framework's table: u16 continuation, u8 n, then n x
              * (u16 address, 2 original bytes, 2 new bytes) */
+            p = rd_take(&r, 3);
+            if (!p) return NM_E_BADOVL;
             ZXN_WRITE_MMU6(FW2_PAGE);
             dst = WINDOW + FW2_HOOKOFF;
-            *dst++ = op[1];
-            *dst++ = op[2];
-            *dst++ = k = op[3];
-            op += 4;
+            *dst++ = p[0];
+            *dst++ = p[1];
+            *dst++ = k = p[2];
             while (k--) {
-                if (!ramsite_old(op + 5, rd16(op + 3), old)) return NM_E_BADOP;
-                ZXN_WRITE_MMU6(FW2_PAGE);
-                *dst++ = op[0];
-                *dst++ = op[1];
+                p = rd_take(&r, 7);
+                if (!p) return NM_E_BADOVL;
+                ramsite_old(p + 5, rd16(p + 3), old);
+                *dst++ = p[0];
+                *dst++ = p[1];
                 *dst++ = old[0];
                 *dst++ = old[1];
-                *dst++ = op[5];
-                *dst++ = op[6];
-                op += 7;
+                *dst++ = p[5];
+                *dst++ = p[6];
             }
             nm.launch.hook2 = FW2_HOOK;
             break;
         case OP_RASTER:
-            len = rd16(op + 1);
+            p = rd_take(&r, 2);
+            if (!p) return NM_E_BADOVL;
+            len = rd16(p);
             ZXN_WRITE_MMU6(FW2_PAGE);
-            memcpy(WINDOW + FW2_HOOKOFF, op + 3, len);
+            if (rd_copy(&r, WINDOW + FW2_HOOKOFF, len)) return NM_E_BADOVL;
             nm.launch.hook = FW2_HOOK;
-            op += 3 + len;
             break;
+        default:
+            return NM_E_BADOP;
         }
     }
 }
 
-/* Does the CONF line at p, of n bytes, equal s? */
-static uint8_t conf_is(const uint8_t *p, uint16_t n, const char *s)
+/* Open the overlay file named in nm.ovl_name, check it and apply it.
+ * Returns 0 or a failure code. */
+static uint8_t use_overlay(void)
 {
-    uint16_t l = strlen(s);
+    struct nms f;
+    uint8_t stat[16];
+    int16_t h;
+    uint8_t code;
 
-    return n == l && !memcmp(p, s, l);
-}
-
-/* CONF switches: priority=1 and toppal=1. Unknown keys are skipped. */
-static void apply_conf(const struct nms *f)
-{
-    const uint8_t *p = f->conf;
-    const uint8_t *end = f->conf + f->conf_len;
-    const uint8_t *e;
-
-    nm.launch.flags = 0;
-    if (!p) return;
-    while (p < end) {
-        for (e = p; e < end && *e != '\n'; e++)
-            ;
-        if (conf_is(p, e - p, "priority=1")) nm.launch.flags |= 1;
-        if (conf_is(p, e - p, "toppal=1")) nm.launch.flags |= 2;
-        p = e + 1;
-    }
+    h = nm_open(nm.ovl_name);
+    if (h < 0) return NM_E_NOOVL;
+    f.h = (uint8_t)h;
+    code = nm_fstat(f.h, stat) ? NM_E_BADOVL : 0;
+    f.size = *(uint32_t *)(stat + 7);
+    if (!code) code = walk(&f);
+    if (!code) code = accepts(&f);
+    if (!code) code = read_title(&f);
+    if (!code) code = read_conf(&f);
+    if (!code) code = check_ops(&f);
+    if (!code) code = apply_ops(&f);
+    nm_close(f.h);
+    return code;
 }
 
 void *loader_load(void *unused)
 {
-    struct nms f;
     uint8_t code;
 
     (void)unused;
     code = read_cart();
     if (!code) code = find_overlay();
-    if (!code) code = read_overlay(&f);
-    if (!code) code = check_ops(&f);
-    if (!code) code = apply_ops(&f);
+    if (!code) code = use_overlay();
     ZXN_WRITE_MMU6(0);
     if (code) return (void *)(uintptr_t)code;
-    apply_conf(&f);
     NM_FAR(PAGE_INFO, info_show, 0);
     nm_launch(&nm.launch);
     return 0;

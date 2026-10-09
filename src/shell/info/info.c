@@ -16,13 +16,6 @@
 
 #include "nm.h"
 
-/* .nms file header (see docs/nms-format.md and loader.c) */
-#define NMS_MAJOR   4
-#define NMS_MINOR   5
-#define NMS_ABI     6
-#define NMS_HDR     16
-#define TITLE_MAX   48             /* the title is cut to this length */
-
 #define FLAG_PRIORITY  0x01
 #define FLAG_TOPPAL    0x02
 
@@ -127,36 +120,6 @@ static char *put_str(char *p, const char *s)
     return p;
 }
 
-/* Copy the META title of the overlay file in OVL_BUF to buf, cut to
- * TITLE_MAX characters. The loader has checked the file's chunks. */
-static void meta_title(char *buf)
-{
-    const uint8_t *o = OVL_BUF;
-    const uint8_t *p, *end;
-    uint16_t at = NMS_HDR, n;
-    uint8_t k;
-
-    buf[0] = 0;
-    for (;;) {
-        n = o[at + 4] | (o[at + 5] << 8);
-        if (!memcmp(o + at, "END ", 4)) return;
-        if (!memcmp(o + at, "META", 4)) break;
-        at += 8 + n;
-    }
-    p = o + at + 8;
-    end = p + n;
-    while (p < end) {
-        if (end - p > 6 && !memcmp(p, "title=", 6)) {
-            p += 6;
-            for (k = 0; k < TITLE_MAX && p < end && *p != '\n'; k++) buf[k] = (char)*p++;
-            buf[k] = 0;
-            return;
-        }
-        while (p < end && *p != '\n') p++;
-        p++;
-    }
-}
-
 static void wait_key(void)
 {
     uint16_t n;
@@ -172,8 +135,7 @@ static void wait_key(void)
 
 void *info_show(void *unused)
 {
-    const uint8_t *o = OVL_BUF;
-    char buf[TITLE_MAX + 1];
+    char buf[NM_TITLE_MAX + 1];
     char *p, *q;
     const char *name;
     uint32_t size;
@@ -207,17 +169,16 @@ void *info_show(void *unused)
     row = put_field(row, s_size, buf);
     row++;
 
-    /* the overlay file: its META title and header */
-    meta_title(buf);
-    row = put_field(row, s_game, buf);
+    /* the overlay file: its META title and header, as the loader read them */
+    row = put_field(row, s_game, nm.title);
 
-    p = put_dec(buf, o[NMS_MAJOR]);
+    p = put_dec(buf, nm.nms_ver[0]);
     *p++ = '.';
-    p = put_dec(p, o[NMS_MINOR]);
+    p = put_dec(p, nm.nms_ver[1]);
     *p = 0;
     row = put_field(row, s_format, buf);
 
-    p = put_dec(buf, o[NMS_ABI]);
+    p = put_dec(buf, nm.nms_ver[2]);
     *p = 0;
     row = put_field(row, s_abi, buf);
 

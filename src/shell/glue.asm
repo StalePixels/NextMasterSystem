@@ -23,7 +23,8 @@ NM_LNAME_MAX	equ 127			; nm_lname is one byte longer
 		section code_user
 
 ; ---------------------------------------------------------------------
-; uint8_t nm_esx(struct nm_esx *p): { fn, a, bc, ix }. Returns 1 on error.
+; uint8_t nm_esx(struct nm_esx *p): { fn, a, bc, ix, de }. Returns 1 on
+; error.
 _nm_esx:
 		push ix
 		push hl			; p
@@ -39,7 +40,11 @@ _nm_esx:
 		ld e,(hl)
 		inc hl
 		ld d,(hl)
-		push de
+		inc hl
+		push de			; ix
+		ld e,(hl)
+		inc hl
+		ld d,(hl)		; de
 		pop ix
 		pop hl
 		ld a,(hl)

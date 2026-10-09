@@ -23,8 +23,8 @@
 
 /* ---- resident memory ---------------------------------------------------- */
 #define NM_STACK_TOP   0xBFE0u   /* must equal REGISTER_SP in zpragma.inc */
-#define OVL_BUF        ((uint8_t *)0xA000)   /* overlay file, read whole */
-#define OVL_MAX        0x1E00u
+#define OVL_BUF        ((uint8_t *)0xA000)   /* the loader's file buffer */
+#define OVL_BUFSIZE    0x100u
 
 /* ---- far calls ----------------------------------------------------------
  * A banked entry point has the type  void *fn(void *arg).
@@ -45,6 +45,7 @@ struct nm_esx {
     uint8_t  a;     /* in: A, out: A */
     uint16_t bc;    /* in: BC, out: BC */
     uint16_t ix;    /* in: IX */
+    uint16_t de;    /* in: DE */
 };
 uint8_t nm_esx(struct nm_esx *p) __z88dk_fastcall;
 
@@ -85,7 +86,10 @@ void nm_launch(struct nm_launch *p) __z88dk_fastcall;
 int16_t nm_open(const char *path);
 int8_t  nm_fstat(uint8_t handle, uint8_t *stat16);
 int16_t nm_read(uint8_t handle, void *dst, uint16_t n);
+int8_t  nm_seek(uint8_t handle, uint32_t pos);   /* from the start of the file */
 void    nm_close(uint8_t handle);
+
+#define NM_TITLE_MAX  48
 
 /* ---- shared state --------------------------------------------------------
  * Mutable state that more than one module reads lives here, in the resident
@@ -97,6 +101,8 @@ struct nm_state {
     uint16_t bflags;          /* the user's Browser view (C) and sort (B) flags */
     uint8_t  filter[16];      /* the user's Browser filter, saved */
     uint8_t  help[120];       /* the browser's two help lines */
+    uint8_t  nms_ver[3];      /* the .nms header: format major, minor, framework ABI */
+    char     title[NM_TITLE_MAX + 1];   /* the META title, cut to fit; empty if none */
     struct nm_launch launch;
 };
 extern struct nm_state nm;
