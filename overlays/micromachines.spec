@@ -1,0 +1,850 @@
+# Micro Machines, drafted by tools/mkspec.py from sitescan output.
+name Micro Machines
+cart A577CE46
+# line-0 palette and display: the race turns the display off for part of each
+# frame's work; on the Next that ran into the picture as a black band (batch 5)
+toppal
+# No free RST vector: the cart starts by disabling interrupts, setting SP to $DFFF and calling $0100.
+# $0000-$0002 becomes the vector; the game starts at the CALL ($0005) with SP $DFFF.
+vector 00 io
+start 0005 DFFF
+asm 00450 2   ; IM 1 -> IM 2
+    im 2
+endasm
+asm 00454 2   ; IM 1 -> IM 2
+    im 2
+endasm
+asm 0808B 2   ; IM 1 -> IM 2
+    im 2
+endasm
+site 00043   ; IN A,($BF)
+site 001E0   ; IN A,($BF)
+site 002C5   ; IN A,($7E)
+site 00322   ; IN A,($7E)
+site 0034D   ; OUT ($BF),A
+site 00351   ; OUT ($BF),A
+site 00356   ; OUT ($BF),A
+site 0035A   ; OUT ($BF),A
+site 003C9   ; OUT ($03),A
+site 003DE   ; IN A,($7E)
+site 0043F   ; OUT ($05),A
+site 009C5   ; IN A,($05)
+site 009C7   ; IN A,($04)
+site 009CF   ; IN A,($05)
+site 009D1   ; IN A,($04)
+site 009DC   ; IN A,($DC)
+site 00BCF   ; OUT ($BF),A
+site 00BD2   ; OUT ($BF),A
+site 00BDB   ; OTIR
+site 00BE4   ; OTIR
+site 00BED   ; OTIR
+site 01301   ; OUT ($BF),A
+site 01306   ; OUT ($BF),A
+site 0130D   ; OUT ($BE),A
+site 01317   ; OUT ($BE),A
+site 02D25   ; OUT ($BF),A
+site 02D29   ; OUT ($BF),A
+site 02D2C   ; OUT ($BE),A
+site 02D30   ; OUT ($BE),A
+site 02D56   ; OUT ($BF),A
+site 02D5A   ; OUT ($BF),A
+site 02D5D   ; OUT ($BE),A
+site 031DD   ; OUT ($BF),A
+site 031E2   ; OUT ($BF),A
+site 031E9   ; OUT ($BE),A
+site 031F3   ; OUT ($BF),A
+site 031F7   ; OUT ($BF),A
+site 03200   ; OTIR
+site 03204   ; OUT ($BF),A
+site 03208   ; OUT ($BF),A
+site 03211   ; OTIR
+site 0323A   ; OUT ($BF),A
+site 0323E   ; OUT ($BF),A
+site 03244   ; OUT ($BE),A
+site 03269   ; OUT ($BF),A
+site 0326D   ; OUT ($BF),A
+site 0326F   ; OUTI
+site 03273   ; OUT ($BF),A
+site 03277   ; OUT ($BF),A
+site 03279   ; OUTI
+site 0327D   ; OUT ($BF),A
+site 03281   ; OUT ($BF),A
+site 03283   ; OUTI
+site 03287   ; OUT ($BF),A
+site 0328B   ; OUT ($BF),A
+site 0328D   ; OUTI
+site 03291   ; OUT ($BF),A
+site 03295   ; OUT ($BF),A
+site 03297   ; OUTI
+site 0329B   ; OUT ($BF),A
+site 0329F   ; OUT ($BF),A
+site 032A1   ; OUTI
+site 032A5   ; OUT ($BF),A
+site 032A9   ; OUT ($BF),A
+site 032AB   ; OUTI
+site 032AF   ; OUT ($BF),A
+site 032B3   ; OUT ($BF),A
+site 032B5   ; OUTI
+site 032C9   ; OUT ($BF),A
+site 032CD   ; OUT ($BF),A
+site 032F2   ; OTIR
+site 032FA   ; OUT ($BE),A
+site 0331B   ; OUT ($BF),A
+site 0331F   ; OUT ($BF),A
+site 03321   ; OUTI
+site 03325   ; OUT ($BF),A
+site 03329   ; OUT ($BF),A
+site 0332B   ; OUTI
+site 0332F   ; OUT ($BF),A
+site 03333   ; OUT ($BF),A
+site 03335   ; OUTI
+site 03339   ; OUT ($BF),A
+site 0333D   ; OUT ($BF),A
+site 0333F   ; OUTI
+site 03343   ; OUT ($BF),A
+site 03347   ; OUT ($BF),A
+site 03349   ; OUTI
+site 0334D   ; OUT ($BF),A
+site 03351   ; OUT ($BF),A
+site 03353   ; OUTI
+site 03357   ; OUT ($BF),A
+site 0335B   ; OUT ($BF),A
+site 0335D   ; OUTI
+site 03361   ; OUT ($BF),A
+site 03365   ; OUT ($BF),A
+site 03367   ; OUTI
+site 03383   ; OUT ($BF),A
+site 03387   ; OUT ($BF),A
+site 03389   ; OUTI
+site 0338D   ; OUT ($BF),A
+site 03391   ; OUT ($BF),A
+site 03393   ; OUTI
+site 03397   ; OUT ($BF),A
+site 0339B   ; OUT ($BF),A
+site 0339D   ; OUTI
+site 033A1   ; OUT ($BF),A
+site 033A5   ; OUT ($BF),A
+site 033A7   ; OUTI
+site 033AB   ; OUT ($BF),A
+site 033AF   ; OUT ($BF),A
+site 033B1   ; OUTI
+site 033B5   ; OUT ($BF),A
+site 033B9   ; OUT ($BF),A
+site 033BB   ; OUTI
+site 033BF   ; OUT ($BF),A
+site 033C3   ; OUT ($BF),A
+site 033C5   ; OUTI
+site 033C9   ; OUT ($BF),A
+site 033CD   ; OUT ($BF),A
+site 033CF   ; OUTI
+site 033EB   ; OUT ($BF),A
+site 033EF   ; OUT ($BF),A
+site 033F1   ; OUTI
+site 033F5   ; OUT ($BF),A
+site 033F9   ; OUT ($BF),A
+site 033FB   ; OUTI
+site 033FF   ; OUT ($BF),A
+site 03403   ; OUT ($BF),A
+site 03405   ; OUTI
+site 03409   ; OUT ($BF),A
+site 0340D   ; OUT ($BF),A
+site 0340F   ; OUTI
+site 03413   ; OUT ($BF),A
+site 03417   ; OUT ($BF),A
+site 03419   ; OUTI
+site 0341D   ; OUT ($BF),A
+site 03421   ; OUT ($BF),A
+site 03423   ; OUTI
+site 03427   ; OUT ($BF),A
+site 0342B   ; OUT ($BF),A
+site 0342D   ; OUTI
+site 03431   ; OUT ($BF),A
+site 03435   ; OUT ($BF),A
+site 03437   ; OUTI
+site 03F24   ; OUT ($BF),A
+site 03F28   ; OUT ($BF),A
+site 03F38   ; OUT ($BF),A
+site 03F3C   ; OUT ($BF),A
+site 0518C   ; OUT ($7E),A
+site 05190   ; OUT ($7E),A
+site 05194   ; OUT ($7E),A
+site 05198   ; OUT ($7E),A
+site 06660   ; OUT ($BF),A
+site 06663   ; OUT ($BF),A
+site 06666   ; OUT ($BE),A
+site 06718   ; OUT ($BF),A
+site 0671C   ; OUT ($BF),A
+site 06729   ; OTIR
+site 0672C   ; OUT ($BE),A
+site 0673C   ; OUT ($BF),A
+site 06740   ; OUT ($BF),A
+site 0674D   ; OTIR
+site 0757F   ; OUT ($BF),A
+site 07583   ; OUT ($BF),A
+site 07586   ; OUT ($BE),A
+site 07588   ; OUT ($BE),A
+site 0778E   ; OUT ($BF),A
+site 07792   ; OUT ($BF),A
+site 07797   ; OUT ($BF),A
+site 0779B   ; OUT ($BF),A
+site 078F8   ; OUT (C),L
+site 078FA   ; OUT (C),H
+site 078FE   ; OUT (C),A
+site 07902   ; OUT (C),A
+site 07909   ; OUT (C),B
+site 0790B   ; OUT (C),H
+site 0793E   ; OUT (C),L
+site 07940   ; OUT (C),H
+site 0794F   ; OUT (C),A
+site 07953   ; OUT (C),A
+site 07A9F   ; OUT ($BF),A
+site 07AA3   ; OUT ($BF),A
+site 07DC7   ; OUT ($BF),A
+site 07DCB   ; OUT ($BF),A
+site 07DD1   ; OTIR
+site 07DED   ; OUT ($BF),A
+site 07DF1   ; OUT ($BF),A
+site 07DF7   ; OTIR
+site 07E4A   ; OUT ($BF),A
+site 07E4E   ; OUT ($BF),A
+site 07E58   ; OTIR
+site 07E5C   ; OUT ($BE),A
+site 07E70   ; OUT ($BF),A
+site 07E74   ; OUT ($BF),A
+site 07E7F   ; OTIR
+site 07E83   ; OUT ($BE),A
+site 07E94   ; OUT ($BF),A
+site 07E98   ; OUT ($BF),A
+site 07E9E   ; OUT ($BE),A
+site 07EAE   ; OUT ($BF),A
+site 07EB2   ; OUT ($BF),A
+site 07EB7   ; OUT ($BF),A
+site 07EBB   ; OUT ($BF),A
+site 07F09   ; OUT ($BF),A
+site 07F0D   ; OUT ($BF),A
+site 07F1D   ; OUT ($BF),A
+site 07F21   ; OUT ($BF),A
+site 07F2D   ; OUT ($BE),A
+site 07F30   ; OUT ($BE),A
+site 07F33   ; OUT ($BE),A
+site 07F36   ; OUT ($BE),A
+site 07F65   ; OUT ($BF),A
+site 07F69   ; OUT ($BF),A
+site 07F76   ; OUT ($BF),A
+site 07F7A   ; OUT ($BF),A
+site 07F80   ; OUT ($BE),A
+site 07F8A   ; OUT ($BF),A
+site 07F8E   ; OUT ($BF),A
+site 07F9B   ; OUT ($BF),A
+site 07F9F   ; OUT ($BF),A
+site 07FAC   ; OUT ($BF),A
+site 07FB0   ; OUT ($BF),A
+site 07FBD   ; OUT ($BF),A
+site 07FC1   ; OUT ($BF),A
+site 07FCE   ; OTIR
+site 07FD2   ; OUT ($BE),A
+site 08047   ; OUT ($05),A
+site 083D9   ; OUT ($BE),A
+site 083DC   ; OUT ($BE),A
+site 086DB   ; OUT ($BE),A
+site 086DE   ; OUT ($BE),A
+site 08747   ; OUT ($BE),A
+site 0874A   ; OUT ($BE),A
+site 0874F   ; OUT ($BE),A
+site 08752   ; OUT ($BE),A
+site 087A8   ; OUT ($BE),A
+site 087AB   ; OUT ($BE),A
+site 08817   ; OUT ($BE),A
+site 0881A   ; OUT ($BE),A
+site 08B47   ; OUT ($03),A
+site 08B5F   ; OUT ($03),A
+site 090D4   ; OUT ($BE),A
+site 09105   ; IN A,($DC)
+site 09113   ; IN A,($DD)
+site 09136   ; IN A,($DC)
+site 0913D   ; OUT ($03),A
+site 0914A   ; IN A,($DC)
+site 09151   ; OUT ($03),A
+site 09160   ; OUT ($BF),A
+site 09164   ; OUT ($BF),A
+site 09169   ; OUT ($BF),A
+site 0916D   ; OUT ($BF),A
+site 0917C   ; OUT ($BE),A
+site 09180   ; OUT ($BE),A
+site 091BE   ; OUT ($BE),A
+site 091C1   ; OUT ($BE),A
+site 093DE   ; OUT ($BE),A
+site 093E1   ; OUT ($BE),A
+site 093F7   ; OUT ($BE),A
+site 0940A   ; OUT ($BE),A
+site 0940D   ; OUT ($BE),A
+site 0941E   ; OUT ($BE),A
+site 095B9   ; OUT ($BE),A
+site 095BD   ; OUT ($BE),A
+site 09885   ; OUT ($BE),A
+site 09D7A   ; OUT ($BF),A
+site 09D7E   ; OUT ($BF),A
+site 09D93   ; OUT ($BF),A
+site 09D97   ; OUT ($BF),A
+site 09F7B   ; OTIR
+site 0A286   ; OUT ($BE),A
+site 0A28C   ; OUT ($BE),A
+site 0A293   ; OUT ($BE),A
+site 0A310   ; OUT ($BE),A
+site 0A5B1   ; OUT ($BE),A
+site 0A5B7   ; OUT ($BE),A
+site 0A675   ; OUT ($BF),A
+site 0A679   ; OUT ($BF),A
+site 0ABF4   ; OUT ($BE),A
+site 0ABF8   ; OUT ($BE),A
+site 0AD12   ; OUT ($BE),A
+site 0AD16   ; OUT ($BE),A
+site 0AD23   ; OUT ($BE),A
+site 0AD27   ; OUT ($BE),A
+site 0AD30   ; OUT ($BE),A
+site 0AD34   ; OUT ($BE),A
+site 0AD3B   ; OUT ($BE),A
+site 0AD3F   ; OUT ($BE),A
+site 0B022   ; IN A,($00)
+site 0B341   ; OUT ($BE),A
+site 0B352   ; OUT ($BE),A
+site 0B35B   ; OUT ($BF),A
+site 0B35E   ; OUT ($BF),A
+site 0B362   ; OUT ($BF),A
+site 0B365   ; OUT ($BF),A
+site 0B7F6   ; OUT ($BE),A
+site 0B7FC   ; OUT ($BE),A
+site 0BA07   ; OUT ($BE),A
+site 0BA0B   ; OUT ($BE),A
+site 0BA16   ; OUT ($BE),A
+site 0BA1A   ; OUT ($BE),A
+site 0BA26   ; OUT ($BE),A
+site 0BA2A   ; OUT ($BE),A
+site 0BA35   ; OUT ($BE),A
+site 0BA39   ; OUT ($BE),A
+site 0BB39   ; OUT ($BE),A
+site 0BB54   ; OUT ($BF),A
+site 0BB58   ; OUT ($BF),A
+site 0BB5C   ; OUT ($BF),A
+site 0BB60   ; OUT ($BF),A
+site 0BB6E   ; OUT ($BF),A
+site 0BB72   ; OUT ($BF),A
+site 0BB75   ; IN A,($7E)
+site 0BB7D   ; OUT ($BF),A
+site 0BB81   ; OUT ($BF),A
+site 0BB86   ; IN A,($7E)
+site 0BB8E   ; OUT ($BF),A
+site 0BB92   ; OUT ($BF),A
+site 0BCD9   ; OUT ($BE),A
+site 0BCDE   ; OUT ($BE),A
+site 0BD02   ; OUT ($BF),A
+site 0BD06   ; OUT ($BF),A
+site 0BD0A   ; OUT ($BF),A
+site 0BD0E   ; OUT ($BF),A
+site 0BD12   ; OUT ($BF),A
+site 0BD16   ; OUT ($BF),A
+site 0BD1A   ; OUT ($BF),A
+site 0BD1E   ; OUT ($BF),A
+site 0BD21   ; OUT ($BF),A
+site 0BD25   ; OUT ($BF),A
+site 0BD28   ; OUT ($BF),A
+site 0BD2C   ; OUT ($BF),A
+site 0BD44   ; OTIR
+site 0BD4D   ; OUT ($BE),A
+site 0BF25   ; OUT ($BE),A
+site 0BF28   ; OUT ($BE),A
+site 0BF3B   ; OTIR
+site 17E97   ; OUT ($BF),A
+site 17E9B   ; OUT ($BF),A
+site 17EA8   ; OUT ($BF),A
+site 17EAC   ; OUT ($BF),A
+site 17EB9   ; OTIR
+site 1BE84   ; OUT ($BF),A
+site 1BE88   ; OUT ($BF),A
+site 1BE8C   ; OUT ($BF),A
+site 1BE90   ; OUT ($BF),A
+site 1BE94   ; OUT ($BF),A
+site 1BE98   ; OUT ($BF),A
+site 1BE9C   ; OUT ($BF),A
+site 1BEA0   ; OUT ($BF),A
+site 1BEA3   ; OUT ($BF),A
+site 1BEA7   ; OUT ($BF),A
+site 1BEAA   ; OUT ($BF),A
+site 1BEAE   ; OUT ($BF),A
+site 1BEC0   ; OUT ($BF),A
+site 1BEC4   ; OUT ($BF),A
+site 1BED2   ; OUT ($BE),A
+site 1BED6   ; OUT ($BE),A
+site 1BEDA   ; OUT ($BE),A
+site 1BEDE   ; OUT ($BE),A
+site 1BEE3   ; OUT ($BE),A
+site 1BEE7   ; OUT ($BE),A
+site 1BEEB   ; OUT ($BE),A
+site 1BEEF   ; OUT ($BE),A
+site 1BEF5   ; OUT ($BF),A
+site 1BEF9   ; OUT ($BF),A
+site 1BF07   ; OUT ($BE),A
+site 1BF0B   ; OUT ($BE),A
+site 1BF10   ; OUT ($BE),A
+site 1BF14   ; OUT ($BE),A
+site 23C8D   ; IN A,($00)
+site 23CAA   ; OUT ($7E),A
+site 23CAE   ; OUT ($7E),A
+site 23CB2   ; OUT ($7E),A
+site 23CB6   ; OUT ($7E),A
+site 23D18   ; OUT ($BF),A
+site 23D1B   ; OUT ($BF),A
+site 23D28   ; OUT ($BE),A
+site 23D2C   ; OUT ($BE),A
+site 23D77   ; OUT ($BF),A
+site 23D7A   ; OUT ($BF),A
+site 23D87   ; OUT ($BE),A
+site 23DB8   ; OUT ($BF),A
+site 23DBC   ; OUT ($BF),A
+site 23DC3   ; OUT ($BE),A
+site 23DC7   ; OUT ($BE),A
+site 23DD0   ; OUT ($BF),A
+site 23DD4   ; OUT ($BF),A
+site 23DDB   ; OUT ($BE),A
+site 23DDF   ; OUT ($BE),A
+site 2B5D7   ; OUT ($7E),A
+site 2B5DB   ; OUT ($7E),A
+site 2B5DF   ; OUT ($7E),A
+site 2B5E3   ; OUT ($7E),A
+site 2B65B   ; OUT ($7E),A
+site 2B662   ; OUT ($7E),A
+site 2B667   ; OUT ($7E),A
+site 2B680   ; OUT ($7E),A
+site 2B687   ; OUT ($7E),A
+site 2B68C   ; OUT ($7E),A
+site 2B6B3   ; OUT ($7E),A
+site 2B6B6   ; OUT ($7E),A
+site 2B6BF   ; OUT ($7E),A
+site 2B6C3   ; OUT ($7E),A
+site 2B6C6   ; OUT ($7E),A
+site 2B6DC   ; OUT ($7E),A
+site 2B702   ; OUT ($7E),A
+site 2B70A   ; OUT ($7E),A
+site 2B720   ; OUT ($7E),A
+site 2B746   ; OUT ($7E),A
+site 2B74E   ; OUT ($7E),A
+site 2B76B   ; OUT ($7E),A
+site 2B772   ; OUT ($7E),A
+site 2B787   ; OUT ($7E),A
+site 2B78E   ; OUT ($7E),A
+site 2B852   ; OUT ($7E),A
+site 2B856   ; OUT ($7E),A
+site 2B859   ; OUT ($7E),A
+site 2B866   ; OUT ($7E),A
+site 2B86A   ; OUT ($7E),A
+site 2B86D   ; OUT ($7E),A
+site 30F8C   ; OUT ($7E),A
+site 30F9D   ; OUT ($7E),A
+site 30FAE   ; OUT ($7E),A
+site 30FBA   ; OUT ($7E),A
+site 30FBF   ; OUT ($7E),A
+site 30FC7   ; OUT ($7E),A
+site 30FD4   ; OUT ($7E),A
+site 30FE7   ; OUT ($7E),A
+site 35801   ; OUT ($BF),A
+site 35805   ; OUT ($BF),A
+site 35812   ; OTIR
+site 35816   ; OUT ($BE),A
+site 3594C   ; OUT ($BF),A
+site 3594F   ; OUT ($BF),A
+site 3595C   ; OUT ($BF),A
+site 3595F   ; OUT ($BF),A
+site 3596C   ; OUT ($BF),A
+site 3596F   ; OUT ($BF),A
+site 35978   ; OUT ($BE),A
+site 3597C   ; OUT ($BE),A
+site 35980   ; OUT ($BE),A
+site 35985   ; OUT ($BE),A
+site 35992   ; OUT ($BF),A
+site 35995   ; OUT ($BF),A
+site 35998   ; OUT ($BE),A
+site 3599C   ; OUT ($BE),A
+site 359A0   ; OUT ($BE),A
+site 359A5   ; OUT ($BE),A
+site 359C5   ; OUT ($BF),A
+site 359C8   ; OUT ($BF),A
+site 359CF   ; OUT ($BE),A
+site 359D6   ; OUT ($BE),A
+site 359DD   ; OUT ($BE),A
+site 359E2   ; OUT ($BE),A
+site 35FB6   ; IN A,($00)
+site 36D98   ; OUT ($BF),A
+site 36D9B   ; OUT ($BF),A
+site 36D9E   ; OUT ($BE),A
+site 37741   ; IN A,($DC)
+site 3774F   ; IN A,($DD)
+site 37776   ; IN A,($DC)
+site 3777D   ; OUT ($03),A
+site 3BB19   ; IN A,($BF)
+site 3BB38   ; OTIR
+site 3BB3B   ; OUT ($BE),A
+site 3BB4C   ; OTIR
+site 3BB4F   ; OUT ($BE),A
+site 3BB6D   ; OUT ($BE),A
+site 3BB72   ; OUT ($BE),A
+site 3BC30   ; OTIR
+site 3BC33   ; OUT ($BE),A
+site 3BC45   ; OTIR
+site 3BC48   ; OUT ($BE),A
+site 3BC6E   ; OUT ($BE),A
+site 3BC74   ; OUT ($BE),A
+site 3BCC1   ; OUT ($BF),A
+site 3BCC4   ; OUT ($BF),A
+site 3BCC8   ; OUT ($BF),A
+# not patched: 3BCCB (RAM $DB0B, OUT ($BF),A): in the race the game reads $DB07 on as data
+# (LD IY,$DB07 at $38C8); with RST io there the race crashed. The menus' VRAM address
+# set through $DB07 then loses its high byte on the Next.
+# RAM code at $DBC0 (copied from ROM $0075 by the start-up code at $010E,
+# reached by JP $DBC0 at $80BB as the race loads): maps banks 0 and 1.
+# Unpatched, its writes went into the cart copy and wrote $00 over the
+# vector at $0000 (batch 5).
+codem 00077   ; LD ($0000),A
+codem 0007C   ; LD ($4000),A
+codem 0000E   ; LD ($8000),A
+codem 00017   ; LD ($8000),A
+codem 001CC   ; LD ($8000),A
+codem 001D6   ; LD ($8000),A
+codem 00291   ; LD ($8000),A
+codem 002EB   ; LD ($8000),A
+codem 0036A   ; LD ($8000),A
+codem 0045A   ; LD ($8000),A
+codem 00465   ; LD ($8000),A
+codem 00A9F   ; LD ($8000),A
+codem 00AA9   ; LD ($8000),A
+codem 00AB3   ; LD ($8000),A
+codem 00ABD   ; LD ($8000),A
+codem 00ACE   ; LD ($8000),A
+codem 00AD9   ; LD ($8000),A
+codem 00AE3   ; LD ($8000),A
+codem 00AED   ; LD ($8000),A
+codem 00AF7   ; LD ($8000),A
+codem 00B00   ; LD ($8000),A
+codem 00B0B   ; LD ($8000),A
+codem 00EE8   ; LD ($8000),A
+codem 012C1   ; LD ($8000),A
+codem 012CC   ; LD ($8000),A
+codem 012D7   ; LD ($8000),A
+codem 01ABF   ; LD ($8000),A
+codem 01CF6   ; LD ($8000),A
+codem 01DE9   ; LD ($8000),A
+codem 01F08   ; LD ($8000),A
+codem 01F10   ; LD ($8000),A
+codem 01F28   ; LD ($8000),A
+codem 01F30   ; LD ($8000),A
+codem 01F55   ; LD ($8000),A
+codem 01F69   ; LD ($8000),A
+codem 02019   ; LD ($8000),A
+codem 02025   ; LD ($8000),A
+codem 022DD   ; LD ($8000),A
+codem 022E5   ; LD ($8000),A
+codem 03172   ; LD ($8000),A
+codem 03184   ; LD ($8000),A
+codem 03190   ; LD ($8000),A
+codem 0319B   ; LD ($8000),A
+codem 032E7   ; LD ($8000),A
+codem 0343C   ; LD ($8000),A
+codem 03447   ; LD ($8000),A
+codem 03A25   ; LD ($8000),A
+codem 03B57   ; LD ($8000),A
+codem 03B69   ; LD ($8000),A
+codem 03D50   ; LD ($8000),A
+codem 03DBF   ; LD ($8000),A
+codem 03DD3   ; LD ($8000),A
+codem 03E26   ; LD ($8000),A
+codem 03E31   ; LD ($8000),A
+codem 03F19   ; LD ($8000),A
+codem 03F2D   ; LD ($8000),A
+codem 03F47   ; LD ($8000),A
+codem 03F50   ; LD ($8000),A
+codem 03FB6   ; LD ($8000),A
+codem 03FBF   ; LD ($8000),A
+codem 04733   ; LD ($8000),A
+codem 0473B   ; LD ($8000),A
+codem 04829   ; LD ($8000),A
+codem 04831   ; LD ($8000),A
+codem 048C4   ; LD ($8000),A
+codem 048CD   ; LD ($8000),A
+codem 049F1   ; LD ($8000),A
+codem 0516B   ; LD ($8000),A
+codem 05176   ; LD ($8000),A
+codem 0519F   ; LD ($8000),A
+codem 051AA   ; LD ($8000),A
+codem 051D1   ; LD ($8000),A
+codem 05527   ; LD ($8000),A
+codem 0552E   ; LD ($8000),A
+codem 05546   ; LD ($8000),A
+codem 0554D   ; LD ($8000),A
+codem 05598   ; LD ($8000),A
+codem 055AC   ; LD ($8000),A
+codem 0562F   ; LD ($8000),A
+codem 0563B   ; LD ($8000),A
+codem 059E6   ; LD ($8000),A
+codem 05AAA   ; LD ($8000),A
+codem 05AB2   ; LD ($8000),A
+codem 064C0   ; LD ($8000),A
+codem 06613   ; LD ($8000),A
+codem 0661E   ; LD ($8000),A
+codem 06629   ; LD ($8000),A
+codem 06634   ; LD ($8000),A
+codem 06647   ; LD ($8000),A
+codem 06713   ; LD ($8000),A
+codem 06737   ; LD ($8000),A
+codem 06A8E   ; LD ($8000),A
+codem 0728C   ; LD ($8000),A
+codem 07329   ; LD ($8000),A
+codem 073C4   ; LD ($8000),A
+codem 073CD   ; LD ($8000),A
+codem 0746D   ; LD ($8000),A
+codem 07479   ; LD ($8000),A
+codem 07482   ; LD ($8000),A
+codem 07626   ; LD ($8000),A
+codem 07664   ; LD ($8000),A
+codem 07A75   ; LD ($8000),A
+codem 07A8B   ; LD ($8000),A
+codem 07C69   ; LD ($8000),A
+codem 07C74   ; LD ($8000),A
+codem 07CD8   ; LD ($8000),A
+codem 07D11   ; LD ($8000),A
+codem 07D64   ; LD ($8000),A
+codem 07DD8   ; LD ($8000),A
+codem 07DFC   ; LD ($8000),A
+codem 07E01   ; LD ($8000),A
+codem 07F50   ; LD ($8000),A
+codem 07F59   ; LD ($8000),A
+codem 0AFC1   ; LD ($8000),A
+codem 0AFC9   ; LD ($8000),A
+codem 3BB08   ; LD ($8000),A
+codem 3BB11   ; LD ($8000),A
+codem 3BB28   ; LD ($8000),A
+codem 3BCF8   ; LD ($8000),A
+codem 3BD0A   ; LD ($8000),A
+# between the two above, the same routine's third LD ($8000),A (RAM $DB41);
+# no run reached it (batch 5)
+codem 3BD01   ; LD ($8000),A
+# CHECK ram_exec at 08018 ($8018 bank 2): CALL $C000 $C000
+# CHECK ram_exec at 080BB ($80BB bank 2): JP $DBC0 $DBC0
+# CHECK ram_exec at 0B031 ($B031 bank 2): JP $C000 $C000
+# CHECK indirect_unresolved at 080F9 ($80F9 bank 2): CALL $8100 
+# CHECK bank_unresolved at 3BCE0 ($DB20 bank ram): CALL $8CE8 $8CE8
+# CHECK low: site 0862A  IN A,($3E)  (unmapped_read)
+# CHECK low: site 09021  OUT ($BE),A  (vdp_data)
+# CHECK low: site 09024  OUT ($BE),A  (vdp_data)
+# CHECK low: site 099EB  OUT ($BE),A  (vdp_data)
+# CHECK low: site 099EF  OUT ($BE),A  (vdp_data)
+# CHECK low: site 09B11  OUT ($BE),A  (vdp_data)
+# CHECK low: site 09B15  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0A10B  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0A10E  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0A7C0  IN A,($DC)  (joypad_a)
+# CHECK low: site 0A7D6  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 0A9E4  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0A9E8  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0AF8F  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0B731  IN A,($3E)  (unmapped_read)
+# CHECK low: site 0BB65  OUT ($BF),A  (vdp_control)
+# CHECK low: site 0BB69  OUT ($BF),A  (vdp_control)
+# CHECK low: site 0BD9E  OTIR  (port in C)
+# CHECK low: site 0BF67  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0BF6A  OUT ($BE),A  (vdp_data)
+# CHECK low: site 0BF7D  OTIR  (port in C)
+# CHECK low: site 0F1D2  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 12386  IN A,($C0)  (joypad_a)
+# CHECK low: site 1248A  IN A,($C0)  (joypad_a)
+# CHECK low: site 136D1  IN A,($7F)  (h_counter)
+# CHECK low: site 13A24  IN A,($7F)  (h_counter)
+# CHECK low: site 1584E  IN A,($DC)  (joypad_a)
+# CHECK low: site 15F8E  INIR  (port in C)
+# CHECK low: site 16B6B  IN D,(C)  (port in C)
+# CHECK low: site 16C15  IN A,($F0)  (joypad_a)
+# CHECK low: site 1760D  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 1A9C9  IN A,($3F)  (unmapped_read)
+# CHECK low: site 1B542  IN B,(C)  (port in C)
+# CHECK low: site 1DBCC  IN A,($DC)  (joypad_a)
+# CHECK low: site 1E6D0  OUT (C),B  (port in C)
+# CHECK low: site 1F497  OUTI  (port in C)
+# CHECK low: site 1F58B  IN A,($F1)  (joypad_b_misc)
+# CHECK low: site 1F632  OUT ($3F),A  (io_control)
+# CHECK low: site 21515  IN A,($DC)  (joypad_a)
+# CHECK low: site 25A10  IN A,($DC)  (joypad_a)
+# CHECK low: site 25A44  IN A,($DC)  (joypad_a)
+# CHECK low: site 25B90  IN A,($DC)  (joypad_a)
+# CHECK low: site 25C1C  IN A,($DC)  (joypad_a)
+# CHECK low: site 25C50  IN A,($DC)  (joypad_a)
+# CHECK low: site 25EBC  IN A,($DC)  (joypad_a)
+# CHECK low: site 267EA  IN A,($F0)  (joypad_a)
+# CHECK low: site 27294  OUT (C),B  (port in C)
+# CHECK low: site 277F2  OUTI  (port in C)
+# CHECK low: site 27875  OUT ($7F),A  (psg)
+# CHECK low: site 278F7  OUT (C),C  (port in C)
+# CHECK low: site 27ABB  IN A,($C0)  (joypad_a)
+# CHECK low: site 2A4AB  OUT (C),H  (port in C)
+# CHECK low: site 2A99E  OUT (C),C  (port in C)
+# CHECK low: site 2CD52  IN A,($7E)  (v_counter)
+# CHECK low: site 2CEAE  IN A,($7F)  (h_counter)
+# CHECK low: site 2D022  IN A,($7E)  (v_counter)
+# CHECK low: site 2E093  IN A,($7E)  (v_counter)
+# CHECK low: site 300DB  IN A,($BD)  (vdp_status)
+# CHECK low: site 33BC5  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 33CF2  OUT ($3F),A  (io_control)
+# CHECK low: site 33D5B  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 33D66  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 33D71  IN A,($DD)  (joypad_b_misc)
+# CHECK low: site 35CF8  OUT ($F0),A  (fm_address)
+# CHECK low: site 384C9  OUT (C),A  (port in C)
+# CHECK low: site 389F8  IND  (port in C)
+# CHECK low: site 3BB99  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BBA1  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BBA7  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BBAF  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BBE0  OUT (C),A  (port in C)
+# CHECK low: site 3BBE4  OUT (C),A  (port in C)
+# CHECK low: site 3BBFD  IN A,($7E)  (v_counter)
+# CHECK low: site 3BBFF  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BC03  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BC5C  OTIR  (port in C)
+# CHECK low: site 3BC5F  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BC83  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BC87  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3BCB6  OTIR  (port in C)
+# CHECK low: site 3BCB9  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3C012  IN A,($BD)  (vdp_status)
+# CHECK low: site 3CA93  OUT (C),B  (port in C)
+# CHECK low: site 3CDEC  INIR  (port in C)
+# CHECK low: site 3DC1D  IN A,($7F)  (h_counter)
+# CHECK low: site 3ED81  OUT ($BF),A  (vdp_control)
+# CHECK low: site 3ED87  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3ED90  IN A,($7E)  (v_counter)
+# CHECK low: site 3EDCF  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3EE14  OTIR  (port in C)
+# CHECK low: site 3EE28  IN A,($7F)  (h_counter)
+# CHECK low: site 3EE68  OUTI  (port in C)
+# CHECK low: site 3EE6C  OUT (C),D  (port in C)
+# CHECK low: site 3EE92  IN A,($DC)  (joypad_a)
+# CHECK low: site 3EFC0  IN A,($DC)  (joypad_a)
+# CHECK low: site 3EFDD  OUT ($7E),A  (psg)
+# CHECK low: site 3F060  OTIR  (port in C)
+# CHECK low: site 3F4F8  OUT ($7E),A  (psg)
+# CHECK low: site 3F8AF  OTIR  (port in C)
+# CHECK low: site 3F8C0  IN A,($DC)  (joypad_a)
+# CHECK low: site 3F948  INIR  (port in C)
+# CHECK low: site 3F9DF  OTIR  (port in C)
+# CHECK low: site 3F9FB  OUTI  (port in C)
+# CHECK low: site 3FA05  IN A,($7E)  (v_counter)
+# CHECK low: site 3FA3B  OUT ($BE),A  (vdp_data)
+# CHECK low: site 3FA74  OUT ($BF),A  (vdp_control)
+# The game unpacks most of its code into RAM ($C000-$CFFF) with its routine
+# at $D7BD (copied from ROM $3B97D). Every unpack ends at JP $DB48 ($D7C6,
+# ROM $3B986): that jump runs the framework's RAM patch table first. The
+# sites are the I/O PCs in that RAM from two detector runs (a short run, and
+# a longer one through the menus and a race), with their bytes.
+ramhook 3B986
+ramsite C037 D3BF
+ramsite C03B D3BF
+ramsite C03F D3BE
+ramsite C042 D3BE
+ramsite C049 DB7E
+ramsite C052 DB7E
+ramsite C0D5 EDB3
+ramsite C0D8 D3BF
+ramsite C0DC D3BF
+ramsite C0E4 EDB3
+ramsite C0E8 D3BF
+ramsite C0EC D3BF
+ramsite C0F4 EDB3
+ramsite C0F7 D3BF
+ramsite C0FB D3BF
+ramsite C0FF D3BE
+ramsite C103 D3BE
+ramsite C108 D3BE
+ramsite C111 D3BE
+ramsite C115 D3BE
+ramsite C119 D3BE
+ramsite C11D D3BE
+ramsite C122 D3BE
+ramsite C127 D3BF
+ramsite C12B D3BF
+ramsite C134 D3BE
+ramsite C137 D3BE
+ramsite C139 D3BE
+ramsite C13B D3BE
+ramsite C14C EDA3
+ramsite C14E EDA3
+ramsite C150 ED51
+ramsite C152 ED51
+ramsite C161 ED51
+ramsite C163 EDA3
+ramsite C165 ED59
+ramsite C167 ED59
+ramsite C16F D3BF
+ramsite C173 D3BF
+ramsite C17B D3BE
+ramsite C17F D3BE
+ramsite C186 DBDC
+ramsite C18F D3BF
+ramsite C193 D3BF
+ramsite C199 D3BE
+ramsite C19C D3BE
+ramsite C1A4 D3BF
+ramsite C1A8 D3BF
+ramsite C1AE D3BE
+ramsite C1B1 D3BE
+ramsite C1B9 D3BF
+ramsite C1BD D3BF
+ramsite C1C3 D3BE
+ramsite C1C7 D3BE
+ramsite C1CE D3BF
+ramsite C1D2 D3BF
+ramsite C1D7 D3BE
+ramsite C1DB D3BE
+ramsite C1E2 D3BF
+ramsite C1E6 D3BF
+ramsite C1EA D3BE
+ramsite C1EE D3BE
+ramsite C1F2 D3BE
+ramsite C1F6 D3BE
+ramsite C1FC D3BF
+ramsite C200 D3BF
+ramsite C206 D3BE
+ramsite C209 D3BE
+ramsite C20F D3BF
+ramsite C213 D3BF
+ramsite C219 D3BE
+ramsite C21C D3BE
+ramsite C228 D3BE
+ramsite C22B D3BE
+ramsite C23C D3BE
+ramsite C23F D3BE
+ramsite C245 D3BE
+ramsite C248 D3BE
+ramsite C263 D3BF
+ramsite C267 D3BF
+ramsite C41C D3BF
+ramsite C420 D3BF
+ramsite C42B D3BE
+ramsite C42F D3BE
+ramsite C434 D3BE
+ramsite C437 D3BF
+ramsite C43A D3BF
+ramsite C43F EDB3
+ramsite CA9B D37E
+ramsite CA9F D37E
+ramsite CAA3 D37E
+ramsite CAA7 D37E
+ramsite CAB7 D37E
+ramsite CAC0 D37E
+ramsite CAC6 D37E
+ramsite CAE7 D37E
+ramsite CAEA D37E
+# Codemasters mapper stores the flow scan did not reach (byte scan):
+# 000B1 runs from RAM: the routine at $0173 (called from $0120) copies the
+# game's 18-byte restart routine at $00AE to $DC99 and runs it there; the routine
+# maps bank 2 into slot 2, resets the stack and jumps to $8000. The cart
+# image is patched before the game copies it, so the copy carries the patch.
+codem 000B1   ; LD ($8000),A
+# 05B7A (selects bank $8E through $8000, then jumps to $A003, after two RETs) has no jump, call
+# or pointer to it anywhere in the cart: left unpatched.
