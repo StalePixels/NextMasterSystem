@@ -2,7 +2,7 @@
  *
  * Shown after the loader has read the cart and checked its overlay, and
  * before the game starts. It clears the standard ULA screen, prints what
- * the player picked and what the overlay says about it, and waits for a
+ * the player picked and what the overlay file says about it, and waits for a
  * key or a joystick fire button.
  *
  * Text is drawn straight into the ULA screen ($4000 pixels, $5800
@@ -16,15 +16,12 @@
 
 #include "nm.h"
 
-/* overlay file header (see loader.c) */
-#define OV_FORMAT   4
-#define OV_ABI      5
-#define OV_HDRSIZE  6
-#define OV_RAMPAGES 16
-#define OV_FLAGS    17
-#define OV_NAME     20
-#define OV_NAMELEN  32
-#define OV_FULLHDR  (OV_NAME + OV_NAMELEN)   /* the header is 52 bytes */
+/* .nms file header (see docs/nms-format.md and loader.c) */
+#define NMS_MAJOR   4
+#define NMS_MINOR   5
+#define NMS_ABI     6
+#define NMS_HDR     16
+#define TITLE_MAX   48             /* the title is cut to this length */
 
 #define FLAG_PRIORITY  0x01
 #define FLAG_TOPPAL    0x02
@@ -52,9 +49,7 @@ static const char s_size[]    = "Size";
 static const char s_game[]    = "Game";
 static const char s_format[]  = "Format";
 static const char s_abi[]     = "ABI";
-static const char s_ram[]     = "RAM";
 static const char s_flags[]   = "Flags";
-static const char s_pages[]   = " pages";
 static const char s_kb[]      = " KB";
 static const char s_none[]    = "none";
 static const char s_prio[]    = "priority tiles";
@@ -132,6 +127,36 @@ static char *put_str(char *p, const char *s)
     return p;
 }
 
+/* Copy the META title of the overlay file in OVL_BUF to buf, cut to
+ * TITLE_MAX characters. The loader has checked the file's chunks. */
+static void meta_title(char *buf)
+{
+    const uint8_t *o = OVL_BUF;
+    const uint8_t *p, *end;
+    uint16_t at = NMS_HDR, n;
+    uint8_t k;
+
+    buf[0] = 0;
+    for (;;) {
+        n = o[at + 4] | (o[at + 5] << 8);
+        if (!memcmp(o + at, "END ", 4)) return;
+        if (!memcmp(o + at, "META", 4)) break;
+        at += 8 + n;
+    }
+    p = o + at + 8;
+    end = p + n;
+    while (p < end) {
+        if (end - p > 6 && !memcmp(p, "title=", 6)) {
+            p += 6;
+            for (k = 0; k < TITLE_MAX && p < end && *p != '\n'; k++) buf[k] = (char)*p++;
+            buf[k] = 0;
+            return;
+        }
+        while (p < end && *p != '\n') p++;
+        p++;
+    }
+}
+
 static void wait_key(void)
 {
     uint16_t n;
@@ -148,7 +173,7 @@ static void wait_key(void)
 void *info_show(void *unused)
 {
     const uint8_t *o = OVL_BUF;
-    char buf[OV_NAMELEN + 1];
+    char buf[TITLE_MAX + 1];
     char *p, *q;
     const char *name;
     uint32_t size;
@@ -182,29 +207,22 @@ void *info_show(void *unused)
     row = put_field(row, s_size, buf);
     row++;
 
-    /* the overlay header */
-    if (((uint16_t)o[OV_HDRSIZE] | ((uint16_t)o[OV_HDRSIZE + 1] << 8)) >= OV_FULLHDR) {
-        memcpy(buf, o + OV_NAME, OV_NAMELEN);
-        buf[OV_NAMELEN] = 0;
-    } else {
-        buf[0] = 0;
-    }
+    /* the overlay file: its META title and header */
+    meta_title(buf);
     row = put_field(row, s_game, buf);
 
-    p = put_dec(buf, o[OV_FORMAT]);
+    p = put_dec(buf, o[NMS_MAJOR]);
+    *p++ = '.';
+    p = put_dec(p, o[NMS_MINOR]);
     *p = 0;
     row = put_field(row, s_format, buf);
 
-    p = put_dec(buf, o[OV_ABI]);
+    p = put_dec(buf, o[NMS_ABI]);
     *p = 0;
     row = put_field(row, s_abi, buf);
 
-    p = put_dec(buf, o[OV_RAMPAGES]);
-    p = put_str(p, s_pages);
-    *p = 0;
-    row = put_field(row, s_ram, buf);
-
-    fl = o[OV_FLAGS];
+    /* the CONF switches, as the loader read them */
+    fl = nm.launch.flags;
     q = buf;
     if (fl & FLAG_PRIORITY) q = put_str(q, s_prio);
     if (fl & FLAG_TOPPAL) {

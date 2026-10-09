@@ -12,6 +12,18 @@ An overlay (`.nms` file) holds the patches for one game. NextMasterSystem used t
 
 The design notes are in [docs/design.md](docs/design.md).
 
+### Overlay files
+
+Overlay files go in `/nm/ovl/` on the SD card, each named after the CRC32 of its cart: `/nm/ovl/0123ABCD.nms`. `/nm/ovl/index` lists every cart CRC32 that the files accept, so one file can serve other dumps of the same game. The file format is in [docs/nms-format.md](docs/nms-format.md).
+
+[docs/overlays.md](docs/overlays.md) shows how to make an overlay for a cart. The tools, all Python 3:
+
+- `tools/sitescan.py` scans a cart for the instructions an overlay has to patch. [docs/sitescan.md](docs/sitescan.md) describes it.
+- `tools/mkspec.py` drafts a spec, which is a text list of the changes, from the scan.
+- `tools/mknms.py` builds an overlay file from a spec and the player's cart. Its help text describes the spec lines.
+- `tools/mknmsindex.py` builds the index from a folder of overlay files.
+- `tools/build-overlays.py` builds a folder of specs and the index in one run.
+
 ### Controls
 
 | Master System | Next |

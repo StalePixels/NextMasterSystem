@@ -93,7 +93,7 @@ void    nm_close(uint8_t handle);
  * its own. */
 struct nm_state {
     uint8_t  err;             /* 0, or the code of the last failure */
-    char     ovl_name[21];    /* "/nm/ovl/XXXXXXXX.nmo" */
+    char     ovl_name[21];    /* "/nm/ovl/XXXXXXXX.nms" */
     uint16_t bflags;          /* the user's Browser view (C) and sort (B) flags */
     uint8_t  filter[16];      /* the user's Browser filter, saved */
     uint8_t  help[120];       /* the browser's two help lines */

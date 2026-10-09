@@ -15,11 +15,11 @@ see the meta repo's docs/compatibility.md). With them, the META chunk gets
 the game's title, release details and status, found by the cart's CRC32.
 Without a row for the cart, META holds the spec's name only.
 
---sjasmplus is the assembler for rastercode files (default: sjasmplus on
+--sjasmplus is the assembler for rastercode files and asm blocks (default: sjasmplus on
 the PATH).
 
-SPEC lines. # starts a comment. ADDR is a cart offset in hex; in the first
-32K it is also the Z80 address.
+SPEC lines. # or ; starts a comment. ADDR is a cart offset in hex; in the
+first 32K it is also the Z80 address.
 
   name TEXT          the game's name, used for META when the CSVs have none
   cart CRC32         the CRC32 of the cart the spec is for; the builder stops
@@ -51,6 +51,20 @@ SPEC lines. # starts a comment. ADDR is a cart offset in hex; in the first
   otir ADDR          OUTI followed by JR NZ,-2 or JP NZ,ADDR (a loop that
                      is OTIR): the OUTI becomes an OTIR site, the jump stays
   poke ADDR OLD NEW  replace hex bytes OLD with NEW at ADDR
+  asm ADDR LEN       Z80 assembly instead of hex. The lines up to a line
+  ...                "endasm" are assembled with sjasmplus, as if at the Z80
+  endasm             address that cart offset ADDR runs at (the offset itself
+                     in the first 32K, slot 2 at $8000 for other banks). The
+                     code replaces the LEN cart bytes at ADDR: it must not be
+                     longer, and the bytes it leaves are filled with NOP. The
+                     cart supplies the CHECK. The LEN bytes stay inside one 8K
+                     page of the cart. Example:
+                         asm 00089 2        ; IM 1 -> IM 2
+                             im 2
+                         endasm
+  label NAME ADDR    NAME is the game address that cart offset ADDR runs at,
+                     for use in asm blocks (any asm block in the spec, before
+                     or after this line)
   start ADDR [SP]    the game starts at ADDR instead of $0000, with SP
                      (default $DFF0)
   ramsite ADDR BB    an I/O instruction (bytes BB) that the game builds in
@@ -69,6 +83,16 @@ SPEC lines. # starts a comment. ADDR is a cart offset in hex; in the first
   toppal             CONF toppal=1: the palette the frame handler leaves is
                      shown from line 0
 
+Names that every asm block knows (the framework's jump table and the fixed
+state at $E000-$E071, from src/runtime/fw.asm). Jump table entries:
+jt_out_n $E000, jt_in_n $E003, jt_ed $E006, jt_ld_de_a $E009, jt_start $E00C,
+jt_fatal $E00F, jt_outi_run $E012, jt_io $E015, jt_io0 $E018, fw_resume $E01B.
+State: fw_status $E020, fw_crc $E021, fw_size $E025, fw_npages $E029,
+fw_lastop $E02A, fw_frames $E02B, cur_mmu $E02D, vdp_latch $E035, vdp_code
+$E036, vdp_addr $E037, vdp_rbuf $E039, vdp_status $E03A, vdp_regs $E03B,
+nt_base $E04B, cram $E04D, fw_start_addr $E06D, fw_start_sp $E06F, isr_n $E071.
+A label line may not reuse one of these names.
+
 Site lines may also name LD I,A and LD A,I (ED 47, ED 57): the framework
 keeps the game's I register, because it needs I for IM 2.
 
@@ -85,6 +109,7 @@ switch.
 import argparse
 import csv
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -98,6 +123,19 @@ import tracedef  # noqa: E402
 RASTER_ORG, RASTER_MAX = 0x3C00, 0x400   # rast_code in src/runtime/fw2.asm
 FILE_MAX = 0x1E00                         # OVL_BUF in src/shell/nm.h
 ENTRY = {'out_n': 0xE000, 'in_n': 0xE003, 'ed': 0xE006, 'ld_de_a': 0xE009, 'outi_run': 0xE012, 'io': 0xE015}
+# Names every asm block can use. The addresses are fixed by src/runtime/fw.asm
+# (the jump table, then "state that tools read from outside"). The jt_ names
+# are the table entries; fw.asm's own fw_out_n and the like are the handlers.
+ASM_NAMES = {
+    'jt_out_n': 0xE000, 'jt_in_n': 0xE003, 'jt_ed': 0xE006, 'jt_ld_de_a': 0xE009,
+    'jt_start': 0xE00C, 'jt_fatal': 0xE00F, 'jt_outi_run': 0xE012, 'jt_io': 0xE015,
+    'jt_io0': 0xE018, 'fw_resume': 0xE01B,
+    'fw_status': 0xE020, 'fw_crc': 0xE021, 'fw_size': 0xE025, 'fw_npages': 0xE029,
+    'fw_lastop': 0xE02A, 'fw_frames': 0xE02B, 'cur_mmu': 0xE02D,
+    'vdp_latch': 0xE035, 'vdp_code': 0xE036, 'vdp_addr': 0xE037, 'vdp_rbuf': 0xE039,
+    'vdp_status': 0xE03A, 'vdp_regs': 0xE03B, 'nt_base': 0xE04B, 'cram': 0xE04D,
+    'fw_start_addr': 0xE06D, 'fw_start_sp': 0xE06F, 'isr_n': 0xE071,
+}
 CHECK_GAP = 32       # patched ranges closer than this share one CHECK
 CHECK_MAX = 0x1000   # longest CHECK range
 
@@ -112,6 +150,54 @@ def crc32(b):
 def cpu(off):
     """CPU address of a cart offset: banks 0-1 as they are, others in slot 2."""
     return off if off < 0x8000 else 0x8000 | (off & 0x3FFF)
+
+
+def strip_comment(line):
+    return re.split('[#;]', line, 1)[0].strip()
+
+
+def read_asm_block(it, spec, n):
+    """The lines of an asm block that starts on spec line N, up to endasm."""
+    body = []
+    for _, raw in it:
+        if strip_comment(raw) == 'endasm':
+            return body
+        body.append(raw.rstrip('\n'))
+    raise SystemExit(f'{spec}:{n}: asm block has no endasm')
+
+
+def spec_labels(spec):
+    """The label lines of a spec: name -> Z80 address."""
+    labels = {}
+    it = enumerate(open(spec), 1)
+    for n, raw in it:
+        line = strip_comment(raw)
+        w = line.split()
+        if w[:1] == ['asm']:
+            read_asm_block(it, spec, n)
+        elif w[:1] == ['label']:
+            if len(w) != 3 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', w[1]):
+                raise SystemExit(f'{spec}:{n}: label NAME ADDR')
+            if w[1] in ASM_NAMES or w[1] in labels:
+                raise SystemExit(f'{spec}:{n}: label {w[1]} is already defined')
+            labels[w[1]] = cpu(int(w[2], 16))
+    return labels
+
+
+def assemble_block(sjasmplus, spec, n, body, org, labels):
+    """Assemble the asm block that starts on spec line N at Z80 address ORG."""
+    names = dict(ASM_NAMES, **labels)
+    with tempfile.TemporaryDirectory() as td:
+        with open(os.path.join(td, 'names.i'), 'w') as f:
+            f.write(''.join(f'{k} equ 0x{v:04X}\n' for k, v in names.items()))
+        with open(os.path.join(td, 'blk.asm'), 'w') as f:
+            f.write(f' INCLUDE "names.i" : ORG 0x{org:04X}\n' + '\n'.join(body) + '\n')
+        p = subprocess.run([sjasmplus, '--nologo', '--msg=war', '--raw=blk.bin', 'blk.asm'],
+                           capture_output=True, text=True, cwd=td)
+        if p.returncode or not os.path.exists(os.path.join(td, 'blk.bin')):
+            text = re.sub(r'blk\.asm\((\d+)\)', lambda m: f'{spec}:{n + int(m.group(1)) - 1}', p.stdout + p.stderr)
+            raise SystemExit(f'{spec}:{n}: asm block failed\n{text.strip()}')
+        return open(os.path.join(td, 'blk.bin'), 'rb').read()
 
 
 def pclass(p):
@@ -152,12 +238,31 @@ def parse(spec, cart, sjasmplus):
     def patch(addr, new):
         ops.append((addr, bytes(new)))
 
-    for line in open(spec):
-        line = line.split('#')[0].strip()
+    labels = spec_labels(spec)
+    it = enumerate(open(spec), 1)
+    for lineno, raw in it:
+        line = strip_comment(raw)
         if not line:
             continue
         word, rest = (line.split(None, 1) + [''])[:2]
-        if word == 'name':
+        if word == 'label':
+            pass
+        elif word == 'asm':
+            w = rest.split()
+            body = read_asm_block(it, spec, lineno)
+            if len(w) != 2:
+                raise SystemExit(f'{spec}:{lineno}: asm ADDR LEN')
+            a, n = int(w[0], 16), int(w[1])
+            if n < 1 or a + n > len(cart):
+                raise SystemExit(f'{spec}:{lineno}: asm {a:05X} {n}: outside the cart')
+            if a % 8192 + n > 8192:
+                raise SystemExit(f'{spec}:{lineno}: asm {a:05X} {n}: crosses an 8K page of the cart')
+            code = assemble_block(sjasmplus, spec, lineno, body, cpu(a), labels)
+            if len(code) > n:
+                raise SystemExit(f'{spec}:{lineno}: asm {a:05X}: the code is {len(code)} bytes, '
+                                 f'more than the {n} it replaces')
+            patch(a, code + b'\0' * (n - len(code)))
+        elif word == 'name':
             r['name'] = rest
         elif word == 'cart':
             r['crc'] = int(rest, 16)
@@ -462,7 +567,7 @@ def main():
     ap.add_argument('outdir')
     ap.add_argument('--compat', help='compatibility list CSV')
     ap.add_argument('--titles', help='title list CSV')
-    ap.add_argument('--sjasmplus', default='sjasmplus', help='assembler for rastercode files')
+    ap.add_argument('--sjasmplus', default='sjasmplus', help='assembler for rastercode files and asm blocks')
     a = ap.parse_args()
     build(a.spec, a.cart, a.outdir, a.compat, a.titles, a.sjasmplus)
 

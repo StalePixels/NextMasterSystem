@@ -12,9 +12,10 @@ describes the spec lines; docs/overlays.md describes the workflow. The draft:
   data there too); otherwise $00, when the cart starts with DI; IM 1 (the
   game then starts at $0003), DI; LD SP,nn (starts at $0004 with that SP),
   IM 1; LD SP,nn (starts at $0005 with that SP) or JP nn (starts at nn);
-- changes every IM 1 in scanned code to IM 2 (not the one at $0001 when
+- changes every IM 1 in scanned code to IM 2 with an asm block (not the one at $0001 when
   the vector is $00);
-- lists every high and medium confidence I/O site; OUTI followed by
+- lists every high and medium confidence I/O site, with the original
+  instruction as a comment (so does every mapper line); OUTI followed by
   JR NZ,-2 becomes an otir line;
 - turns mapper stores LD ($FFFC-$FFFF),A into mapst lines,
   LD HL,$FFFF; LD (HL),n into mapld lines, LD ($FFFC-$FFFE),HL into
@@ -102,7 +103,7 @@ if start is not None:
 for a in im1:
     if (start == '0003' and a == 1) or (start is not None and start.startswith('0005') and a == 0):
         continue
-    out.append(f'poke {a:05X} ED56 ED5E')
+    out += [f'asm {a:05X} 2   ; IM 1 -> IM 2', '    im 2', 'endasm']
 seen = set()
 bytescan_head = False
 for r in rows:
@@ -113,17 +114,17 @@ for r in rows:
     if kind == 'mapper' and r[3].startswith('32 ') and r[3].endswith(' FF') and int(r[3][3:5], 16) >= 0xFC:
         if a not in seen:
             seen.add(a)
-            out.append(f'mapst {a:05X}')
+            out.append(f'mapst {a:05X}   ; {r[4].strip()}')
         continue
     if kind == 'mapper' and r[3].startswith('22 ') and r[3].endswith(' FF') and 0xFC <= int(r[3][3:5], 16) <= 0xFE:
         if a not in seen:
             seen.add(a)
-            out.append(f'mapsthl {a:05X}')
+            out.append(f'mapsthl {a:05X}   ; {r[4].strip()}')
         continue
     if kind == 'mapper' and r[3].startswith('ED ') and r[3][3:5] in ('43', '53') and r[3].endswith(' FF'):
         if a not in seen:
             seen.add(a)
-            out.append(f"{'mapstbc' if r[3][3:5] == '43' else 'mapstde'} {a:05X}")
+            out.append(f"{'mapstbc' if r[3][3:5] == '43' else 'mapstde'} {a:05X}   ; {r[4].strip()}")
         continue
     if kind == 'mapper' and r[3].startswith('36 ') and cart[a - 3] == 0x21 and cart[a - 1] == 0xFF and cart[a - 2] >= 0xFC and cart[a - 2] != 0xFF:
         if a not in seen:
@@ -143,16 +144,16 @@ for r in rows:
     if kind == 'codem_store' and r[3].startswith('32 00 ') and r[3][6:8] in ('00', '40', '80'):
         if a not in seen:
             seen.add(a)
-            out.append(f'codem {a:05X}')
+            out.append(f'codem {a:05X}   ; {r[4].strip()}')
         continue
     if kind in ('out', 'in', 'out_c', 'in_c', 'block_out', 'block_in') and conf in ('high', 'medium'):
         if a in seen:
             continue
         seen.add(a)
         if cart[a:a + 4] == b'\xed\xa3\x20\xfc' or cart[a:a + 5] == bytes([0xED, 0xA3, 0xC2, cpu(a) & 0xFF, cpu(a) >> 8]):
-            out.append(f'otir {a:05X}')
+            out.append(f'otir {a:05X}   ; {r[4].strip()}')
         else:
-            out.append(f'site {a:05X}')
+            out.append(f'site {a:05X}   ; {r[4].strip()}')
     elif kind == 'mapper_unreached':
         if a in seen:
             continue

@@ -32,7 +32,7 @@ static const char msg_e1[]    = "That file could not be opened.";
 static const char msg_e2[]    = "That file could not be read.";
 static const char msg_e3[]    = "That file is empty or larger than 512K.";
 static const char msg_e4a[]   = "Unknown game: no /nm/ovl/";
-static const char msg_e4b[]   = ".nmo for it.";
+static const char msg_e4b[]   = ".nms for it.";
 static const char msg_e5[]    = "Its overlay file is damaged or too new.";
 static const char msg_e6[]    = "Its overlay is for another cart (CRC32 or size).";
 static const char msg_e7[]    = "Its overlay has a bad operation.";
@@ -79,7 +79,7 @@ void *session_init(void *unused)
         *o++ = ZXN_READ_REG(save_regs[i]);
     }
     *o = 0xFF;
-    memcpy(nm.ovl_name, "/nm/ovl/00000000.nmo", 21);
+    memcpy(nm.ovl_name, "/nm/ovl/00000000.nms", 21);
     nm.err = 0;
     return 0;
 }
