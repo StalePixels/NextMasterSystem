@@ -396,6 +396,31 @@ pal_l2:		call pal_black
 		nextreg $44,0
 		ret
 
+; LD A,I (ed_ldai in fw.asm, through fw4_call): the game's A = its I
+; (shadow_i); S and Z from the value, P/V = the game's IFF2, H = N = 0, C
+; kept.
+ed_ldai4:	ld hl,(fw_sp)
+		inc hl
+		ld a,(shadow_i)
+		ld (hl),a
+		dec hl
+		or a
+		push af
+		pop bc
+		ld a,c
+		and %11000000
+		ld c,a
+		ld a,(hl)
+		and 1
+		or c
+		ld c,a
+		ld a,(exit_ei)
+		cp $FB			; EI: the game's interrupts were on
+		ld a,c
+		jr nz,ed_ldai4__n
+		or 4
+ed_ldai4__n:	ld (hl),a
+		ret
 
 ; ----------------------------------------------------------------------
 ; PSG (SN76489) -> AY, called from a handler through psg_w (fw.asm) and

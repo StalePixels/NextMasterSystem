@@ -4,7 +4,8 @@
  * the file the player picks, asks the loader to load it. A failed load
  * leaves a code in nm.err, which the next pass shows in the browser's help
  * line. A started game does not return here; BREAK in the game comes back
- * through nm_resume to nm_run, which calls the next pass.
+ * through nm_resume to nm_run, which calls the next pass. BREAK in the
+ * browser leaves NextMasterSystem for NextZXOS (leave, nm_basic).
  *
  * The browser's filter and flags are NextZXOS's own settings and outlive
  * this program, so they are saved before the browser opens and put back as
@@ -37,7 +38,7 @@ static const char msg_e5[]    = "Its overlay file is damaged or too new.";
 static const char msg_e6[]    = "Its overlay is for another cart (CRC32 or size).";
 static const char msg_e7[]    = "Its overlay has a bad operation.";
 static const char msg_e8[]    = "This dump differs from the one the overlay is for.";
-static const char msg_line2[] = "ENTER loads. In a game, BREAK comes back here.";
+static const char msg_line2[] = "ENTER loads. Break to exit game, or menu.";
 
 static const char *const msg_tab[] = {
     msg_pick, msg_e1, msg_e2, msg_e3, 0, msg_e5, msg_e6, msg_e7, msg_e8
@@ -73,6 +74,7 @@ void *session_init(void *unused)
 
     (void)unused;
     intrinsic_di();
+    nm.speed = ZXN_READ_REG(REG_TURBO_MODE) & 3;
     ZXN_NEXTREG(REG_TURBO_MODE, 3);
     for (i = 0; i < sizeof save_regs; i++) {
         *o++ = save_regs[i];
@@ -96,6 +98,19 @@ static void browser_settings(uint8_t change, const void *filter, uint16_t flags)
     p.opt = 0;
     nm_p3dos(&p);
     nm.bflags = p.bc;
+}
+
+/* Put back what session_init changed, then start NextZXOS's BASIC. */
+static void leave(void)
+{
+    const uint8_t *r = nm.launch.nr;
+
+    while (*r != 0xFF) {
+        ZXN_WRITE_REG(r[0], r[1]);
+        r += 2;
+    }
+    ZXN_WRITE_REG(REG_TURBO_MODE, nm.speed);
+    nm_basic();
 }
 
 void *session_pass(void *unused)
@@ -129,8 +144,12 @@ void *session_pass(void *unused)
 
     browser_settings(1, nm.filter, user_flags);
 
-    /* An error or BREAK (carry or zero clear) opens the browser again. */
-    if ((p.f & (NM_F_CARRY | NM_F_ZERO)) != (NM_F_CARRY | NM_F_ZERO))
+    /* BREAK or SPACE (carry set, zero clear) leaves for NextZXOS. */
+    if ((p.f & (NM_F_CARRY | NM_F_ZERO)) == NM_F_CARRY)
+        leave();
+
+    /* An error (carry clear) opens the browser again. */
+    if (!(p.f & NM_F_CARRY))
         return 0;
 
     nm.err = (uint8_t)(uintptr_t)NM_FAR(PAGE_LOADER, loader_load, 0);

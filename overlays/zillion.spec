@@ -248,72 +248,6 @@ site 021D1   ; OUT ($BE),A
 site 021EC   ; OUT ($BF),A
 site 021F0   ; OUT ($BF),A
 site 022C7   ; OUT ($BE),A
-site 03BE9   ; OUT ($BF),A
-site 03BED   ; OUT ($BF),A
-site 03C09   ; OUTI
-site 03C0B   ; OUTI
-site 03C0D   ; OUTI
-site 03C0F   ; OUT ($BE),A
-site 03C11   ; OUTI
-site 03C13   ; OUTI
-site 03C15   ; OUTI
-site 03C17   ; OUT ($BE),A
-site 03C19   ; OUTI
-site 03C1B   ; OUTI
-site 03C1D   ; OUTI
-site 03C1F   ; OUT ($BE),A
-site 03C21   ; OUTI
-site 03C23   ; OUTI
-site 03C25   ; OUTI
-site 03C27   ; OUT ($BE),A
-site 03C29   ; OUTI
-site 03C2B   ; OUTI
-site 03C2D   ; OUTI
-site 03C2F   ; OUT ($BE),A
-site 03C31   ; OUTI
-site 03C33   ; OUTI
-site 03C35   ; OUTI
-site 03C37   ; OUT ($BE),A
-site 03C39   ; OUTI
-site 03C3B   ; OUTI
-site 03C3D   ; OUTI
-site 03C3F   ; OUT ($BE),A
-site 03C41   ; OUTI
-site 03C43   ; OUTI
-site 03C45   ; OUTI
-site 03C47   ; OUT ($BE),A
-site 03C5D   ; OUT ($BE),A
-site 03C62   ; OUT ($BE),A
-site 03C67   ; OUT ($BE),A
-site 03C69   ; IN A,($BE)
-site 03C6E   ; OUT ($BE),A
-site 03C73   ; OUT ($BE),A
-site 03C78   ; OUT ($BE),A
-site 03C7A   ; IN A,($BE)
-site 03C7F   ; OUT ($BE),A
-site 03C84   ; OUT ($BE),A
-site 03C89   ; OUT ($BE),A
-site 03C8B   ; IN A,($BE)
-site 03C90   ; OUT ($BE),A
-site 03C95   ; OUT ($BE),A
-site 03C9A   ; OUT ($BE),A
-site 03C9C   ; IN A,($BE)
-site 03CA1   ; OUT ($BE),A
-site 03CA6   ; OUT ($BE),A
-site 03CAB   ; OUT ($BE),A
-site 03CAD   ; IN A,($BE)
-site 03CB2   ; OUT ($BE),A
-site 03CB7   ; OUT ($BE),A
-site 03CBC   ; OUT ($BE),A
-site 03CBE   ; IN A,($BE)
-site 03CC3   ; OUT ($BE),A
-site 03CC8   ; OUT ($BE),A
-site 03CCD   ; OUT ($BE),A
-site 03CCF   ; IN A,($BE)
-site 03CD4   ; OUT ($BE),A
-site 03CD9   ; OUT ($BE),A
-site 03CDE   ; OUT ($BE),A
-site 03CE0   ; IN A,($BE)
 site 040BA   ; OUT ($BF),A
 site 040BE   ; OUT ($BF),A
 site 040C3   ; OUT ($BF),A
@@ -476,3 +410,115 @@ mapst 04E3C   ; LD ($FFFF),A
 mapst 04F5B   ; LD ($FFFF),A
 mapst 04F67   ; LD ($FFFF),A
 mapst 0522A   ; LD ($FFFF),A
+# Player sprite tile upload in the frame handler ($3BCD, called from $0139 when the
+# player's animation frame changes), as native code in page 0. The game writes
+# 8-14 tiles to VRAM $0000 through the traps: plain frames as 3 OUTI and an
+# OUT of 0 per tile row, mirrored frames as 3 bytes through its table at $7E00
+# and an IN A,($BE) per row, which skips the 4th byte. The mirrored form took
+# about 50,000 Next cycles a tile, a third of a frame in the attract-mode
+# corridor, so the game got about 0.68 game frames a Next frame there.
+# The sites $3BE9-$3CE0 are in the code this replaces.
+asm 03BE3 6          ; ADD A / LD C,A / LD B,0 / LD A,0 -> far call to page 0, then return
+    rst $00
+    db far_io, pg_plup, ent_plup
+    ret
+endasm
+page 0 plup
+; plup: A = the new animation frame. Does what the game's code at
+; $3BE3-$3CE8 does, with bank 3 in slot 2. The frame's header is at
+; ($8000 + 2A): a byte n (bit 7: mirrored), then n pointers, each to a
+; tile's 8 rows of 3 bytes. A plain tile is written as rows of the 3 bytes
+; and a 0; a mirrored tile's bytes go through the table at $7E00, and the
+; 4th byte of each row is not written. The tiles go to VRAM $0000 on, one
+; jt_vwrite call each. The game's frame data is all in bank 3 ($8000 on),
+; and the table in slot 1, so plain reads see what the game sees.
+; Leaves the VDP address after the last tile, as the game's code does;
+; changes AF, BC, DE and HL (the game's code also changes AF').
+plup:   push ix
+        push iy
+        add a,a
+        ld l,a
+        ld h,$80
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl                ; HL = the frame's header
+        ld a,(hl)
+        inc hl
+        ld (.mir),a             ; bit 7: mirrored
+        and $7F
+        ld de,0                 ; the VRAM address
+.tile:  push af                 ; tiles left
+        push hl                 ; the pointer list
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a                  ; HL = the tile's 24 bytes
+        push de
+        ld de,.buf
+        ld ixl,8
+        ld a,(.mir)
+        rlca
+        jr c,.mrow
+.prow:  ld a,(hl)
+        ld (de),a
+        inc hl
+        inc de
+        ld a,(hl)
+        ld (de),a
+        inc hl
+        inc de
+        ld a,(hl)
+        ld (de),a
+        inc hl
+        inc de
+        xor a
+        ld (de),a
+        inc de
+        dec ixl
+        jr nz,.prow
+        pop de
+        ld bc,$2001             ; one run of 32 bytes
+        jr .write
+.mrow:  ld b,$7E
+        ld c,(hl)
+        ld a,(bc)
+        ld (de),a
+        inc hl
+        inc de
+        ld c,(hl)
+        ld a,(bc)
+        ld (de),a
+        inc hl
+        inc de
+        ld c,(hl)
+        ld a,(bc)
+        ld (de),a
+        inc hl
+        inc de
+        inc de                  ; the 4th byte: not written
+        dec ixl
+        jr nz,.mrow
+        pop de
+        ld bc,$0308             ; 8 runs of 3 bytes, 4 apart
+.write: ld hl,.buf
+        ld ix,4                 ; the source step
+        ld iy,4                 ; the VRAM step
+        ld a,1                  ; the source as mapped now (this page)
+        call jt_vwrite
+        ld hl,32
+        add hl,de
+        ex de,hl                ; DE = the next tile
+        pop hl
+        inc hl
+        inc hl
+        pop af
+        dec a
+        jr nz,.tile
+        ld (vdp_addr),de        ; the game's last IN A,($BE) moves past the 4th byte too
+        pop iy
+        pop ix
+        ret
+.mir:   db 0
+.buf:   ds 32
+endpage

@@ -2,10 +2,11 @@
 ; only while the once-a-frame work runs (fw2_vbl maps it; restore_mmu puts
 ; the game's page back): the copper lists (normal, per-line H scroll from
 ; an overlay's RASTER routine, 224-line), keyboard, map rebuild, tile
-; conversion, sprites, the transparent pixel value scans and their tables.
+; conversion, sprites, the transparent pixel value scans and their tables,
+; and the overlay switches (fw2_switches, at game start from fw2_start).
 ; Nothing here may run from a handler, except tile_flush and tile_flushk
-; through tflush2 (fw2.asm), which maps this page and the vblank work's
-; other slots for it.
+; through tflush2, and pic_ready3 through pic_ready (fw2.asm), which map
+; this page and the vblank work's other slots for them.
 
 ;		org $0000  (section origin)
 tm_mask:	ds 1024			; per SMS tile: 16-bit set of pixel values it uses,
@@ -299,7 +300,7 @@ tile_mask__done:	pop bc
 ;   [WAIT y,c | NOOP] [MOVE $6E,A8 | NOOP] [WAIT y,40] [MOVE $6E,M0]
 ;   [MOVE $31,V | NOOP]   (the 224-line wrap, for line y+1)
 ; then WAIT 200,0; MOVE $31,V+224; MOVE $6E,M0; HALT.
-; c = h_sw (fw.asm hscroll_set), 0 = no switch. A scroll change rewrites
+; c = h_sw (fw2 hscroll_set), 0 = none. A scroll change rewrites
 ; only the instructions it moves. Register 0 bit 7 (lock right) uses the
 ; stage A list instead (WAIT/MOVE $31 around column 24 on every line).
 ; ----------------------------------------------------------------------
@@ -361,8 +362,11 @@ cop_update__nolr:
 cop_update__nt:		ld a,(h_sw)
 		ld hl,cop_sw
 		cp (hl)
-		call nz,cop_switches
-		ld a,(cop_v)
+		jr z,cop_update__sw
+		push de			; E = V for cop_wrap; cop_switches uses DE
+		call cop_switches
+		pop de
+cop_update__sw:		ld a,(cop_v)
 		cp e
 		call nz,cop_wrap
 		; X goes into the list (from the next frame on) and, so that the
@@ -566,39 +570,96 @@ cop_at:
 		nextreg $62,a
 		ret
 
-; rewrite the switch pair of every line (A = new column)
+; The switch pair of every line again for the new column A (0 = none): lines
+; 16-191 with register 0 bit 6 (the locked rows have none), else 0-191.
+; From one column to another only the first byte of each line's WAIT y,c
+; changes, so only that byte is written (about 80 cycles a line, about 10
+; lines in all; writing the pairs whole takes about 25). To or from no
+; switch (column 0: the game has not written H yet) the pair is written
+; whole: WAIT y,c; MOVE $6E,A8, or for no switch WAIT y,40; MOVE $6E,M0,
+; which does the same as the line's next pair. The rewrite runs in the
+; vertical blank work and must end before line 0, where the copper starts
+; the list again.
 cop_switches:
+		ld d,a			; D = new column
+		ld a,(cop_sw)
+		ld e,a			; E = old column
+		ld a,d
 		ld (cop_sw),a
-		ld d,a
+		ld a,(cop_mode)
+		or a
 		ld b,0
-cop_switches__l:		ld l,b
-		ld h,5
-		push de
-		ld e,l
-		ld d,h
+		jr z,cop_switches__b
+		ld b,16
+cop_switches__b:	push de
+		ld e,b
+		ld d,10
 		mul d,e
-		ex de,hl
+		ld hl,6
+		add hl,de		; HL = 2 * (3 + 5B): line B's first slot
 		pop de
-		call cop_at
 		ld a,d
 		or a
-		jr z,cop_switches__no
-		call cop_topline
-		jr z,cop_switches__no
-		ld a,d			; cop_topline changed A
+		jr z,cop_switches__pair
+		ld a,e
+		or a
+		jr z,cop_switches__pair
+		ld a,d			; a column before and after: one byte a line
 		add a,a
 		or $80
+		ld d,a			; D = the first byte of WAIT y,c
+		ld a,192
+		sub b
+		ld c,a			; C = lines
+cop_switches__one:	ld a,h
+		or %11000000
+		nextreg $62,a		; write index MSB, copper mode kept
+cop_switches__ol:	ld a,l
+		nextreg $61,a		; write index LSB (the MSB stays)
+		ld a,d
 		nextreg $60,a
+		ld a,l
+		add a,10
+		ld l,a
+		jr c,cop_switches__oc
+		dec c
+		jr nz,cop_switches__ol
+		ret
+cop_switches__oc:	inc h			; the MSB changes (the write may have carried into it)
+		dec c
+		jr nz,cop_switches__one
+		ret
+cop_switches__pair:	ld a,d			; E = the first byte of WAIT y,c, D = the map
+		or a
+		ld a,$80 + (END_H << 1)
+		ld d,NR6E_M0
+		jr z,cop_switches__p
+		ld a,(cop_sw)
+		add a,a
+		or $80
+		ld d,NR6E_A8
+cop_switches__p:	ld e,a
+cop_switches__pl:	ld a,l
+		nextreg $61,a
+		ld a,h
+		or %11000000
+		nextreg $62,a
+		ld a,e
+		nextreg $60,a		; WAIT y,c
 		ld a,b
 		nextreg $60,a
-		nextreg $60,$6E
-		nextreg $60,NR6E_A8
-		jr cop_switches__n
-cop_switches__no:		call cop_nosw
-cop_switches__n:		inc b
+		nextreg $60,$6E		; MOVE $6E,map
+		ld a,d
+		nextreg $60,a
+		ld a,l
+		add a,10
+		ld l,a
+		jr nc,cop_switches__pn
+		inc h
+cop_switches__pn:	inc b
 		ld a,b
 		cp 192
-		jr nz,cop_switches__l
+		jr nz,cop_switches__pl
 		ret
 
 ; move the wrap MOVE from the old V to the new one (E = new V)
@@ -1787,9 +1848,11 @@ cop_224:
 		nextreg $60,NR6E_M0
 		nextreg $60,$68		; ULA on for lines 0-191 (its column 0 shows the backdrop)
 		nextreg $60,0
+		ld a,(vdp_regs+8)
+		neg
+		cp 65
+		jr c,cop_224__ns	; K <= 64: no switch needed
 		ld a,(h_sw)
-		or a
-		jr z,cop_224__ns
 		ld d,a
 		ld bc,0
 cop_224__l1:		call cop_224__sw
@@ -1854,6 +1917,138 @@ cop_224__sw:		ld a,d			; BC = line, D = switch column
 		nextreg $60,$6E
 		nextreg $60,NR6E_M0
 		ret
+
+; ----------------------------------------------------------------------
+; Overlay switches (fw_flags, from the overlay header): set the hooks in
+; fw.asm on or off and the state they use. Called by fw2_start with this
+; page at $0000, so a game loaded after another one starts clean.
+; ----------------------------------------------------------------------
+fw2_switches:
+		ld a,(fw_flags)
+		and 1
+		ld hl,nt_put__hk
+		ld de,pri_mark1
+		call hook_set
+		ld a,(fw_flags)
+		and 1
+		ld hl,nt_range__hk
+		ld de,pri_markr
+		call hook_set
+		ld a,(fw_flags)
+		and 1
+		ld hl,vw_hk
+		ld de,vw_pri
+		call hook_set
+		ld hl,vf_mode+1		; jt_vwrite's fast form: vf_prun before each run
+		ld de,vf_mode+1
+		ld a,(fw_flags)
+		and 1
+		jr z,fw2_switches__vf
+		ld hl,vf_pj+1
+		ld de,vf_prun
+		ld (vf_mode+1),de
+fw2_switches__vf:	ld (vf_pm+2),hl
+		ld a,(fw_flags)
+		and 2
+		ld hl,fw_line_irq__hk1
+		ld de,pal_vbl
+		call hook_set
+		ld a,(fw_flags)
+		and 2
+		ld hl,fw_line_irq__hk2
+		ld de,pal_pic
+		call hook_set
+		ld a,(fw_flags)
+		and 3
+		ld a,$C9		; RET: no extra palette writes
+		jr z,fw2_switches__c
+		xor a			; NOP: cram_x writes them
+fw2_switches__c:		ld (cram_hk),a
+		; tilecache: vram_block ends in kn_entry, tile_flushk converts
+		ld hl,tw_check
+		ld de,tile_flush
+		ld a,(fw_flags)
+		and 4
+		jr z,fw2_switches__k
+		ld hl,kn_entry
+		ld de,tile_flushk
+fw2_switches__k:	ld (kn_hk+1),hl
+		ld (tf_vbl+1),de
+		ld (tf_tw+1),de
+		; Layer 2 (priority tiles): 256x192 from L2_BANK, above the sprites;
+		; its transparent colour is one the SMS palette never makes
+		ld a,(fw_flags)
+		rra
+		ld a,L2_TRANS
+		ld b,4			; layer order L S U
+		jr c,fw2_switches__p
+		ld a,$E3		; the reset value
+		ld b,0
+fw2_switches__p:		nextreg $14,a
+		ld a,b
+		ld (lay15),a
+		call l2_mode
+		nextreg $16,254
+		nextreg $17,0
+		ld bc,$123B		; hidden until the display is on (l2_vis)
+		xor a
+		out (c),a
+		ld (pri_redo),a
+		ld (pri_ys),a
+		ld (isr_sp),a		; no frame handler running, none held
+		ld (isr_sp+1),a
+		ld (irq_pend),a
+		ld (line_held),a
+		ld (dis_pend),a
+		ld (dis_poll),a
+		ld (disp_on),a
+		ld (shadow_i),a
+		ld (pal_vm),a
+		ld (pal_vm+1),a
+		ld (pal_vm+2),a
+		ld (pal_vm+3),a
+		ld hl,pri_lf		; pri_lf, pri_tiles, pri_chg
+		ld de,pri_lf+1
+		ld bc,192+64+64-1
+		ld (hl),a
+		ldir
+		ld hl,cram_top
+		ld b,32
+fw2_switches__zt:		ld (hl),a
+		inc hl
+		djnz fw2_switches__zt
+		inc a
+		ld (pri_full),a
+		ld (pal_ph),a
+		ld a,254
+		ld (pri_x),a
+		ld a,%00000010
+		ld (pal43),a
+		ld (tm_ctl),a
+		ret
+
+; HL = hook (3 bytes), DE = routine: Z clear = CALL routine, Z set = NOPs
+hook_set:	jr z,hook_set__off
+		ld (hl),$CD
+		inc hl
+		ld (hl),e
+		inc hl
+		ld (hl),d
+		ret
+hook_set__off:		ld (hl),0
+		inc hl
+		ld (hl),0
+		inc hl
+		ld (hl),0
+		ret
+
+; pic_ready (fw2), after the tiles: the maps if the name table moved, then
+; Layer 2's priority cells. pri_frame maps MAP_PAGE at $0000 for its work
+; and this page back at its end.
+pic_ready3:	ld a,(nt_dirty)
+		or a
+		call nz,map_rebuild
+		jp pri_frame
 
 fw3_end:
 ; assert fw3_end <= $2000, "fw3 overflows its page" (checked by tools/check-layout)

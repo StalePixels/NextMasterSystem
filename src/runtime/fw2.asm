@@ -28,7 +28,7 @@ sat_hi:		db $3F			; sprite attribute table address high byte
 cop_dirty:	db 1			; copper list must be rebuilt
 nt_dirty:	db 0			; name table base changed: maps rebuilt
 h_x:		dw 0			; tilemap X offset for the current H scroll
-h_sw:		db 0			; copper column of the M0->A8 switch, 0 = none
+h_sw:		db 0			; copper column of the M0->A8 switch: 39 (past the picture) for K <= 64, 0 until H is written
 cop_sw:		db $FF			; switch column in the copper list now
 cop_v:		db $FF			; V scroll in the copper list now
 cop_mode:	db $FF			; 0 normal list, 1 lock-right list
@@ -40,6 +40,10 @@ lay15:		db 0			; NextReg $15 layer order bits: 4 = L S U (priority tiles)
 tm_ctl:		db %00000010		; NextReg $6B without bit 4 (second tilemap palette)
 pal_ph:		db 1			; toppal: 1 from the frame event to the first line event
 dis_pend:	db 0			; toppal: a display-off write waits for the phase end
+dis_ck:		db 0			; vertical blank works since it was held, + 1 (dis_count)
+dis_poll:	db 0			; 1: traps with interrupts off count frames (dis_tick2)
+dis_wr:		db 0			; frames started since it was held (dis_tick2)
+dis_ln:		dw 0			; the Next line at the last count (dis_tick2)
 disp_on:	db 0			; the display enable shown: $40 on, 0 off
 pal_rows:	ds 24			; per screen row: rows from it to the bottom where
 					; sprite-palette tiles show pixel value 0 more than
@@ -126,6 +130,9 @@ fw2_vbl:
 		ld (fw_exit+2),a
 		ld hl,tw_check		; jt_vwrite's end without vbl_chkv
 		ld (vw_tw+1),hl
+		ld a,(dis_pend)		; a display-off write held (vdp_reg_w__r1)
+		or a
+		call nz,dis_count
 		; the copper first: a full rebuild must end before line 0, or that
 		; frame runs without its copper list
 vb_cop:		call rast_frame
@@ -224,8 +231,8 @@ fw2_start__nk:	xor a
 		nextreg $1A,191
 		ld hl,286
 		ld (h_x),hl
+		nextreg $50,FW3_PAGE	; fw2_switches is there, fw2_init clears tm_mask there
 		call fw2_switches
-		nextreg $50,FW3_PAGE	; fw2_init clears tm_mask there
 		call fw2_init
 		call fw2_init3
 		; interrupts: hardware IM2 mode (held until acknowledged), vector
@@ -572,6 +579,9 @@ mode_switch__p:		ld (pic_end),a
 		call l2_mode
 		call l2_vis
 		call clip_update
+		call dis_apply		; a held display-off write applies: the game is
+					; building a screen in the other mode, not
+					; finishing a frame (vdp_reg_w__r1)
 		; fall into nt_base_set
 
 ; Register 2: name table base (and the VRAM page roles, and the maps)
@@ -684,114 +694,6 @@ clip_update__tm:	ld a,16+PIC_X/2
 		ret
 
 ; ----------------------------------------------------------------------
-; Overlay switches (fw_flags, from the overlay header): set the hooks in
-; fw.asm on or off and the state they use. Called by fw2_start, so a game
-; loaded after another one starts clean.
-; ----------------------------------------------------------------------
-fw2_switches:
-		ld a,(fw_flags)
-		and 1
-		ld hl,nt_put__hk
-		ld de,pri_mark1
-		call hook_set
-		ld a,(fw_flags)
-		and 1
-		ld hl,nt_range__hk
-		ld de,pri_markr
-		call hook_set
-		ld a,(fw_flags)
-		and 1
-		ld hl,vw_hk
-		ld de,vw_pri
-		call hook_set
-		ld hl,vf_mode+1		; jt_vwrite's fast form: vf_prun before each run
-		ld de,vf_mode+1
-		ld a,(fw_flags)
-		and 1
-		jr z,fw2_switches__vf
-		ld hl,vf_pj+1
-		ld de,vf_prun
-		ld (vf_mode+1),de
-fw2_switches__vf:	ld (vf_pm+2),hl
-		ld a,(fw_flags)
-		and 2
-		ld hl,fw_line_irq__hk1
-		ld de,pal_vbl
-		call hook_set
-		ld a,(fw_flags)
-		and 2
-		ld hl,fw_line_irq__hk2
-		ld de,pal_pic
-		call hook_set
-		ld a,(fw_flags)
-		and 3
-		ld a,$C9		; RET: no extra palette writes
-		jr z,fw2_switches__c
-		xor a			; NOP: cram_x writes them
-fw2_switches__c:		ld (cram_hk),a
-		; tilecache: vram_block ends in kn_entry, tile_flushk converts
-		ld hl,tw_check
-		ld de,tile_flush
-		ld a,(fw_flags)
-		and 4
-		jr z,fw2_switches__k
-		ld hl,kn_entry
-		ld de,tile_flushk
-fw2_switches__k:	ld (kn_hk+1),hl
-		ld (tf_vbl+1),de
-		ld (tf_tw+1),de
-		; Layer 2 (priority tiles): 256x192 from L2_BANK, above the sprites;
-		; its transparent colour is one the SMS palette never makes
-		ld a,(fw_flags)
-		rra
-		ld a,L2_TRANS
-		ld b,4			; layer order L S U
-		jr c,fw2_switches__p
-		ld a,$E3		; the reset value
-		ld b,0
-fw2_switches__p:		nextreg $14,a
-		ld a,b
-		ld (lay15),a
-		call l2_mode
-		nextreg $16,254
-		nextreg $17,0
-		ld bc,$123B		; hidden until the display is on (l2_vis)
-		xor a
-		out (c),a
-		ld (pri_redo),a
-		ld (pri_ys),a
-		ld (isr_sp),a		; no frame handler running, none held
-		ld (isr_sp+1),a
-		ld (irq_pend),a
-		ld (line_held),a
-		ld (dis_pend),a
-		ld (disp_on),a
-		ld (shadow_i),a
-		ld (pal_vm),a
-		ld (pal_vm+1),a
-		ld (pal_vm+2),a
-		ld (pal_vm+3),a
-		ld hl,pri_lf		; pri_lf, pri_tiles, pri_chg
-		ld de,pri_lf+1
-		ld bc,192+64+64-1
-		ld (hl),a
-		ldir
-		ld hl,cram_top
-		ld b,32
-fw2_switches__zt:		ld (hl),a
-		inc hl
-		djnz fw2_switches__zt
-		inc a
-		ld (pri_full),a
-		ld (pal_ph),a
-		ld a,254
-		ld (pri_x),a
-		ld a,%00000010
-		ld (pal43),a
-		ld (tm_ctl),a
-		ret
-
-; ----------------------------------------------------------------------
 ; VDP register writes, through fw2_call from vctrl_w (fw.asm).
 ; ----------------------------------------------------------------------
 ; The display enable (register 1 bit 6) to the tilemap and sprites (disp_on;
@@ -824,15 +726,33 @@ r1_hw__b:		ld (tm_ctl),a
 tflush2:	ld a,(tiles_dirty)
 		or a
 		ret z
-		push de
+		ld hl,0
+		jr tflush2__go
+; The display goes on after the Next had it off (vdp_reg_w__r1on): first
+; the picture is made whole, as the vertical blank work would make it, so
+; it never shows what the game wrote while the display was off half done.
+; The tiles written then are converted, the maps rebuilt if the name table
+; moved (nt_dirty), and Layer 2's priority cells drawn (pri_frame: the
+; marked cells, the cells of tiles converted again). A game that builds a
+; screen with interrupts off gets no vertical blank work until it turns the
+; display on, or after. Keeps DE, IX, IY.
+pic_ready:	ld hl,pic_ready3	; in fw3
+tflush2__go:	push de
 		push ix
 		push iy
+		push hl
 		nextreg $50,FW3_PAGE
 		nextreg $52,SHADOW_PAGE
 		nextreg $53,SHADOW_PAGE+1
 		nextreg $54,TILE_PAGE
 		nextreg $55,TILE_PAGE+1
 tf_tw:		call tile_flush		; tilecache: tile_flushk (fw2_switches)
+		pop hl
+		ld a,h
+		or l
+		call nz,jp_hl
+		ld a,(cur_mmu+6)	; pic_ready3 maps slot 6
+		nextreg $56,a
 		ld a,(cur_mmu+0)
 		nextreg $50,a
 		ld a,(cur_mmu+2)
@@ -922,15 +842,26 @@ vdp_reg_w__r1:		ld a,1
 		ld a,(fw_flags)		; display off in the vertical blank phase (toppal):
 		and 2			; on the SMS the frame handler turns it on again
 		jr z,vdp_reg_w__r1off		; before line 0. Kept on; pal_pic2 or pal_vbl2
-		ld a,(pal_ph)		; turns it off if it is still off then.
+		ld a,(dis_pend)		; turns it off if it is still off then, or the
+		or a			; vertical blank work after two frames (dis_count).
+		jr nz,vdp_reg_w__r1x		; A second off write while one is held: off now
+		ld a,(pal_ph)
 		or a
 		jr z,vdp_reg_w__r1off
 		ld (dis_pend),a
+		ld (dis_ck),a		; 1: the vblank work counts from here (dis_count)
+		call dis_arm		; and the traps, while interrupts are off
 		jr vdp_reg_w__r1m
-vdp_reg_w__r1on:		xor a
-		ld (dis_pend),a
-		bit 6,d			; the display goes on: the tiles written while it
-		call z,tflush2		; was off are converted now, not in the next vblank
+vdp_reg_w__r1x:		call dis_off
+		jr vdp_reg_w__r1off
+vdp_reg_w__r1on:		call dis_off
+		ld a,(disp_on)		; the display goes on
+		or a
+		jr nz,vdp_reg_w__r1h
+		call pic_ready		; the Next had it off: the picture first
+		jr vdp_reg_w__r1off
+vdp_reg_w__r1h:		bit 6,d			; the off write was held (toppal): the tiles
+		call z,tflush2		; written while it was off are converted now
 vdp_reg_w__r1off:		push de
 		call r1_hw
 		call fallback2
@@ -944,7 +875,10 @@ vdp_reg_w__mode_check:	push de
 		call mode_switch
 		pop de
 		ret
-vdp_reg_w__r2:		jp nt_base_set
+vdp_reg_w__r2:		ld a,e			; the same value again: the base, the page roles
+		cp d			; and the maps stand (nt_put keeps the maps), so
+		ret z			; no map_rebuild, nor Layer 2's whole rebuild after it
+		jp nt_base_set
 vdp_reg_w__r5:		ld a,e
 		and $7E
 		rrca
@@ -1029,16 +963,20 @@ hscroll_set__direct:	ld a,h
 		ld a,(pri_x)
 		nextreg $16,a
 hscroll_set__nodir:
-		ld a,(vdp_regs+8)
-		neg
-		cp 65
-		ld b,0
-		jr c,hscroll_set__sw		; K <= 64: no switch
 		; M0 and A8 show the same pixels at SMS x 256-K to 320-K; the
 		; switch at column c acts at SMS x 8c (MAME). c = (291 - K) / 8
 		; puts 8c + K in 284-291, near the middle (288), so a switch that
 		; lands up to 29 pixels later or 28 earlier still looks right
 		; (the real Next's copper and tile fetch timing is not MAME's).
+		; With K <= 64 no switch is needed; the list has one all the same,
+		; at column 39 (SMS x 312, past the picture's right edge), so a
+		; scroll across K = 64 changes only the first byte of each line's
+		; WAIT (cop_switches, fw3). cop_224 has no switch then.
+		ld a,(vdp_regs+8)
+		neg
+		cp 65
+		ld b,39
+		jr c,hscroll_set__sw		; K <= 64
 		ld b,a
 		ld a,255&((291-256))	; 291 - K (K > 64, so it fits in a byte)
 		sub b
@@ -1047,7 +985,7 @@ hscroll_set__nodir:
 		rrca
 		and $1F
 		ld b,a
-hscroll_set__sw:		ld a,b
+hscroll_set__sw:				ld a,b
 		ld (h_sw),a
 		ld hl,cop_sw
 		cp (hl)
@@ -1218,18 +1156,150 @@ pal_show:	or %00000010
 
 ; A display-off write held in the vertical blank phase (vdp_reg_w .r1).
 ; Keeps DE: it runs from fw_line_irq (pal_vbl2, pal_pic2), which saves
-; only AF, HL and BC of the interrupted game.
+; only AF, HL and BC of the interrupted game, from the vertical blank work
+; (dis_count) and from mode_switch.
 dis_apply:	ld a,(dis_pend)
 		or a
 		ret z
-		xor a
-		ld (dis_pend),a
+		call dis_off
 		push de
 		call r1_hw
 		call fallback2
 		call l2_vis
 		pop de
 		ret
+
+; dis_pend off, and dis_chk out of fw_exit. Uses A.
+dis_off:	xor a
+		ld (dis_pend),a
+		ld (dis_poll),a
+		ld a,(fw_exit+1)
+		cp 255&(dis_chk)
+		ret nz
+		ld a,(fw_exit+2)
+		cp 255&((dis_chk)>>8)
+		ret nz
+		ld a,$D1		; POP DE, POP BC, and LD SP,(nn)'s first byte
+		ld (fw_exit),a
+		ld a,$C1
+		ld (fw_exit+1),a
+		ld a,$ED
+		ld (fw_exit+2),a
+		ret
+; A display-off write is held, and the vertical blank work runs: the third
+; time it runs with the write still held, the write applies (dis_apply).
+; The display has then been off for more than two frames: the game builds a
+; screen with interrupts off (Micro Machines' menus), and gets no frame or
+; line event, which would apply it; the Next would go on showing the
+; picture the game rebuilds. A game whose frame work only runs late (the
+; Next is slower than the SMS) turns the display on before that: the
+; Micro Machines race writes it off at line 211 and on again up to 300
+; lines later, one vertical blank work later at most. Uses A, HL.
+dis_count:	ld hl,dis_ck
+		inc (hl)
+		ld a,(hl)
+		cp 4
+		jp nc,dis_apply
+		jr dis_patch		; the work took dis_chk out of fw_exit
+
+; A display-off write is held outside the game's frame handler: from here
+; the traps that return to a game with interrupts off count the frames that
+; start (dis_chk in fw.asm). A game that loads with interrupts off (Micro
+; Machines before a race, from its main code) gets no vertical blank work,
+; so dis_count never runs; the third frame that starts with the write still
+; held applies it (dis_tick2). A write held inside the frame handler (the
+; game's $0038 entry has not returned: SP below its return slot, which still
+; holds the return address or isr_tramp, as frm_run tests) is not counted
+; here: the handler turns the display on again, or returns and the frame
+; events and vertical blank work go on; a late handler that runs past the
+; next frame (the Micro Machines race) would pay for every trap. Keeps DE.
+; Uses A, BC, HL.
+dis_arm:	push de
+		ld hl,(fw_sp)
+		ld de,(isr_sp)
+		or a
+		sbc hl,de
+		jr nc,dis_arm__go	; SP at or above the slot: no frame handler runs
+		ex de,hl
+		ld e,(hl)
+		inc hl
+		ld d,(hl)		; DE = what the slot holds
+		ld hl,(isr_ret)
+		or a
+		sbc hl,de
+		jr z,dis_arm__no
+		ld hl,isr_tramp
+		or a
+		sbc hl,de
+		jr z,dis_arm__no
+dis_arm__go:	pop de
+		ld a,1
+		ld (dis_poll),a
+		xor a
+		ld (dis_wr),a
+		call dis_line
+		ld (dis_ln),hl
+		jr dis_patch
+dis_arm__no:	pop de
+		ret
+; fw_exit through dis_chk, unless vbl_chk is there (its vertical blank work
+; counts with dis_count, which calls this again after it)
+dis_patch:	ld a,(fw_exit)
+		cp $C3			; JP
+		ret z
+		ld hl,dis_chk
+		ld (fw_exit+1),hl
+		ld a,$C3
+		ld (fw_exit),a
+		ret
+; HL = the Next's raster line (0-310). Uses A, BC.
+dis_line:	ld bc,$243B
+		ld a,$1E
+		out (c),a
+		inc b
+		in h,(c)		; line bit 8
+		dec b
+		ld a,$1F
+		out (c),a
+		inc b
+		in l,(c)
+		dec b
+		ld a,$1E
+		out (c),a
+		inc b
+		in a,(c)
+		cp h
+		jr nz,dis_line		; bit 8 changed between the reads
+		ld a,h
+		and 1
+		ld h,a
+		ret
+; From dis_chk (fw.asm, through fw2_call) at every DIS_N-th trap's exit:
+; with the game's interrupts off, a frame started since the last count when
+; the line is lower than then. A game that holds interrupts off for a load
+; makes many traps a frame; one that makes fewer than DIS_N in a frame has
+; its frames counted late, never early. Uses A, BC, DE, HL.
+dis_tick2:	ld a,DIS_N
+		ld (dis_n),a
+		ld a,(dis_poll)
+		or a
+		ret z
+		ld a,(exit_ei)		; interrupts on: the vertical blank work counts
+		or a
+		ret nz
+		call dis_line
+		ld de,(dis_ln)
+		ld (dis_ln),hl
+		or a
+		sbc hl,de
+		ret nc
+		ld hl,dis_wr
+		inc (hl)
+		ld a,(hl)
+		cp 3
+		ret c
+		jp dis_apply
+jp_hl:		jp (hl)
 
 ; Layer 2 shown while the display is on, with priority tiles, not in
 ; 224-line mode (the 256x192 Layer 2 does not reach those lines)
@@ -1256,21 +1326,6 @@ l2_mode:	ld a,(m224)
 		ret
 l2_mode__w:	nextreg $70,%00010000
 		nextreg $12,L2W_BANK
-		ret
-
-; HL = hook (3 bytes), DE = routine: Z clear = CALL routine, Z set = NOPs
-hook_set:	jr z,hook_set__off
-		ld (hl),$CD
-		inc hl
-		ld (hl),e
-		inc hl
-		ld (hl),d
-		ret
-hook_set__off:		ld (hl),0
-		inc hl
-		ld (hl),0
-		inc hl
-		ld (hl),0
 		ret
 
 ; ----------------------------------------------------------------------
@@ -1400,7 +1455,7 @@ pri_frame:
 pri_frame__v:		ld (pri_nv),a
 		ld a,(pri_full)
 		or a
-		jp nz,pri_rebuild
+		jp nz,pri_hide		; then pri_rebuild
 		; V moved by d (mod 224): the ring moves with it
 		ld a,(pri_nv)
 		ld hl,pri_v
@@ -1471,8 +1526,33 @@ pri_frame__rn:		inc b
 		jr nz,pri_frame__r
 pri_done:	ld a,(pri_ys)
 		nextreg $17,a
-		nextreg $50,FW3_PAGE
+pri_end:	nextreg $50,FW3_PAGE
+		ld a,(pri_hid)
+		or a
+		ret z
+		xor a			; a whole rebuild is done: Layer 2 as the
+		ld (pri_hid),a		; display shows it, but hidden while a
+		ld a,(dis_pend)		; display-off write is held (the game
+		or a			; builds a screen: Layer 2 shows with it
+		ret nz			; when the display goes on, vdp_reg_w)
+		jp l2_vis
+
+; A whole rebuild of Layer 2 (start, name table base, mode) draws every
+; priority cell and clears the rest, which can take frames (Micro
+; Machines, 695 cells in 224-line mode: 8 frames). Layer 2 is hidden until
+; it is complete (pri_end), so it never shows half the cells of one screen
+; and half of another.
+pri_hide:	call pri_hid1
+		jp pri_rebuild
+p2_hide:	call pri_hid1
+		jp p2_rebuild
+pri_hid1:	ld a,1
+		ld (pri_hid),a
+		xor a
+		ld bc,$123B
+		out (c),a
 		ret
+pri_hid:	db 0			; Layer 2 hidden for a whole rebuild
 
 ; The whole of Layer 2 from the name table (start, name table base, mode)
 pri_rebuild:
@@ -1971,7 +2051,7 @@ pri_chg:	ds 64			; per VRAM page: those of them converted again
 ; ----------------------------------------------------------------------
 pri224:		ld a,(pri_full)
 		or a
-		jp nz,p2_rebuild
+		jp nz,p2_hide		; then p2_rebuild
 		ld a,(vdp_regs+8)
 		neg			; K: the first map column shown
 		ld (p2_k),a
@@ -2096,8 +2176,7 @@ p2_done__m:	add hl,de
 		ld a,(vdp_regs+9)
 		sub 16
 		nextreg $17,a
-		nextreg $50,FW3_PAGE
-		ret
+		jp pri_end
 
 ; A = 0-79 -> A mod 40
 p2_mod40:	cp 40

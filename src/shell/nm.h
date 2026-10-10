@@ -83,6 +83,9 @@ struct nm_launch {
 };
 void nm_launch(struct nm_launch *p) __z88dk_fastcall;
 
+/* Leave for NextZXOS (glue.asm). Never returns. */
+void nm_basic(void);
+
 /* esxDOS file calls, in os.c. Each returns a negative number on failure. */
 int16_t nm_open(const char *path);
 int8_t  nm_fstat(uint8_t handle, uint8_t *stat16);
@@ -105,6 +108,7 @@ struct nm_state {
     uint8_t  nms_ver[3];      /* the .nms header: format major, minor, framework ABI */
     char     title[NM_TITLE_MAX + 1];   /* the META title, cut to fit; empty if none */
     struct nm_launch launch;
+    uint8_t  speed;           /* NextReg $07 at start, put back on exit */
 };
 extern struct nm_state nm;
 extern char nm_name[13];      /* the short file name the browser returned */

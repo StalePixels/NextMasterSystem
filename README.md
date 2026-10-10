@@ -32,7 +32,7 @@ Overlay files go in `/nm/ovl/` on the SD card, each named after the CRC32 of its
 | Button 1 | Fire 1, or pad B, or SPACE |
 | Button 2 | Fire 2, or pad C, or M |
 | Pause | Pad Start, or ENTER |
-| Quit | BREAK, returns to the browser |
+| Quit | BREAK: leaves the game for the browser, and leaves the browser for NextZXOS |
 
 ## Licence notes
 

@@ -491,20 +491,41 @@ site 3BB4F   ; OUT ($BE),A
 site 3BB6D   ; OUT ($BE),A
 site 3BB72   ; OUT ($BE),A
 # The game runs a RAM copy of this ROM block (ROM $3BB99-$3BCB9 is RAM $D9D9-$DAF9).
-# The scan rated the next ten sites low; the SMS reference runs all of them. $3BBE0
-# and $3BBE4 (C = $BE) write the row of faces on the character choice screen.
+# The scan rated the next sites low; the SMS reference runs all of them.
 site 3BB99   ; OUT ($BE),A
 site 3BBA1   ; OUT ($BE),A
 site 3BBA7   ; OUT ($BE),A
 site 3BBAF   ; OUT ($BE),A
-site 3BBE0   ; OUT (C),A
-site 3BBE4   ; OUT (C),A
-site 3BC30   ; OTIR
-site 3BC33   ; OUT ($BE),A
-site 3BC45   ; OTIR
-site 3BC48   ; OUT ($BE),A
-site 3BC5C   ; OTIR
-site 3BC5F   ; OUT ($BE),A
+# The loop at RAM $DA1B-$DA34 (ROM $3BBDB) writes the row of faces on the character
+# choice screen: E name table cells (the byte at HL, then $01), HL going to the next
+# source row ($30 on) after each 32 cells. The game runs it about eight times a
+# frame while the row scrolls. Through the I/O traps (a run of OUT (C),A that is
+# made again at every entry, as the code is in RAM) one call took about 67,000
+# cycles, and the frame handler ran into the next frame: the held display-off
+# write then applied at the next frame event, and the top of the screen flickered.
+# The page entry face_row writes the cells with one jt_vwrite call. The 22 bytes
+# after the far call are NOPs up to the game's JP $DB48 at $DA35.
+asm 3BBDB 26   ; LD B,0 ... JP $DA1D (the loop)
+    rst $00
+    db far_io, pg_face_row, ent_face_row
+endasm
+# The loops at RAM $DA6C, $DA81 and $DA98 (ROM $3BC2C, $3BC41, $3BC58) write E rows of
+# tile pattern, each 3 bytes from HL and a 0, after the character choice: about
+# 5,500 cycles a row through the traps, up to 670,000 a call, so the frame handler
+# ran past the next frame and the screen went off for a frame (the flicker at the
+# pick). The page entry tile_rows writes them with two jt_vwrite calls.
+asm 3BC2C 12   ; LD B,3 ... JR NZ (the loop)
+    rst $00
+    db far_io, pg_tile_rows, ent_tile_rows
+endasm
+asm 3BC41 12   ; the same loop
+    rst $00
+    db far_io, pg_tile_rows, ent_tile_rows
+endasm
+asm 3BC58 12   ; the same loop
+    rst $00
+    db far_io, pg_tile_rows, ent_tile_rows
+endasm
 site 3BC6E   ; OUT ($BE),A
 site 3BC74   ; OUT ($BE),A
 site 3BCB6   ; OTIR
@@ -854,3 +875,193 @@ ramsite CAEA D37E
 codem 000B1   ; LD ($8000),A
 # 05B7A (selects bank $8E through $8000, then jumps to $A003, after two RETs) has no jump, call
 # or pointer to it anywhere in the cart: left unpatched.
+
+page 0 face_row tile_rows
+; face_row: the game's loop at RAM $DA1B. In: HL = the source (the game has its
+; bank at $8000), E = cells (0 = 256), the VDP address set for a VRAM write.
+; Each cell is the source byte and $01; after each 32nd cell but the last, HL
+; goes $30 on. Returns as the loop ends: HL past the source, E = 0, B = 0,
+; C = $BE, A = 1, Z set; D kept. Interrupts off while it runs (the game's
+; frame handler maps banks), then as they were.
+face_row:
+        ld a,i                  ; P/V = IFF2
+        push af
+        di
+        push ix
+        push iy
+        push de
+        ld b,e                  ; the game's cell counter
+        ld de,buf
+.cell:  call rd                 ; the source byte
+        ld (de),a
+        inc de
+        ld a,1
+        ld (de),a
+        inc de
+        inc hl
+        dec b
+        jr z,.done
+        ld a,b
+        and $1F
+        jr nz,.cell
+        push bc
+        ld bc,$0030
+        add hl,bc
+        pop bc
+        jr .cell
+.done:  pop de
+        push de
+        push hl
+        ld l,e                  ; 2 bytes a cell (0 = 256 cells)
+        ld h,0
+        ld a,e
+        or a
+        jr nz,.n
+        inc h
+.n:     add hl,hl
+        ld a,16                 ; pieces end at name table columns 8 and 32
+        call wr_buf
+        pop hl
+        pop de
+        ld e,0
+        ld bc,$00BE
+        pop iy
+        pop ix
+        pop af
+        jp po,.di
+        ei
+.di:    xor a                   ; Z set, A = 1, as the loop leaves them
+        ld a,1
+        ret
+
+; tile_rows: the game's loop B = 3, C = $BE, OTIR, XOR A, OUT ($BE),A, DEC E,
+; JR NZ. In: HL = the source, E = rows (not 0), the VDP address set for a VRAM
+; write. Each row is 3 bytes from HL and a 0. Returns as the loop ends: HL past
+; the source, E = 0, B = 0, C = $BE, A = 0, Z set; D kept.
+tile_rows:
+        ld a,i
+        push af
+        di
+        push ix
+        push iy
+        push de
+        ld b,e                  ; rows
+        ld de,buf
+.row:   ld c,3
+.byte:  call rd
+        ld (de),a
+        inc de
+        inc hl
+        dec c
+        jr nz,.byte
+        xor a
+        ld (de),a
+        inc de
+        djnz .row
+        pop de
+        push de
+        push hl
+        ld l,e                  ; 4 bytes a row
+        ld h,0
+        add hl,hl
+        add hl,hl
+        xor a                   ; pieces of up to 256 bytes
+        call wr_buf
+        pop hl
+        pop de
+        ld e,0
+        ld bc,$00BE
+        pop iy
+        pop ix
+        pop af
+        jp po,.di
+        ei
+.di:    xor a                   ; A = 0, Z set, as the loop leaves them
+        ret
+
+; A = the byte the game sees at HL: a plain read outside $2000-$3FFF (this
+; page), jt_peek there. Keeps BC, DE, HL.
+rd:     ld a,h
+        and $E0
+        cp $20
+        jr z,.pk
+        ld a,(hl)
+        ret
+.pk:    jp jt_peek
+
+; Writes HL bytes (1-1024) of buf to VRAM from the VDP address, one jt_vwrite
+; call a piece. A = 16: a piece ends where a name table row's column 8 or
+; column 32 starts (VRAM offset 16 or 64 in its 64-byte row), so jt_vwrite
+; takes its fast form for name table entries. A = 0: pieces of up to 256
+; bytes. Uses A, BC, DE, HL, IX, IY.
+wr_buf: ld (pc_mode),a
+        ld (rem),hl
+        ld hl,(vdp_addr)
+        ld a,h
+        and $3F
+        ld d,a
+        ld e,l                  ; DE = the VRAM address
+        ld hl,buf
+.seg:   ld a,(pc_mode)
+        or a
+        ld b,0                  ; 256
+        jr z,.lim
+        ld a,e
+        and $3F
+        ld c,a                  ; the offset in the row
+        cp 16
+        ld a,16
+        jr c,.b
+        ld a,64
+.b:     sub c
+        ld b,a                  ; bytes up to the boundary
+.lim:   push hl
+        ld hl,(rem)
+        ld a,h
+        or a
+        jr nz,.full             ; 256 or more left
+        ld a,b
+        dec a                   ; B - 1 (B = 0: 255)
+        cp l
+        jr c,.full              ; B <= left
+        ld b,l                  ; fewer left: all of them
+.full:  ld a,l
+        sub b
+        ld l,a
+        jr nc,.r
+        dec h
+.r:     ld a,b
+        or a
+        jr nz,.r2
+        dec h                   ; B = 0: 256 bytes
+.r2:    ld (rem),hl
+        pop hl                  ; HL = the next byte of buf
+        ld c,1
+        ld ix,0
+        ld iy,0
+        ld a,1                  ; buf as mapped: in this page
+        call jt_vwrite          ; keeps BC, DE, HL
+        ld c,b
+        ld b,0
+        ld a,c
+        or a
+        jr nz,.adv
+        inc b                   ; 256
+.adv:   add hl,bc               ; buf on
+        ex de,hl
+        add hl,bc               ; the VRAM address on, within $0000-$3FFF
+        ld a,h
+        and $3F
+        ld h,a
+        ex de,hl
+        push hl
+        ld hl,(rem)
+        ld a,h
+        or l
+        pop hl
+        jr nz,.seg
+        ret
+pc_mode: db 0
+rem:    dw 0
+buf:    ds 1024
+endpage

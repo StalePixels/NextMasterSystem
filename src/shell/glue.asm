@@ -15,6 +15,7 @@
 		public _nm_p3dos
 		public _nm_launch
 		public _nm_resume
+		public _nm_basic
 
 NM_STACK_TOP	equ $BFE0		; same as NM_STACK_TOP in nm.h
 M_P3DOS		equ $94
@@ -259,6 +260,33 @@ _nm_resume:
 		nextreg $56,0
 		nextreg $57,1
 		jp _nm_run
+
+; ---------------------------------------------------------------------
+; void nm_basic(void): leave for NextZXOS. Runs the BASIC command NEW through
+; IDE_BASIC, which starts NextZXOS's BASIC again and never returns here.
+; Needs the BASIC memory layout: ROM 3, RAM 5, 2 and 0, ERR_NR clear, and a
+; stack between STKEND and RAMTOP. If the call does return, it soft-resets.
+_nm_basic:
+		di
+		ld hl,($5CB2)		; RAMTOP
+		ld sp,hl
+		ld iy,$5C3A
+		ld (iy+0),$FF
+		nextreg $56,0
+		nextreg $57,1
+		ld hl,basic_new
+		ld de,0
+		ld bc,0
+		xor a
+		exx
+		ld de,$01C0		; IDE_BASIC
+		ld c,0			; RAM 0 at $C000
+		rst 8
+		db M_P3DOS
+		nextreg $02,1		; soft reset
+		jr $
+
+basic_new:	db $E6,$0D		; NEW, ENTER
 
 		section bss_user
 p3_mmu:		defs 2

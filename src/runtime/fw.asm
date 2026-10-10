@@ -318,6 +318,21 @@ mx_ret:		ret
 ; Unarmed, they cost nothing extra.
 VBL_ARM_N	equ 250			; frames (5 s)
 VBL_LINE	equ 248			; the ULA interrupt's line
+; fw_exit while a display-off write is held (dis_patch in fw2): every
+; DIS_N-th trap has dis_tick2 (fw2) count the frames that start while the
+; game keeps interrupts off, as no frame event or vertical blank work comes
+; then. A trap costs about 30 cycles more, the DIS_N-th about 500.
+DIS_N		equ 32
+dis_chk:	ld hl,dis_n
+		dec (hl)
+		jr nz,dis_chk__x
+		ld hl,dis_tick2
+		call fw2_call
+dis_chk__x:	pop de
+		pop bc
+		ld sp,(fw_sp)
+		jp fw_exit_af
+dis_n:		db DIS_N		; traps to the next dis_tick2
 vbl_chk:	call vbl_due
 		call c,vbl_run
 		pop de
@@ -489,27 +504,8 @@ ed_dispatch:
 ed_ldia:	ld a,(game_a)
 		ld (shadow_i),a
 		jp fw_exit
-ed_ldai:	ld hl,(fw_sp)
-		inc hl
-		ld a,(shadow_i)
-		ld (hl),a
-		dec hl
-		or a
-		push af
-		pop bc
-		ld a,c
-		and %11000000
-		ld c,a
-		ld a,(hl)
-		and 1
-		or c
-		ld c,a
-		ld a,(exit_ei)
-		cp $FB			; EI: the game's interrupts were on
-		ld a,c
-		jr nz,ed_ldai__n
-		or 4
-ed_ldai__n:		ld (hl),a
+ed_ldai:	ld hl,ed_ldai4		; in fw4
+		call fw4_call
 		jp fw_exit
 tr_start_b:	ld a,b
 		jp tr_start

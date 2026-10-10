@@ -255,6 +255,7 @@ Routines called from $0038, $0066 or a `--handler` entry, on paths that return, 
 The summary's "Frame cost" section lists:
 
 - the interrupt handler's cost (the costliest of $0038 and the `--handler` entries) and whether the interrupt context writes the VDP control port;
+- the interrupt handler's cost from its entry to its first `EI` (the maskable interrupt enters with interrupts off), or to its return when no `EI` comes first. It is shown in cycles and in Next lines of 1,824 cycles. The SMS frame event is the end of line 192, so the handler leaves interrupts off until line 192 plus its cost in lines. The line is flagged `TEAR RISK` when the cheapest path ends past line 248, where the Next ULA interrupt comes: the held interrupt then runs the runtime's vblank work in the middle of the picture. When only the costliest path ends past line 248, the line says so and carries no flag. The line is a worst-case estimate, to be checked by measurement. A called routine counts in full, up to its own first `EI`. A loop that holds the `EI` counts one pass;
 - race: foreground routines whose own instructions write the VDP with interrupts on and whose cost is more than the frame minus the handler's cost (the frame alone when the handler's worst case is a frame or more), while the interrupt context writes the VDP control port. The handler can then run in the middle of the routine's writes and move the VDP address. A routine is listed only when none of its callees is over the limit on its own;
 - overrun: interrupt routines that cost more than a frame, with the same rule for callees;
 - the costliest foreground routines that write the VDP with interrupts on and return.
@@ -314,6 +315,7 @@ The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; O
 
 ## Known limits
 
+- The model does not track the shadow registers. A loop that counts in B' (`EXX; DEC B; EXX; JP NZ`) has an unknown count, costed as one pass.
 - The frame cost model costs every run of outputs in a row as a run of `OUTI`. A run of other outputs, or of `OUTI` mixed with them, costs more in the runtime.
 - A task switch (`RET` after `LD SP`) is not followed. The task entries are found only when the code stores them into RAM from a word table in ROM; otherwise add them with `--entry`.
 - A routine reached only through a pointer the scanner cannot trace back to a constant (a handler address kept in RAM or computed at run time, a table it did not recognise) is missed. The summary lists unresolved indirect jumps; add their targets with `--entry`, or give a dynamic log or CDL.

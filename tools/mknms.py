@@ -290,6 +290,7 @@ def parse(spec, cart, sjasmplus):
     outs = {}
     notrace, plain, io0, abi4, abi5, abi7 = False, set(), False, False, False, False
     ops = r['ops']
+    nsites = 0
 
     def patch(addr, new):
         ops.append((addr, bytes(new)))
@@ -398,6 +399,7 @@ def parse(spec, cart, sjasmplus):
         elif word in ('site', 'otir'):
             a = int(rest, 16)
             b0, b1 = cart[a], cart[a + 1]
+            nsites += 1
             if word == 'otir':
                 if cart[a:a + 4] != b'\xed\xa3\x20\xfc' and cart[a:a + 5] != bytes([0xED, 0xA3, 0xC2, cpu(a) & 0xFF, cpu(a) >> 8]):
                     raise SystemExit(f'{a:04X}: not OUTI; JR NZ,-2 or OUTI; JP NZ,self')
@@ -489,6 +491,11 @@ def parse(spec, cart, sjasmplus):
 
     # trace forms: decided on the image with every patch in place
     ntrace = 0
+    if 'io' not in rst and nsites:
+        print(f'warning: {spec}: {nsites} I/O sites are patched but the spec has no io vector, '
+              f'so no site gets a trace form and a run of outputs goes through one trap each; '
+              f'add "vector 10 io" (or any free vector) and rebuild unless a test shows no gain',
+              file=sys.stderr)
     if 'io' in rst and not notrace:
         img = bytearray(cart)
         for addr, new in ops:

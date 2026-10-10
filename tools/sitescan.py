@@ -2901,6 +2901,7 @@ class FrameCost:
         self.memo = {}
         self.noret = set()      # routines with no path that returns
         self.evals = 0
+        self.stop_ei = False    # paths end at the first EI (handler_to_ei)
         z = sc.region_for(0, 0)
         self.vec_irq = [(z, 0x0038), (z, 0x0066)] + list(handlers)
         # a jump from another routine into the reset code restarts the game: no
@@ -3250,6 +3251,7 @@ class FrameCost:
             x = u
             seen = 0
             pend_pop = False
+            nexx = 0        # EXX between the latch and the counter: the count is in a shadow register
             while seen < 24:
                 seen += 1
                 ps = [p for p in preds.get(x, ()) if p in L.body]
@@ -3267,13 +3269,15 @@ class FrameCost:
                     continue
                 if pend_pop:
                     break
+                if k == 'exx':
+                    nexx += 1
                 if k in ('ld8', 'ld16', 'push', 'pop', 'inc16', 'dec16', 'exde', 'exx', 'outn', 'outC', 'nop', 'st16') \
                         and pi.text not in ('LD A,I', 'LD A,R'):
                     continue            # these leave the flags alone
                 if k == 'block' and s[1] in ('OUTI', 'OUTD', 'INI', 'IND'):
-                    return 'B'
+                    return None if nexx % 2 else 'B'
                 if k == 'dec8' and isinstance(s[1], str) and s[1] in R8 and s[1] != '(HL)':
-                    return s[1]
+                    return None if nexx % 2 else s[1]
                 if k == 'alu' and s[1] == 'OR' and isinstance(s[2], str):
                     # DEC rr; LD A,hi; OR lo: a 16-bit count
                     q = [p for p in preds.get(x, ()) if p in L.body]
@@ -3477,6 +3481,9 @@ class FrameCost:
             L, x = x, x.parent
         if x is not ctx:
             L = None
+        if L is not None and self.stop_ei and any(
+                (d := self.sc.decode_node(b)) is not None and d.text == 'EI' for b in L.body):
+            L = None            # one pass is counted, up to the EI
         active.add(n)
         opts = []
         if L is not None:
@@ -3499,6 +3506,9 @@ class FrameCost:
             ins = self.sc.decode_node(n)
             es = self.dedges(R).get(n, ()) if ins is not None else ()
             if ins is not None and self.is_exit(R, n, ins):
+                opts.append(ZERO)
+            if self.stop_ei and ins is not None and ins.text == 'EI':
+                es = ()
                 opts.append(ZERO)
             for (m, _t) in es:
                 if m in self.reset_nodes and R.entry[1] != 0x0000 and n not in self.reset_nodes:
@@ -3657,8 +3667,33 @@ def frame_cost(sc, handlers):
         if e in fc.irq_set and c.hi > NEXT_FRAME:
             if all(rows[x][0].hi <= NEXT_FRAME or x == e for x in callees(e) if x in rows):
                 overrun.append(e)
+    to_ei = handler_to_ei(fc, [e for e in irq_roots if e[1] == 0x0038 or e in handlers])
     return {'fc': fc, 'rows': rows, 'handler': handler, 'handler_ctrl': ctrl, 'limit': limit,
-            'race': race, 'overrun': overrun, 'irq_roots': irq_roots}
+            'race': race, 'overrun': overrun, 'irq_roots': irq_roots, 'to_ei': to_ei}
+
+
+LINE_CYCLES = 1824      # one Next line: 28 MHz, 448 x 311 at 50 Hz
+FRAME_EVENT_LINE = 192  # the SMS frame interrupt: the end of line 192
+ULA_IRQ_LINE = 248      # the Next ULA interrupt
+
+
+def handler_to_ei(fc, roots):
+    """Worst-case Next cycles from the entry of the game's interrupt handler (the
+    maskable interrupt enters with interrupts off) to its first EI, or to its
+    return when no EI comes first. A called routine counts in full, up to its
+    own first EI. Returns the Cost, or None when there is no handler."""
+    if not roots:
+        return None
+    saved = fc.memo, fc.noret
+    fc.memo, fc.noret, fc.stop_ei = {}, set(), True
+    try:
+        best = None
+        for e in roots:
+            c = fc.routine_cost(e, {}, frozenset(), None, None)
+            best = c if best is None else best.most(c)
+    finally:
+        fc.memo, fc.noret, fc.stop_ei = saved[0], saved[1], False
+    return best
 
 
 def write_cost(res, name, out, w):
@@ -3718,6 +3753,22 @@ def write_cost(res, name, out, w):
     w('  interrupt handler: %s cycles (%.2f frames) from %s; it %s the VDP control port' %
       (h.txt(), h.hi / NEXT_FRAME, ', '.join(h4(e[1]) for e in cm['irq_roots']) or 'no vector',
        'writes' if cm['handler_ctrl'] else 'does not write'))
+    te = cm.get('to_ei')
+    if te is not None:
+        def lines(c):
+            return '%.1f' % (c / LINE_CYCLES)
+        end_lo = FRAME_EVENT_LINE + te.lo / LINE_CYCLES
+        end_hi = FRAME_EVENT_LINE + te.hi / LINE_CYCLES
+        cost = lines(te.lo) if te.lo == te.hi else '%s to %s' % (lines(te.lo), lines(te.hi))
+        until = '%.1f' % end_hi if te.lo == te.hi else '%.1f to %.1f' % (end_lo, end_hi)
+        flag = ''
+        if end_lo > ULA_IRQ_LINE:
+            flag = ': TEAR RISK, even the cheapest path runs past line %d' % ULA_IRQ_LINE
+        elif end_hi > ULA_IRQ_LINE:
+            flag = ': the costliest path runs past line %d, the cheapest does not' % ULA_IRQ_LINE
+        w('  interrupt handler to its EI: %s cycles (%s Next lines at %d cycles a line); the frame event is the end of line %d, '
+          'so interrupts stay off until line %s; the ULA interrupt is at line %d%s' %
+          (te.txt(), cost, LINE_CYCLES, FRAME_EVENT_LINE, until, ULA_IRQ_LINE, flag))
     w('  race: foreground routines that write the VDP with interrupts on and cost more than %d (%s): %d' %
       (cm['limit'], 'the frame minus the handler' if cm['limit'] < NEXT_FRAME else
        'the frame; the handler\'s worst case is a frame or more', len(cm['race'])))
