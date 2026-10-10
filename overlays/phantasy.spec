@@ -399,8 +399,8 @@ mapld 07CE4   # loads HL with $FFFF, then stores $03 through it
 # CHECK low: site 00290  OUTI  (port in C)
 # CHECK low: site 0037C  OUTI  (port in C)
 # CHECK low: site 00382  OUT (C),A  (port in C)
-# CHECK low: site 0415A  OUT ($BE),A  (vdp_data)
-# CHECK low: site 04163  OUT ($BE),A  (vdp_data)
+site 0415A   ; OUT ($BE),A
+site 04163   ; OUT ($BE),A
 # CHECK low: site 041E0  OUT ($3E),A  (memory_control)
 # CHECK low: site 06438  OUTI  (port in C)
 # CHECK low: site 06479  OUTI  (port in C)

@@ -49,7 +49,7 @@ A file has no size limit, and neither has a chunk. NextMasterSystem never holds 
 | `CONF` | no | settings |
 | `META` | no | the game's details for the browser |
 | `ICON` | no | a 32x32 icon |
-| `PAGE` | no, any number | a whole 8K bank of code of our own; not read by the loader yet |
+| `PAGE` | no, any number | a whole 8K bank of code of our own |
 | `SIGN` | no | reserved for a signature; readers ignore it for now |
 | `END ` | yes | the CRC32 of the file up to this chunk |
 
@@ -127,9 +127,10 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 | `cpu` | `28`, `3.5` | the CPU speed for the game's own code |
 | `priority` | `0`, `1` | draw priority tiles again in Layer 2, above the sprites |
 | `toppal` | `0`, `1` | show the palette the frame handler leaves from line 0 of the picture |
+| `tilecache` | `0`, `1` | copy the tiles that block writes take whole from cart ROM from a converted copy of the cart, made at game start, and do not convert them again |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
 
-NextMasterSystem acts on `priority` and `toppal`. It does not act on the other keys yet.
+NextMasterSystem acts on `priority`, `toppal` and `tilecache`. It does not act on the other keys yet. An engine that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`.
 
 ## `META`: the game's details
 
@@ -158,20 +159,63 @@ NextMasterSystem does not read the `ICON` chunk yet.
 
 ## `PAGE`: code pages
 
-A page is a whole 8K bank of Z80N code of our own for this game. It can replace a slow routine of the game or act as a library of helpers. A file may hold any number of pages.
-
-The loader does not read `PAGE` chunks yet. It skips them, and the far-call inline code below has no value yet. The rest of this section is the design.
+A page is a whole 8K bank of Z80N code of our own for this game. It can replace a slow routine of the game or act as a library of helpers. A file may hold any number of `PAGE` chunks, one for each page number.
 
 | Offset | Size | Field |
 |---|---|---|
 | 0 | u8 | page number in this file, from 0 |
-| 1 | u8 | number of entries, e |
+| 1 | u8 | number of entries, e, at least 1 |
 | 2 | 2 x e | entry addresses, `u16` each |
 | 2 + 2e | rest | the page's code and data, at most 8192 bytes |
 
-The loader puts each page into a free 8K RAM page before the game starts. The code is assembled to run at `$2000-$3FFF`. When the game reaches it, the framework maps the page into that window, calls the entry, and maps the window back when the entry returns. Patched sites reach a page entry through the far-call inline code, described below.
+The code is assembled to run at `$2000-$3FFF`. Each entry address lies inside the code. Entry n of the page is the n-th address in the list.
 
-Page code may do what it needs. It can turn interrupts off, switch to a stack of its own inside its page, map other pages, and use any Z80N instruction. One rule applies to it. Before an entry returns, the entry restores everything it changed: the stack pointer, the interrupt state, the MMU slots, and any registers that the replaced game code did not change. The game then carries on as if its own code had run.
+The loader puts each page into its own 8K RAM page before the game starts, and fills the rest of that RAM page with zeros. The current framework takes page numbers 0 to 7 and at most 64 entries over all the pages of a file. The loader refuses a file with a page number over 7, a page number twice, more entries, no entries, or an entry outside its page's code.
+
+### The far call
+
+A patched site reaches a page entry through a far call. It has one of two forms:
+
+- an `RST` to the framework's I/O entry, the inline code `$80`, then `u8` page and `u8` entry: 4 bytes;
+- `CALL $E072` (`jt_far` in the jump table), then `u8` page and `u8` entry: 5 bytes.
+
+The framework then:
+
+1. maps the page into `$2000-$3FFF` (MMU1), in place of the page the window held;
+2. jumps to the entry, with the game's registers and the game's interrupt state as they were at the site;
+3. when the entry returns, maps the old page back into the window and returns to the byte after the page and entry bytes, with the registers and flags the entry returned.
+
+At the entry, the stack holds the return into the framework, then a word whose low byte is the page the window held, then the return address after the site. An entry can make a far call itself. A page number that the file has no page for, or an entry number that the page does not list, stops the game with a red border.
+
+### Rules for page code
+
+Page code may do what it needs. It can turn interrupts off, switch to a stack of its own inside its page, map other pages, and use any Z80N instruction. It follows these rules:
+
+- Before an entry returns, it restores everything it changed that the game code it replaces does not change: the stack pointer, the interrupt state, the MMU slots, and the registers. The game then carries on as if its own code had run.
+- While an entry runs, `$2000-$3FFF` holds the page, not the game's code and data there. `jt_peek` (`$E075` in the jump table) gives in A the byte that the game sees at the address in HL. For an address in `$2000-$3FFF` it reads the game's own page. It keeps every other register except F, and leaves interrupts as they are.
+- Page code can use the overlay's I/O `RST` with the inline codes in this file, in the same way as a patched site. For example, one `OTIR` through the framework writes a whole buffer to the VDP.
+- `jt_vwrite` (`$E078`, ABI 7) writes bytes into VRAM in runs: the same bytes, in the same places, as a control write of each run's address and then its data writes to the VDP data port. It is much faster than the I/O `RST`, because it maps the pages it uses once for the call. See "Writing VRAM from page code" below.
+- The game's interrupt handler can run while an entry runs with interrupts on. The framework then maps the game's own page into `$2000-$3FFF` for the handler, and maps the code page back when the handler returns. An entry can leave interrupts on only for a game whose interrupt code does not write the mapper register `$FFFD`. For any other game, the entry turns interrupts off while it runs.
+
+### Writing VRAM from page code
+
+`call jt_vwrite` takes:
+
+| Register | Value |
+|---|---|
+| HL | the source of the first run |
+| DE | the VRAM address of the first run. Bits 14 and 15 are ignored. |
+| B | the bytes in each run, 1 to 256 (0 means 256) |
+| C | the number of runs, 1 to 256 (0 means 256) |
+| IX | the source step: from the start of one run to the start of the next |
+| IY | the VRAM step: from the start of one run to the start of the next. The address wraps at `$4000`. |
+| A | 0: the source as the game sees it, so an address in `$2000-$3FFF` reads the game's page there, as `jt_peek` does. Any other value: the source as it is mapped now, so `$2000-$3FFF` is the code page. |
+
+The source lies in `$0000-$DFFF`. For example, a name table column of 28 cells, 2 bytes each, from a copy in RAM with 64 bytes to a row: HL = the copy's first cell, DE = the VRAM address of the column's first cell, B = 2, C = 28, IX = IY = 64.
+
+For each byte, `jt_vwrite` does what the framework does for a write to the data port: it writes the framework's copy of VRAM, the Next tilemaps for a name table entry, the priority marks with the `priority` switch, the mark that a tile must be converted again, and the mark that the sprite table changed. It leaves the VDP state as the writes would: the address after the last byte of the last run, code 1 (a VRAM write), the control latch clear, and the read buffer holding the last byte written.
+
+It keeps BC, DE, HL, IX, IY, the alternate registers and the interrupt state; A and F change. It runs with interrupts off and on a stack of its own, so the game's interrupt handler cannot run in the middle of it. It writes VRAM only: CRAM writes go through the I/O `RST`.
 
 ## `END `: integrity
 
@@ -198,9 +242,9 @@ Most changes in `PTCH` replace an instruction in the game with an `RST` to the f
 | ED second byte | the `ED`-prefixed I/O instruction with that second byte: `IN r,(C)`, `OUT (C),r`, `INI`, `OUTI`, `INIR`, `OTIR`, `IND`, `OUTD`, `INDR`, `OTDR`, and `LD I,A` / `LD A,I` | none |
 | `$81 + 8r` | `OUT (C),r`, as the first of a run | none |
 | `$C3`, `$CB` | `OUTI`, `OUTD`, as the first of a run | none |
-| to be assigned | far call into a code page | `u8` page, `u8` entry |
+| `$80` | far call into a code page; see `PAGE` | `u8` page, `u8` entry |
 
 ## Versions
 
 - The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip.
-- The **framework ABI** in the header says which inline codes and framework features the file uses. A framework accepts a file whose ABI is not higher than its own.
+- The **framework ABI** in the header says which inline codes and framework features the file uses. A framework accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, and a file whose page code calls `jt_vwrite` needs ABI 7.

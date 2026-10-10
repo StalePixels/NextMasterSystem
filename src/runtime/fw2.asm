@@ -1,7 +1,10 @@
-; fw2.asm: the framework's once-a-frame work. Page FW2_PAGE, mapped at
-; $2000 (MMU1) only while vbl_work (fw.asm) runs it, with interrupts off.
-; At that time the VRAM shadow is at $4000-$7FFF (VRAM address + $4000)
-; and the Next tile definitions at $8000-$BFFF (tile * 32 + $8000).
+; fw2.asm: the framework's second page (FW2_PAGE), mapped at $2000 (MMU1)
+; while vbl_work (fw.asm) runs the once-a-frame work, with interrupts off,
+; and for one call from a handler (fw2_call in fw.asm): VDP register
+; writes, mapper stores, CRAM extras, the code page table. During vbl_work
+; the VRAM shadow is at $4000-$7FFF (VRAM address + $4000) and the Next
+; tile definitions at $8000-$BFFF (tile * 32 + $8000). Code here never
+; calls into fw4: both pages use slot 1.
 
 ;		org $2000  (section origin)
 		include "tables2.inc"	; conv_tables, 1K, page aligned
@@ -17,12 +20,35 @@ spr_rr:		db 0			; round-robin pointer for slot eviction
 spr_count:	db 0
 spr_t:		dw 0
 cv_n:		db 0
+kn_any:		db 0			; some page in kn_pages is set (kn_block, tile_flushk)
 pause_prev:	db 0
+pal_vm:		ds 4			; toppal: CRAM entries written in the last vblank phase
+cram_top:	ds 32			; toppal: CRAM as the second palettes hold it
+sat_hi:		db $3F			; sprite attribute table address high byte
+cop_dirty:	db 1			; copper list must be rebuilt
+nt_dirty:	db 0			; name table base changed: maps rebuilt
+h_x:		dw 0			; tilemap X offset for the current H scroll
+h_sw:		db 0			; copper column of the M0->A8 switch, 0 = none
+cop_sw:		db $FF			; switch column in the copper list now
+cop_v:		db $FF			; V scroll in the copper list now
+cop_mode:	db $FF			; 0 normal list, 1 lock-right list
+bd_cur:		db $FF			; backdrop colour in the ULA palette now
+bg_free:	dw 0			; pixel values no background tile on screen uses
+					; (kept only while tr_free is 0)
+pri_x:		db 254			; Layer 2 X scroll for the current H scroll (K - 2)
+lay15:		db 0			; NextReg $15 layer order bits: 4 = L S U (priority tiles)
+tm_ctl:		db %00000010		; NextReg $6B without bit 4 (second tilemap palette)
+pal_ph:		db 1			; toppal: 1 from the frame event to the first line event
+dis_pend:	db 0			; toppal: a display-off write waits for the phase end
+disp_on:	db 0			; the display enable shown: $40 on, 0 off
+pal_rows:	ds 24			; per screen row: rows from it to the bottom where
+					; sprite-palette tiles show pixel value 0 more than
+					; background ones, less the others (fw3 pal_scan)
 
 fw2_init:
-		ld hl,tm_valid
-		ld de,tm_valid+1
-		ld bc,63
+		ld hl,tm_mask
+		ld de,tm_mask+1
+		ld bc,1023
 		ld (hl),0
 		ldir
 		ld hl,tile_slot
@@ -47,10 +73,59 @@ fw2_init:
 		ld a,1
 		ld (spr_frame),a
 		ret
+; Game start, with fw3 at $0000: the pal_scan pass marks and nibm
+fw2_init3:
+		ld hl,ps_seen
+		ld de,ps_seen+1
+		ld bc,511
+		ld (hl),0
+		ldir
+		xor a
+		ld (ps_gen),a
+		ld hl,nibm		; nibm: bit (high nibble) | bit (low nibble)
+fw2_init3__nb:		ld a,l
+		call fw2_init3__bit
+		push de
+		ld a,l
+		rrca
+		rrca
+		rrca
+		rrca
+		call fw2_init3__bit
+		pop bc
+		ld a,e
+		or c
+		ld (hl),a
+		inc h
+		ld a,d
+		or b
+		ld (hl),a
+		dec h
+		inc l
+		jr nz,fw2_init3__nb
+		ret
+; A (low nibble) -> DE = 1 << A, from bits16 in fw3
+fw2_init3__bit:	and $0F
+		add a,a
+		ld de,bits16
+		add de,a
+		push hl
+		ex de,hl
+		ld e,(hl)
+		inc hl
+		ld d,(hl)
+		pop hl
+		ret
 
 ; The vb_ labels mark the phases for tools/measure.lua (NM_VBPH).
 fw2_vbl:
 		nextreg $50,FW3_PAGE	; fw3 at $0000 (restore_mmu puts the game's page back)
+		ld hl,$C1D1		; POP DE, POP BC: fw_exit without vbl_chk (fw.asm)
+		ld (fw_exit),hl
+		ld a,$ED
+		ld (fw_exit+2),a
+		ld hl,tw_check		; jt_vwrite's end without vbl_chkv
+		ld (vw_tw+1),hl
 		; the copper first: a full rebuild must end before line 0, or that
 		; frame runs without its copper list
 vb_cop:		call rast_frame
@@ -66,7 +141,7 @@ vb_map:		ld a,(nt_dirty)
 		call nz,map_rebuild
 vb_tile:	ld a,(tiles_dirty)
 		or a
-		call nz,tile_flush
+tf_vbl:		call nz,tile_flush	; tilecache: tile_flushk (fw2_switches)
 vb_pal:		ld a,(fw_frames)
 		and 7
 		call z,pal_scan
@@ -82,135 +157,12 @@ vb_end:		ld hl,(fw_frames)
 		ret
 
 ; ----------------------------------------------------------------------
-; Game start set-up, called by fw_start (fw.asm) with this page at $2000:
-; NextRegs, sound, video, cleared pages, framework state, the game's
+; Game start, second part, called by fw_start (fw.asm) after fw4_start,
+; with this page at $2000: clip windows, framework state, the game's
 ; first pages in cur_mmu. fw_start then maps them and starts the game.
 ; ----------------------------------------------------------------------
 fw2_start:
-		; DivMMC automap off: the game's $0000-$3FFF is RAM, and $0038 and
-		; $0066 are automap entry points.
-		ld a,$0A
-		call nr_read
-		and %11101111
-		nextreg $0A,a
-		nextreg $07,3		; 28 MHz (PoC-only)
-		; joystick 1 as Mega Drive pad on port $1F (Kempston bits plus
-		; A and Start)
-		ld a,$05
-		call nr_read
-		and %00110111
-		or %01001000
-		nextreg $05,a
-		; TurboSound on, AY 0 and AY 1 mono
-		ld a,$08
-		call nr_read
-		or %00000010
-		nextreg $08,a
-		ld a,$09
-		call nr_read
-		or %01100000
-		nextreg $09,a
-		xor a
-		ld (ay_cur),a		; forces the first chip select
-		ld a,$FF
-		call ay_quiet
-		ld a,$FE
-		call ay_quiet
-		ld a,$FF
-		ld e,7
-		ld d,%00111000		; AY 0: tones on, noise off
-		call ay_write
-		; DACs to their middle value (silence without a DC step)
-		nextreg $2C,$80
-		nextreg $2D,$80
-		nextreg $2E,$80
-		; video
-		nextreg $68,%00000000	; ULA on: clipped to SMS column 0, it shows the backdrop there (bd_update)
-		nextreg $15,%01100010	; sprites off for now, over border, clip, 0 on top
-		nextreg $6B,%00000010	; tilemap off until the game turns the display on
-		nextreg $6C,0
-		nextreg $6E,NR6E_M0	; map: bank 7 offset 0
-		nextreg $6F,$00		; tiles: bank 5 offset 0
-		nextreg $4C,0		; tile pixel value 0 is transparent
-		nextreg $4B,0		; sprite pixel value 0 is transparent
-		nextreg $4A,0
 		call clip_update
-		nextreg $2F,255&(((288-PIC_X))>>8)	; X offset for H scroll 0
-		nextreg $30,255&((288-PIC_X))
-		nextreg $31,224
-		nextreg $62,0		; copper stopped
-		; sprite palette: all black
-		nextreg $43,%00100010
-		nextreg $40,0
-		ld b,0
-fw2_start__spal:		nextreg $44,0
-		nextreg $44,0
-		djnz fw2_start__spal
-		; tilemap palette 0: all black
-		nextreg $43,%00110010
-		nextreg $40,0
-		ld b,0
-fw2_start__pal:		nextreg $44,0
-		nextreg $44,0
-		djnz fw2_start__pal
-		; the second tilemap and sprite palettes (toppal) and both Layer 2
-		; palettes: all black; Layer 2 entries 0 and 16 (pixel value 0)
-		; hold the global transparent colour L2_TRANS
-		ld a,%01110010
-		call pal_black
-		ld a,%01100010
-		call pal_black
-		ld a,%00010010
-		call pal_l2
-		ld a,%01010010
-		call pal_l2
-		; all 128 sprites hidden
-		ld bc,$303B
-		xor a
-		out (c),a
-		ld c,$57
-		ld e,128
-fw2_start__spr:		out (c),a
-		out (c),a
-		out (c),a
-		out (c),a		; 4-byte form, not visible
-		dec e
-		jr nz,fw2_start__spr
-		; clear tile definitions, maps, VRAM shadow, SMS RAM
-		ld a,TILE_PAGE
-		call clear_page
-		ld a,TILE_PAGE+1
-		call clear_page
-		ld a,MAP_PAGE
-		call clear_page
-		ld a,SHADOW_PAGE
-		call clear_page
-		ld a,SHADOW_PAGE+1
-		call clear_page
-		ld a,SMSRAM_PAGE
-		call clear_page
-		ld a,(fw_flags)		; Layer 2 pages, with priority tiles
-		rra
-		jr nc,fw2_start__nl2
-		ld b,6
-		ld a,L2_PAGE
-fw2_start__l2c:		push af
-		push bc
-		call clear_page
-		pop bc
-		pop af
-		inc a
-		djnz fw2_start__l2c
-fw2_start__nl2:
-		ld b,4			; cart RAM ($FFFC bit 3); not kept on the SD card
-		ld a,CARTRAM_PAGE
-fw2_start__cr:		push af
-		push bc
-		call clear_page
-		pop bc
-		pop af
-		inc a
-		djnz fw2_start__cr
 		; framework state
 		ld hl,vdp_regs
 		ld b,16
@@ -235,14 +187,27 @@ fw2_start__zd:		ld (hl),0
 		inc l
 		djnz fw2_start__zd
 		xor a
+		ld (kn_any),a
+		ld a,(fw_flags)
+		and 4
+		jr z,fw2_start__nk
+		nextreg $56,TKC_PAGE	; tilecache: no tiles from cart ROM noted (fw_start
+		ld hl,KN_PAGES		; puts slot 6 back)
+		ld b,64
+fw2_start__zk:		ld (hl),0
+		inc l
+		djnz fw2_start__zk
+fw2_start__nk:	xor a
 		ld (tiles_dirty),a
 		ld (vbl_done),a
+		ld (vbl_poll),a
 		ld (quit_req),a
 		ld (pause_req),a
 		ld (vdp_status),a
 		ld (vdp_latch),a
 		ld (h_sw),a
 		ld (m224),a
+		ld (hl_on),a		; no hook table from an earlier game
 		inc a
 		ld (sat_dirty),a
 		ld (cop_dirty),a
@@ -252,7 +217,6 @@ fw2_start__zd:		ld (hl),0
 		ld (tr_free),hl
 		ld a,$FF
 		ld (bd_cur),a
-		call tr_reset		; no traces from another game
 		nextreg $1C,%00000100	; ULA clip: SMS column 0 only
 		nextreg $1A,0
 		nextreg $1A,PIC_X+7
@@ -261,8 +225,9 @@ fw2_start__zd:		ld (hl),0
 		ld hl,286
 		ld (h_x),hl
 		call fw2_switches
-		nextreg $50,FW3_PAGE	; fw2_init clears tm_valid there
+		nextreg $50,FW3_PAGE	; fw2_init clears tm_mask there
 		call fw2_init
+		call fw2_init3
 		; interrupts: hardware IM2 mode (held until acknowledged), vector
 		; table at $FD00 (I = $FD). Line interrupt (SMS frame and line
 		; events) and ULA interrupt (framework work) on.
@@ -301,6 +266,14 @@ fw2_start__map:		ld a,b
 		ld (hl),SMSRAM_PAGE
 		inc hl
 		ld (hl),FW_PAGE
+		; the SMS RAM copy of the mapper registers holds the reset values
+		; too: games write them with stores the overlay does not patch,
+		; and read them back (R-Type restores both banks from $DFFE)
+		nextreg $56,SMSRAM_PAGE	; (fw_start maps cur_mmu after)
+		ld hl,$0000
+		ld ($DFFC),hl
+		ld hl,$0201
+		ld ($DFFE),hl
 		ld a,8
 		ld (fw_status),a
 		ret
@@ -562,201 +535,6 @@ ev_recheck2__set:		ld a,b
 		jp ev_program
 
 
-; ----------------------------------------------------------------------
-; Per-line H scroll from an overlay hook (rastercode). A game that writes
-; register 8 from a line interrupt on (nearly) every line cannot have its
-; interrupts delivered on the Next: one costs more than a line. Its overlay
-; brings a small routine that works out, from the game's RAM and registers,
-; the register 8 value of every line, as the game's line interrupt handler
-; would set it. Called once a frame: rast_hook with HL = hl_tab (192 bytes)
-; and IX = vdp_regs, game RAM at $C000; carry set = the table is valid this
-; frame. While it is (hl_on), the game gets no line interrupts, register 8
-; writes go nowhere but vdp_regs, and the copper list is rebuilt from the
-; table every frame (cop_raster).
-; ----------------------------------------------------------------------
-rast_frame:
-		ld hl,(rast_hook)
-		ld a,h
-		or l
-		ret z
-		ld (rast_frame__c+1),hl
-		ld hl,hl_tab
-		ld ix,vdp_regs
-		or a
-rast_frame__c:		call 0
-		ld a,0
-		adc a,a			; 1 when the table is valid
-		ld hl,hl_on
-		cp (hl)
-		ld (hl),a
-		jr z,rast_frame__same
-		or a
-		jr nz,cop_raster
-		; back to the normal list: rebuilt in full, X from register 8
-		ld a,$FF
-		ld (cop_mode),a
-		ld (cop_sw),a
-		ld a,1
-		ld (cop_dirty),a
-		ld a,(vdp_regs+8)
-		ld e,a
-		jp hscroll_set
-rast_frame__same:		or a
-		ret z
-; The copper list from hl_tab: head MOVE $31 V, $6E M0, X of line 0; for
-; each line y, when its K = -H > 64 the map switch pair (WAIT y,c; MOVE
-; $6E,A8), then at the end of the line (WAIT y,40) M0 back and X for line
-; y+1 where it changes. At most RX_MAX instructions; past that the list
-; stops (later lines keep the last X). The copper keeps running while the
-; list is rewritten: it restarts at the top of every frame, and the rewrite
-; stays ahead of it.
-RX_MAX		equ 1014
-cop_raster:
-		ld a,$FF
-		ld (cop_mode),a		; the normal list is gone
-		ld a,(vdp_regs+0)
-		and $40
-		jr z,cop_raster__nl
-		ld hl,hl_tab		; register 0 bit 6: lines 0-15 at H = 0
-		ld b,16
-cop_raster__lk:		ld (hl),0
-		inc hl
-		djnz cop_raster__lk
-cop_raster__nl:		nextreg $61,0
-		nextreg $62,%11000000	; write index 0, copper running
-		ld a,(vdp_regs+9)
-		cp 224
-		jr c,cop_raster__v
-		sub 224
-cop_raster__v:		add a,224
-		ld c,a
-		nextreg $60,$31
-		ld a,c
-		nextreg $60,a
-		nextreg $60,$6E
-		nextreg $60,NR6E_M0
-		ld a,(hl_tab)
-		call h2x
-		nextreg $60,$2F
-		ld a,d
-		nextreg $60,a
-		nextreg $60,$30
-		ld a,e
-		nextreg $60,a
-		ld (rx_cur),de
-		ld a,b
-		ld (rx_sw),a		; switch column of line 0
-		ld iy,6
-		ld ix,hl_tab+1		; H of line y+1
-		ld c,0			; line y
-cop_raster__line:		push iy
-		pop hl
-		ld de,RX_MAX
-		or a
-		sbc hl,de
-		jp nc,cop_raster__end
-		ld a,(rx_sw)
-		or a
-		jr z,cop_raster__ns
-		add a,a
-		or $80
-		nextreg $60,a		; WAIT y,c
-		ld a,c
-		nextreg $60,a
-		nextreg $60,$6E
-		nextreg $60,NR6E_A8
-		inc iy
-		inc iy
-cop_raster__ns:		ld a,c
-		cp 191
-		ld de,(rx_cur)
-		ld b,0
-		jr z,cop_raster__nx
-		ld a,(ix+0)
-		call h2x		; DE = X, B = switch column of line y+1
-cop_raster__nx:		ld a,b
-		ld (rx_nsw),a		; switch column of line y+1 (the game's AF' must
-					; not be touched: vbl work runs inside game code)
-		ld hl,(rx_cur)
-		or a
-		sbc hl,de
-		ld a,h
-		or l
-		ld b,a			; B != 0: X changes
-		ld a,(rx_sw)
-		or b
-		jr z,cop_raster__next
-		nextreg $60,$80 + (END_H << 1)	; WAIT y,40
-		ld a,c
-		nextreg $60,a
-		inc iy
-		ld a,(rx_sw)
-		or a
-		jr z,cop_raster__nm
-		nextreg $60,$6E
-		nextreg $60,NR6E_M0
-		inc iy
-cop_raster__nm:		ld a,b
-		or a
-		jr z,cop_raster__next
-		ld hl,(rx_cur)
-		ld a,h
-		cp d
-		jr z,cop_raster__lo
-		nextreg $60,$2F
-		ld a,d
-		nextreg $60,a
-		inc iy
-cop_raster__lo:		ld a,l
-		cp e
-		jr z,cop_raster__st
-		nextreg $60,$30
-		ld a,e
-		nextreg $60,a
-		inc iy
-cop_raster__st:		ld (rx_cur),de
-cop_raster__next:		ld a,(rx_nsw)
-		ld (rx_sw),a
-		inc ix
-		inc c
-		ld a,c
-		cp 192
-		jp nz,cop_raster__line
-cop_raster__end:		nextreg $60,$FF		; HALT
-		nextreg $60,$FF
-		ret
-
-; A = register 8 value H -> DE = tilemap X offset (K - 34 mod 320, K = -H),
-; B = copper column of the M0 -> A8 switch, 0 = none (as hscroll_set, fw.asm)
-h2x:		neg
-		ld b,a			; K
-		cp 34
-		jr c,h2x__lo
-		sub 34			; K >= 34: X = K - 34
-		ld e,a
-		ld d,0
-		jr h2x__sw
-h2x__lo:		add a,30		; K < 34: X = K + 286
-		ld e,a
-		ld d,1
-h2x__sw:		ld a,b
-		cp 65
-		ld b,0
-		ret c
-		ld b,a
-		ld a,32			; (288 - K) / 8; 288 - K < 256 here
-		sub b
-		rrca
-		rrca
-		rrca
-		and $1F
-		ld b,a
-		ret
-
-rx_cur:		dw 0
-rx_sw:		db 0
-rx_nsw:		db 0
-hl_tab:		ds 192
 
 
 ; ----------------------------------------------------------------------
@@ -777,6 +555,7 @@ mode_switch__set:		ld hl,m224
 		cp (hl)
 		ret z
 		ld (hl),a
+		nextreg $68,0		; ULA on (the 224-line copper list turns it off in the border lines)
 		or a
 		ld a,192
 		jr z,mode_switch__p
@@ -790,6 +569,7 @@ mode_switch__p:		ld (pic_end),a
 		ld (cop_dirty),a
 		ld (sat_dirty),a
 		ld (pri_full),a
+		call l2_mode
 		call l2_vis
 		call clip_update
 		; fall into nt_base_set
@@ -838,6 +618,15 @@ region_update__nt:		ld (hl),1
 		or a
 		jr nz,region_update__sat
 		ld (hl),3		; rows 24-27: games keep tiles there too
+		ld a,(vdp_regs+9)	; and rows 0-3 while V scroll 32 hides them
+		cp 32			; (OutRun's HUD letters are tiles $1C0-$1C7
+		jr nz,region_update__sat	; there); their tiles are converted once now,
+		ld a,(nt_base+1)	; as they may have been written as name table
+		ld l,a
+		ld (hl),3
+		set 6,l
+		ld (hl),$FF
+		ld (tiles_dirty),a
 region_update__sat:		ld a,(sat_hi)
 		ld l,a
 		ld (hl),2
@@ -857,14 +646,26 @@ clip_update__c:		ld e,a
 		jr z,clip_update__y
 		ld bc,16*256+239
 clip_update__y:		nextreg $1C,%00001011	; reset tilemap, sprite and Layer 2 clip indexes
-		ld a,e			; Layer 2 (priority tiles): pixels PIC_X (+ 8) to 255,
-		add a,a			; lines 0-191 (off in 224-line mode)
+		ld a,(m224)		; Layer 2 (priority tiles): pixels PIC_X (+ 8) to 255,
+		or a			; lines 0-191; in 224-line mode (320x256) as the tilemap
+		jr nz,clip_update__l2w
+		ld a,e
+		add a,a
 		add a,PIC_X
 		nextreg $18,a
 		nextreg $18,255
 		nextreg $18,0
 		nextreg $18,191
-		ld a,16+PIC_X/2
+		jr clip_update__tm
+clip_update__l2w:	ld a,16+PIC_X/2
+		add a,e
+		nextreg $18,a
+		nextreg $18,143+PIC_X/2
+		ld a,b
+		nextreg $18,a
+		ld a,c
+		nextreg $18,a
+clip_update__tm:	ld a,16+PIC_X/2
 		add a,e
 		nextreg $1B,a
 		nextreg $1B,143+PIC_X/2
@@ -880,72 +681,6 @@ clip_update__y:		nextreg $1C,%00001011	; reset tilemap, sprite and Layer 2 clip 
 		nextreg $19,a
 		ld a,c
 		nextreg $19,a
-		ret
-
-; The copper list in 224-line mode: one X, one Y (V - 16; the 32-row map
-; wraps at 256 by itself) and, when K = -H > 64, the map switch pair on
-; each of the 224 lines (Next lines 0-207, then 296-311 for the 16 lines
-; above line 0). Per-line H scroll and the lock bits are not done here.
-cop_224:
-		xor a
-		ld (cop_dirty),a
-		ld a,$FF
-		ld (cop_mode),a
-		ld (cop_sw),a
-		nextreg $61,0
-		nextreg $62,%11000000
-		ld a,(vdp_regs+9)
-		add a,240
-		ld c,a
-		nextreg $60,$2F
-		ld a,(h_x+1)
-		nextreg $60,a
-		nextreg $2F,a
-		nextreg $60,$30
-		ld a,(h_x)
-		nextreg $60,a
-		nextreg $30,a
-		nextreg $60,$31
-		ld a,c
-		nextreg $60,a
-		nextreg $31,a
-		nextreg $60,$6E
-		nextreg $60,NR6E_M0
-		ld a,(h_sw)
-		or a
-		jr z,cop_224__end
-		ld d,a
-		ld bc,0
-cop_224__l1:		call cop_224__sw
-		inc bc
-		ld a,c
-		cp 208
-		jr nz,cop_224__l1
-		ld bc,296
-cop_224__l2:		call cop_224__sw
-		inc bc
-		ld a,c
-		cp 255&(312)
-		jr nz,cop_224__l2
-cop_224__end:		nextreg $60,$FF		; HALT
-		nextreg $60,$FF
-		ret
-cop_224__sw:		ld a,d			; BC = line, D = switch column
-		add a,a
-		or $80
-		or b
-		nextreg $60,a		; WAIT line,column
-		ld a,c
-		nextreg $60,a
-		nextreg $60,$6E
-		nextreg $60,NR6E_A8
-		ld a,$80 + (END_H << 1)
-		or b
-		nextreg $60,a		; WAIT line,40
-		ld a,c
-		nextreg $60,a
-		nextreg $60,$6E
-		nextreg $60,NR6E_M0
 		ret
 
 ; ----------------------------------------------------------------------
@@ -965,6 +700,20 @@ fw2_switches:
 		ld de,pri_markr
 		call hook_set
 		ld a,(fw_flags)
+		and 1
+		ld hl,vw_hk
+		ld de,vw_pri
+		call hook_set
+		ld hl,vf_mode+1		; jt_vwrite's fast form: vf_prun before each run
+		ld de,vf_mode+1
+		ld a,(fw_flags)
+		and 1
+		jr z,fw2_switches__vf
+		ld hl,vf_pj+1
+		ld de,vf_prun
+		ld (vf_mode+1),de
+fw2_switches__vf:	ld (vf_pm+2),hl
+		ld a,(fw_flags)
 		and 2
 		ld hl,fw_line_irq__hk1
 		ld de,pal_vbl
@@ -980,6 +729,17 @@ fw2_switches:
 		jr z,fw2_switches__c
 		xor a			; NOP: cram_x writes them
 fw2_switches__c:		ld (cram_hk),a
+		; tilecache: vram_block ends in kn_entry, tile_flushk converts
+		ld hl,tw_check
+		ld de,tile_flush
+		ld a,(fw_flags)
+		and 4
+		jr z,fw2_switches__k
+		ld hl,kn_entry
+		ld de,tile_flushk
+fw2_switches__k:	ld (kn_hk+1),hl
+		ld (tf_vbl+1),de
+		ld (tf_tw+1),de
 		; Layer 2 (priority tiles): 256x192 from L2_BANK, above the sprites;
 		; its transparent colour is one the SMS palette never makes
 		ld a,(fw_flags)
@@ -992,8 +752,7 @@ fw2_switches__c:		ld (cram_hk),a
 fw2_switches__p:		nextreg $14,a
 		ld a,b
 		ld (lay15),a
-		nextreg $12,L2_BANK
-		nextreg $70,0
+		call l2_mode
 		nextreg $16,254
 		nextreg $17,0
 		ld bc,$123B		; hidden until the display is on (l2_vis)
@@ -1030,6 +789,271 @@ fw2_switches__zt:		ld (hl),a
 		ld a,%00000010
 		ld (pal43),a
 		ld (tm_ctl),a
+		ret
+
+; ----------------------------------------------------------------------
+; VDP register writes, through fw2_call from vctrl_w (fw.asm).
+; ----------------------------------------------------------------------
+; The display enable (register 1 bit 6) to the tilemap and sprites (disp_on;
+; fallback2 and l2_vis follow disp_on). Uses A, B, C.
+r1_hw:		ld a,(vdp_regs+1)
+		and $40
+		ld (disp_on),a
+		ld a,%10000011		; tilemap on, 512 tiles, over the ULA
+		ld b,%01100011		; sprites on, over border, clip, sprite 0 on top
+		jr nz,r1_hw__b
+		ld a,%00000010
+		ld b,%01100010
+r1_hw__b:		ld (tm_ctl),a
+		ld c,a
+		ld a,(pal43)		; bit 3: toppal shows the second palettes
+		and 8
+		add a,a
+		or c
+		nextreg $6B,a
+		ld a,(lay15)		; layer order (Layer 2 on top with priority tiles)
+		or b
+		nextreg $15,a
+		ret
+
+; Converts the tiles VRAM writes have marked, as the vblank work does, from
+; a handler: fw3, the shadow and the tile definitions in the vblank work's
+; slots, then the game's pages back. A game that loads a level with
+; interrupts and the display off would otherwise have them all converted
+; in its first vblank after, a frame's time or more. Keeps DE, IX, IY.
+tflush2:	ld a,(tiles_dirty)
+		or a
+		ret z
+		push de
+		push ix
+		push iy
+		nextreg $50,FW3_PAGE
+		nextreg $52,SHADOW_PAGE
+		nextreg $53,SHADOW_PAGE+1
+		nextreg $54,TILE_PAGE
+		nextreg $55,TILE_PAGE+1
+tf_tw:		call tile_flush		; tilecache: tile_flushk (fw2_switches)
+		ld a,(cur_mmu+0)
+		nextreg $50,a
+		ld a,(cur_mmu+2)
+		nextreg $52,a
+		ld a,(cur_mmu+3)
+		nextreg $53,a
+		ld a,(cur_mmu+4)
+		nextreg $54,a
+		ld a,(cur_mmu+5)
+		nextreg $55,a
+		pop iy
+		pop ix
+		pop de
+		ret
+
+; tw_check's flush (fw.asm) and kn_block's: TW_MAX * 256 bytes or more
+; written to tiles since their last conversion. While the display is off
+; the tiles wait for the conversion when it goes on (vdp_reg_w__r1on) or
+; for the vertical blank work: a game that loads with the display off
+; often writes a tile in more than one pass (one plane, then the next),
+; and a conversion between the passes is work done again. tw_cnt starts
+; again, so this runs once each TW_MAX * 256 bytes. Keeps DE, IX, IY.
+tw_flush:	ld a,(vdp_regs+1)
+		and $40
+		jp nz,tflush2
+		ld (tw_cnt),a
+		ld (tw_cnt+1),a
+		ret
+
+; C = register, A = value
+vdp_reg_w:
+		ld e,a
+		ld b,0
+		ld hl,vdp_regs
+		add hl,bc
+		ld d,(hl)		; old value
+		ld (hl),e
+		ld a,c
+		or a
+		jp z,vdp_reg_w__r0
+		dec a
+		jp z,vdp_reg_w__r1
+		dec a
+		jp z,vdp_reg_w__r2
+		sub 3
+		jp z,vdp_reg_w__r5
+		dec a
+		jp z,vdp_reg_w__r6
+		dec a
+		jp z,fallback2		; 7
+		dec a
+		jp z,hscroll_set	; 8
+		dec a
+		jp z,vdp_reg_w__r9
+		dec a
+		ret nz
+		jp ev_recheck2		; 10
+vdp_reg_w__r0:		ld a,e
+		xor d
+		and $28			; mask column 0, sprite shift
+		ld a,1
+		jr z,vdp_reg_w__r0b
+		ld (sat_dirty),a
+		push de
+		call clip_update
+		pop de
+vdp_reg_w__r0b:		ld a,e
+		xor d
+		and $02			; M2: 224-line mode with register 1 bit 4
+		call nz,vdp_reg_w__mode_check
+		ld a,e
+		xor d
+		and $10			; IE1
+		call nz,ev_recheck2
+		ld a,e
+		xor d
+		and $C0			; lock bits
+		ret z
+		ld a,1
+		ld (cop_dirty),a
+		ret
+vdp_reg_w__r1:		ld a,1
+		ld (sat_dirty),a
+		ld a,e
+		and $40
+		jr nz,vdp_reg_w__r1on
+		ld a,(fw_flags)		; display off in the vertical blank phase (toppal):
+		and 2			; on the SMS the frame handler turns it on again
+		jr z,vdp_reg_w__r1off		; before line 0. Kept on; pal_pic2 or pal_vbl2
+		ld a,(pal_ph)		; turns it off if it is still off then.
+		or a
+		jr z,vdp_reg_w__r1off
+		ld (dis_pend),a
+		jr vdp_reg_w__r1m
+vdp_reg_w__r1on:		xor a
+		ld (dis_pend),a
+		bit 6,d			; the display goes on: the tiles written while it
+		call z,tflush2		; was off are converted now, not in the next vblank
+vdp_reg_w__r1off:		push de
+		call r1_hw
+		call fallback2
+		call l2_vis		; Layer 2 on or off with the display
+		pop de
+vdp_reg_w__r1m:		ld a,e
+		xor d
+		and $10			; M1: 224-line mode with register 0 bit 1
+		ret z
+vdp_reg_w__mode_check:	push de
+		call mode_switch
+		pop de
+		ret
+vdp_reg_w__r2:		jp nt_base_set
+vdp_reg_w__r5:		ld a,e
+		and $7E
+		rrca
+		ld (sat_hi),a		; (reg5 & $7E) << 7, high byte
+		ld a,1
+		ld (sat_dirty),a
+		jp region_update
+vdp_reg_w__r6:		ld a,1
+		ld (sat_dirty),a
+		ret
+vdp_reg_w__r8:		jp hscroll_set
+vdp_reg_w__r9:		ld a,1
+		ld (cop_dirty),a
+		ld a,d			; V scroll to or from 32: rows 0-3 hidden or not
+		cp 32
+		ld a,0
+		jr nz,vdp_reg_w__r9o
+		inc a
+vdp_reg_w__r9o:		ld b,a
+		ld a,e
+		cp 32
+		ld a,0
+		jr nz,vdp_reg_w__r9n
+		inc a
+vdp_reg_w__r9n:		cp b
+		ret z
+		jp region_update
+
+; Horizontal scroll, register 8 = E. The whole screen scrolls by one
+; value (per-line scroll is not done). K = -h mod 256 is the first SMS map
+; pixel shown at SMS x = 0; the tilemap X offset is K - 34 (34 = left
+; border + PIC_X). When K > 64 the 320-pixel Next map would wrap in the
+; middle of the line, so the copper switches to map A8 between SMS x
+; 256-K and 320-K, at copper column (288 - K) / 8.
+hscroll_set:
+		ld a,(hl_on)		; the hook's table sets every line
+		or a
+		ret nz
+		ld a,e
+		neg			; K
+		ld e,a
+		sub 2
+		ld (pri_x),a		; Layer 2 X: map column K at SMS x 0 (PIC_X = 2)
+		ld d,0
+		ld hl,-34
+		add hl,de
+		bit 7,h
+		jr z,hscroll_set__pos
+		ld de,320
+		add hl,de
+hscroll_set__pos:		ld (h_x),hl
+		; With line interrupts off no game can time a write to a line, and
+		; a write that lands in the picture (handlers are slower than the
+		; SMS, so a vblank write can run late) would tear it. The copper
+		; then sets X at line 0 (or after the locked rows) from the next
+		; frame on, together with the map switch column.
+		ld a,(vdp_regs+0)
+		and $10
+		jr nz,hscroll_set__lineint
+		ld a,1
+		ld (cop_dirty),a
+		jr hscroll_set__nodir
+hscroll_set__lineint:	ld a,(vdp_regs+0)
+		and $40
+		jr z,hscroll_set__direct
+		; register 0 bit 6: lines 0-15 keep X for H = 0; the copper sets h_x
+		; after line 15. Direct only while the beam is in lines 16-191.
+		ld a,1
+		ld (cop_dirty),a
+		call cur_line
+		cp 16
+		jr c,hscroll_set__nodir
+		cp 192
+		jr nc,hscroll_set__nodir
+hscroll_set__direct:	ld a,h
+		nextreg $2F,a
+		ld a,l
+		nextreg $30,a
+		ld a,(m224)		; 224-line mode: pri224 sets Layer 2 X
+		or a
+		jr nz,hscroll_set__nodir
+		ld a,(pri_x)
+		nextreg $16,a
+hscroll_set__nodir:
+		ld a,(vdp_regs+8)
+		neg
+		cp 65
+		ld b,0
+		jr c,hscroll_set__sw		; K <= 64: no switch
+		; M0 and A8 show the same pixels at SMS x 256-K to 320-K; the
+		; switch at column c acts at SMS x 8c (MAME). c = (291 - K) / 8
+		; puts 8c + K in 284-291, near the middle (288), so a switch that
+		; lands up to 29 pixels later or 28 earlier still looks right
+		; (the real Next's copper and tile fetch timing is not MAME's).
+		ld b,a
+		ld a,255&((291-256))	; 291 - K (K > 64, so it fits in a byte)
+		sub b
+		rrca
+		rrca
+		rrca
+		and $1F
+		ld b,a
+hscroll_set__sw:		ld a,b
+		ld (h_sw),a
+		ld hl,cop_sw
+		cp (hl)
+		ret z
+		ld a,1
+		ld (cop_dirty),a
 		ret
 
 ; The tilemap always treats one 4-bit pixel value as transparent (NextReg
@@ -1192,95 +1216,20 @@ pal_show:	or %00000010
 		pop de
 		ret
 
-; A display-off write held in the vertical blank phase (vdp_reg_w .r1)
+; A display-off write held in the vertical blank phase (vdp_reg_w .r1).
+; Keeps DE: it runs from fw_line_irq (pal_vbl2, pal_pic2), which saves
+; only AF, HL and BC of the interrupted game.
 dis_apply:	ld a,(dis_pend)
 		or a
 		ret z
 		xor a
 		ld (dis_pend),a
+		push de
 		call r1_hw
 		call fallback2
-		jp l2_vis
-
-; ----------------------------------------------------------------------
-; Leave the game (fw_quit in fw.asm, which maps slots 0 and 1 afterwards):
-; put NextZXOS's pages and registers back.
-; ----------------------------------------------------------------------
-fw_quit2:
-		nextreg $62,0		; copper off
-		nextreg $6B,0		; tilemap off
-		nextreg $1C,%00000100	; ULA clip back to the whole screen
-		nextreg $1A,0
-		nextreg $1A,255
-		nextreg $1A,0
-		nextreg $1A,191
-		nextreg $15,0		; sprites off
-		ld bc,$123B		; Layer 2 off
-		xor a
-		out (c),a
-		nextreg $C0,0		; pulse interrupts
-		nextreg $C4,1		; ULA interrupt only
-		nextreg $22,0
-		; silence the AY chips
-		ld a,$FF
-		call ay_quiet
-		ld a,$FE
-		call ay_quiet
-		; NextZXOS's banks 5 and 7 back
-		ld a,SAVE5_PAGE
-		ld b,TILE_PAGE
-		call copy_page
-		ld a,SAVE5_PAGE+1
-		ld b,TILE_PAGE+1
-		call copy_page
-		ld a,SAVE7_PAGE
-		ld b,MAP_PAGE
-		call copy_page
-		; saved NextRegs
-		ld hl,nr_saved
-fw_quit2__r:		ld a,(hl)
-		inc hl
-		cp $FF
-		jr z,fw_quit2__rd
-		call nr_write_sel
-		ld a,(hl)
-		inc hl
-		call nr_write_val
-		jr fw_quit2__r
-fw_quit2__rd:		nextreg $52,10
-		nextreg $53,11
-		nextreg $54,4
-		nextreg $55,5
-		nextreg $56,0
+		call l2_vis
+		pop de
 		ret
-
-ay_quiet:	ld e,7
-		ld d,$3F
-		push af
-		call ay_write
-		pop af
-		ld e,8
-		ld d,0
-		push af
-		call ay_write
-		pop af
-		ld e,9
-		push af
-		call ay_write
-		pop af
-		ld e,10
-		jp ay_write
-
-; A = source page, B = destination page: copy 8K (slots 0 and 6)
-copy_page:	nextreg $50,a
-		ld a,b
-		nextreg $56,a
-		ld hl,0
-		ld de,$C000
-		ld bc,$2000
-		ldir
-		ret
-
 
 ; Layer 2 shown while the display is on, with priority tiles, not in
 ; 224-line mode (the 256x192 Layer 2 does not reach those lines)
@@ -1288,10 +1237,6 @@ l2_vis:		ld a,(fw_flags)
 		rra
 		ld a,0
 		jr nc,l2_vis__o
-		ld a,(m224)
-		or a
-		ld a,0
-		jr nz,l2_vis__o
 		ld a,(disp_on)
 		or a
 		jr z,l2_vis__o
@@ -1300,15 +1245,17 @@ l2_vis__o:		ld bc,$123B
 		out (c),a
 		ret
 
-; A = page: fill it with zero, using slot 0.
-clear_page:
-		nextreg $50,a
-		ld hl,0
-		ld de,1
-		ld bc,$1FFF
-		ld (hl),0
-		ldir
-		nextreg $50,$FF
+; Layer 2's resolution and pages for the mode: 256x192 from L2_BANK, or
+; 320x256 from L2W_BANK in 224-line mode (pri224)
+l2_mode:	ld a,(m224)
+		or a
+		jr nz,l2_mode__w
+		nextreg $70,0
+		nextreg $12,L2_BANK
+		nextreg $71,0
+		ret
+l2_mode__w:	nextreg $70,%00010000
+		nextreg $12,L2W_BANK
 		ret
 
 ; HL = hook (3 bytes), DE = routine: Z clear = CALL routine, Z set = NOPs
@@ -1324,25 +1271,6 @@ hook_set__off:		ld (hl),0
 		ld (hl),0
 		inc hl
 		ld (hl),0
-		ret
-
-; A = NextReg $43 value: all 256 entries of that palette black
-pal_black:	nextreg $43,a
-		nextreg $40,0
-		ld b,0
-pal_black__l:		nextreg $44,0
-		nextreg $44,0
-		djnz pal_black__l
-		ret
-; The same for a Layer 2 palette, with entries 0 and 16 (pixel value 0 of
-; either SMS palette) transparent
-pal_l2:		call pal_black
-		nextreg $40,0
-		nextreg $44,L2_TRANS
-		nextreg $44,0
-		nextreg $40,16
-		nextreg $44,L2_TRANS
-		nextreg $44,0
 		ret
 
 ; ----------------------------------------------------------------------
@@ -1451,20 +1379,20 @@ pri_bit:	db 1,2,4,8,16,32,64,128
 ; $0000); a changed tile that a priority cell shows marks pri_chg. Runs in
 ; the vblank work after tile_flush, with the shadow at $4000 and the Next
 ; tile definitions at $8000; Layer 2 pages go to slot 6.
-; Not done: 224-line mode (Layer 2 off), the locked right columns with V
-; scroll (they show the V-scrolled cells), per-line H scroll from a
-; rastercode hook.
+; 224-line mode: pri224. Not done: the locked right columns with V scroll
+; (they show the V-scrolled cells), the locked top rows in 224-line mode,
+; per-line H scroll from a rastercode hook.
 ; ----------------------------------------------------------------------
 pri_frame:
 		ld a,(fw_flags)
 		rra
 		ret nc
-		ld a,(m224)
-		or a
-		ret nz
 		nextreg $50,MAP_PAGE	; the marks: $1BE0 + row, $1C00 + cell
 		ld a,$FF
 		ld (pri_pg),a
+		ld a,(m224)
+		or a
+		jp nz,pri224
 		ld a,(vdp_regs+9)
 		cp 224
 		jr c,pri_frame__v
@@ -2028,231 +1956,811 @@ pri_chg:	ds 64			; per VRAM page: those of them converted again
 ; assert pri_chg == pri_lf + 256, "fw2_switches clears these three together" (checked by tools/check-layout)
 
 ; ----------------------------------------------------------------------
-; PSG (SN76489) -> AY, called from a handler through psg_w (fw.asm) and
-; fw2_call. See the header there.
+; Priority tiles in 224-line mode. Layer 2 is 320x256 (pages L2W_PAGE to
+; L2W_PAGE+9, a column of 256 bytes after the other, 32 columns a page),
+; so it covers the 224 lines and all 32 rows of the SMS map: Layer 2 line
+; y holds map line y, and the Y scroll (NextReg $17) is V - 16, as SMS line
+; 0 is 16 lines above the 192-line area. Across, the 320 columns are 40
+; groups of 8, and a ring of 33 groups holds the 32 map cell columns: map
+; cell column p2_kc + i in group p2_bg + i (mod 40), and p2_kc once more in
+; group p2_bg + 32, so the 256 pixels from any map column in p2_kc's cell
+; are 256 Layer 2 columns in a row. When H scroll moves the first map
+; column shown into another cell, the ring moves with it and only the cell
+; columns that change group are drawn (p2_col). P2_ROWS keeps, per group,
+; the rows that may hold pixels. Marks and pri_chg work as in 192-line mode.
 ; ----------------------------------------------------------------------
-psg_w2:
-		bit 7,c
-		jr z,psg_w2__data
-		ld a,c
+pri224:		ld a,(pri_full)
+		or a
+		jp nz,p2_rebuild
+		ld a,(vdp_regs+8)
+		neg			; K: the first map column shown
+		ld (p2_k),a
 		rrca
 		rrca
 		rrca
-		rrca
-		and 7
-		ld (psg_latch),a
-		ld b,a
-		ld a,c
-		and $0F
-		ld e,a
-		ld a,b
-		rrca
-		and 3
-		ld d,a			; channel
-		bit 0,b
-		jr nz,psg_w2__vol
-		cp 3
-		jr z,psg_w2__noise
-		call tone_ptr
-		ld a,(hl)
-		and $F0
-		or e
-		ld (hl),a
-		ld a,d
-		jp tone_upd
-psg_w2__vol:		ld a,e
-		jr psg_w2__setvol
-psg_w2__noise:		ld a,e
-		jr psg_w2__setnoise
-psg_w2__data:		ld a,(psg_latch)
-		ld b,a
-		rrca
-		and 3
-		ld d,a
-		bit 0,b
-		jr nz,psg_w2__vdata
-		cp 3
-		jr z,psg_w2__ndata
-		call tone_ptr
-		ld a,c
-		and $0F
-		swapnib
-		ld e,a
-		ld a,(hl)
-		and $0F
-		or e
-		ld (hl),a
-		inc hl
-		ld a,c
-		and $3F
-		swapnib
-		and 3
-		ld (hl),a
-		ld a,d
-		jp tone_upd
-psg_w2__vdata:		ld a,c
-		and $0F
-psg_w2__setvol:	ld e,a
-		ld a,d
-		add a,255&(psg_vol)
-		ld l,a
-		ld a,255&((psg_vol)>>8)
-		adc a,0
-		ld h,a
-		ld (hl),e
-		ld a,e
-		add a,255&(ay_vol_table)
-		ld l,a
-		ld h,255&((ay_vol_table)>>8)
-		ld e,(hl)
-		ld a,d
-		cp 3
-		jr z,psg_w2__nvol
-		add a,8
-		ld d,e
-		ld e,a
-		ld a,$FF
-		jp ay_write
-psg_w2__nvol:		ld d,e
-		ld e,8
-		ld a,$FE
-		jp ay_write
-psg_w2__ndata:		ld a,c
-psg_w2__setnoise:	and 7
-		ld (psg_noise),a
-		jp noise_upd
-
-; A = channel -> HL = &psg_tone[ch]
-tone_ptr:	add a,a
-		add a,255&(psg_tone)
-		ld l,a
-		ld a,255&((psg_tone)>>8)
-		adc a,0
-		ld h,a
-		ret
-
-; A = channel: DE = AY period, N * 250 / 256 rounded (the exact ratio is
-; 1.75 MHz * 2 / 3.579545 MHz = 0.9778; 250/256 = 0.9766)
-tone_period:
-		call tone_ptr
-		ld a,(hl)
-		inc hl
-		ld b,(hl)		; N high
-		ld d,a
-		ld e,250
-		mul d,e
-		ld a,e
-		add a,128		; round
-		ld a,d
-		adc a,0
-		ld c,a			; (N low * 250 + 128) >> 8
-		ld d,b
-		ld e,250
-		mul d,e			; N high * 250
-		ld a,e
+		and $1F
+		ld hl,p2_kc
+		sub (hl)
+		and $1F			; cells moved right (mod 32)
+		jr z,p2_cells
+		cp 16
+		jr nc,p2_left
+		ld b,a			; right: cell columns kc+1..kc+d into groups bg+33..bg+32+d
+		ld c,1
+p2_right__l:	push bc
+		ld a,(p2_kc)
 		add a,c
-		ld e,a
-		ld a,d
-		adc a,0
-		ld d,a
-		ret
-
-; A = channel 0-2: AY 0 tone period; channel 2 also moves the noise rate
-tone_upd:
-		push af
-		call tone_period
-		pop af
-		push af
-		add a,a
-		ld c,a			; AY register (fine)
-		ld b,d
-		ld d,e
-		ld e,c
-		ld a,$FF
-		push bc
-		call ay_write
+		and $1F
+		ld (pr_c),a
+		ld a,(p2_bg)
+		add a,32
+		add a,c
+		call p2_mod40
+		call p2_col
 		pop bc
 		inc c
-		ld e,c
-		ld d,b
-		ld a,$FF
-		call ay_write
-		pop af
-		cp 2
-		ret nz
-		ld a,(psg_noise)
-		and 3
-		cp 3
-		ret nz
-; noise register -> AY 1 channel A
-noise_upd:
-		ld a,(psg_noise)
-		and 3
-		cp 3
-		jr z,noise_upd__t2
-		; rates 0-2: the same as tone periods 16, 32, 64
-		ld b,a
-		ld hl,16
-		inc b
-noise_upd__sh:		dec b
-		jr z,noise_upd__got
-		add hl,hl
-		jr noise_upd__sh
-noise_upd__got:		ex de,hl
-		ld a,e			; N
-		ld d,a
-		ld e,250
-		mul d,e
-		ld e,d
-		ld d,0			; AY-equivalent period P
-		jr noise_upd__have
-noise_upd__t2:		ld a,2
-		call tone_period	; DE = P of tone 2
-noise_upd__have:		ld a,(psg_noise)
-		and 4
-		jr z,noise_upd__periodic
-		; white: AY noise period = P, 1..31
-		ld a,d
+		djnz p2_right__l
+		dec c			; d
+		ld a,(p2_kc)
+		add a,c
+		and $1F
+		ld (p2_kc),a
+		ld a,(p2_bg)
+		add a,c
+		call p2_mod40
+		ld (p2_bg),a
+		jr p2_cells
+p2_left:	neg
+		add a,32		; e: cells moved left
+		ld c,a
+		ld a,(p2_kc)
+		sub c
+		and $1F
+		ld (p2_kc),a
+		ld a,(p2_bg)
+		sub c
+		jr nc,p2_left__b
+		add a,40
+p2_left__b:	ld (p2_bg),a
+		ld b,c			; cell columns kc'..kc'+e-1 into groups bg'..bg'+e-1
+		ld c,0
+p2_left__l:	push bc
+		ld a,(p2_kc)
+		add a,c
+		and $1F
+		ld (pr_c),a
+		ld a,(p2_bg)
+		add a,c
+		call p2_mod40
+		call p2_col
+		pop bc
+		inc c
+		djnz p2_left__l
+		ld a,(p2_kc)		; and kc' once more after the ring
+		ld (pr_c),a
+		ld a,(p2_bg)
+		add a,32
+		call p2_mod40
+		call p2_col
+p2_cells:	ld a,(pri_redo)		; tiles of priority cells changed
 		or a
-		ld a,31
-		jr nz,noise_upd__np
-		ld a,e
-		cp 32
-		jr c,noise_upd__np0
-		ld a,31
-noise_upd__np0:		or a
-		jr nz,noise_upd__np
+		call nz,p2_redraw
+		ld b,0			; marked cells, row by row
+p2_cells__r:	ld h,$1B
+		ld a,b
+		add a,$E0
+		ld l,a
+		ld a,(hl)
+		or a
+		jr z,p2_cells__rn
+		ld (hl),0
+		ld a,b
+		ld (pr_r),a
+		push bc
+		xor a
+p2_cells__c:	ld (pr_c),a
+		call pri_mk
+		bit 0,(hl)
+		jr z,p2_cells__cn
+		res 0,(hl)
+		call p2_cell
+p2_cells__cn:	ld a,(pr_c)
 		inc a
-noise_upd__np:		ld d,a
-		ld e,6
-		ld a,$FE
-		call ay_write
-		ld d,%00110111		; noise A on, tones off
-		jr noise_upd__mix
-noise_upd__periodic:	; tone at 1/16 of the shift rate: AY period 16 * P, at most 4095
-		ex de,hl
+		cp 32
+		jr nz,p2_cells__c
+		pop bc
+p2_cells__rn:	inc b
+		ld a,b
+		cp 32
+		jr nz,p2_cells__r
+p2_done:	ld a,(p2_bg)		; Layer 2 X: map column K at SMS x 0, at Next
+		ld l,a			; X 34 (left border + PIC_X)
+		ld h,0
 		add hl,hl
+		add hl,hl
+		add hl,hl		; 8 bg
+		ld a,(p2_k)
+		and 7
+		add hl,a
+		ld de,320-34
+		add hl,de
+		ld de,-320
+p2_done__m:	add hl,de
+		jr c,p2_done__m
+		ld de,320
+		add hl,de		; (8 bg + (K and 7) - 34) mod 320
+		ld a,l
+		nextreg $16,a
+		ld a,h
+		nextreg $71,a
+		ld a,(vdp_regs+9)
+		sub 16
+		nextreg $17,a
+		nextreg $50,FW3_PAGE
+		ret
+
+; A = 0-79 -> A mod 40
+p2_mod40:	cp 40
+		ret c
+		sub 40
+		ret
+
+; The whole of Layer 2 from the name table (start, mode, name table base)
+p2_rebuild:	xor a
+		ld (pri_full),a
+		ld (pri_redo),a		; every cell is drawn from its tile now
+		ld hl,pri_chg
+		ld b,64
+p2_rebuild__c:	ld (hl),a
+		inc hl
+		djnz p2_rebuild__c
+		ld hl,$1BC0		; no marks
+		ld de,$1BC1
+		ld bc,$0440-1
+		ld (hl),a
+		ldir
+		ld hl,pri_tiles
+		ld b,64
+p2_rebuild__t:	ld (hl),0
+		inc hl
+		djnz p2_rebuild__t
+		ld a,(vdp_regs+8)
+		neg
+		ld (p2_k),a
+		rrca
+		rrca
+		rrca
+		and $1F
+		ld (p2_kc),a
+		xor a
+		ld (p2_bg),a
+		ld b,40			; every group: the ring's 33, the other 7 cleared
+p2_rebuild__g:	push bc
+		ld a,40
+		sub b
+		ld (p2_g),a
+		cp 33
+		jr nc,p2_rebuild__x
+		ld c,a
+		ld a,(p2_kc)
+		add a,c
+		and $1F
+		ld (pr_c),a
+		ld a,c
+		call p2_col
+		jr p2_rebuild__n
+p2_rebuild__x:	call p2_gclr
+p2_rebuild__n:	pop bc
+		djnz p2_rebuild__g
+		jp p2_done
+
+; Group A gets cell column pr_c: the rows it held are cleared, then each
+; priority cell of the column is drawn
+p2_col:		ld (p2_g),a
+		call p2_gclr
+		xor a
+p2_col__r:	ld (pr_r),a
+		call pri_ent
+		ld a,(pr_th)
+		and $10
+		jr z,p2_col__n
+		call pri_mk
+		set 1,(hl)
+		call pri_tile
+		call p2_put
+p2_col__n:	ld a,(pr_r)
+		inc a
+		cp 32
+		jr nz,p2_col__r
+		ret
+
+; Group p2_g: the cells of the rows it may hold pixels in cleared
+p2_gclr:	call p2_rowp		; HL = its 4 row bytes
+		ld c,0			; row
+p2_gclr__b:	ld a,(hl)
+		ld (hl),0
+		ld b,8
+p2_gclr__r:	rrca
+		jr nc,p2_gclr__n
+		push af
+		push bc
+		push hl
+		ld a,c
+		ld (pr_r),a
+		call p2_zero
+		pop hl
+		pop bc
+		pop af
+p2_gclr__n:	inc c
+		djnz p2_gclr__r
+		inc hl
+		ld a,c
+		cp 32
+		jr nz,p2_gclr__b
+		ret
+
+; HL = P2_ROWS entry of group p2_g (4 bytes, bit r = row r)
+p2_rowp:	ld a,(p2_g)
+		add a,a
+		add a,a
+		ld hl,P2_ROWS
+		add hl,a
+		ret
+; HL = the byte of row pr_r in group p2_g's P2_ROWS entry, A = its bit
+p2_rowb:	call p2_rowp
+		ld a,(pr_r)
+		rrca
+		rrca
+		rrca
+		and 3
+		add hl,a
+		ld a,(pr_r)
+		and 7
+		ld de,pri_bit
+		add de,a
+		ld a,(de)
+		ret
+
+; Cell (pr_r, pr_c) again, in its group and, for column p2_kc, the group
+; after the ring too: its tile with the priority bit, else zeros where the
+; group holds pixels. Bit 1 of its mark: Layer 2 holds it.
+p2_cell:	call pri_ent
+		call pri_mk
+		ld a,(pr_th)
+		and $10
+		jr nz,p2_cell__p
+		res 1,(hl)
+		jr p2_cell__g
+p2_cell__p:	set 1,(hl)
+p2_cell__g:	ld a,(pr_c)
+		ld hl,p2_kc
+		sub (hl)
+		and $1F
+		ld hl,p2_bg
+		add a,(hl)
+		call p2_mod40
+		call p2_cell1
+		ld a,(pr_c)
+		ld hl,p2_kc
+		cp (hl)
+		ret nz
+		ld a,(p2_bg)
+		add a,32
+		call p2_mod40
+p2_cell1:	ld (p2_g),a
+		ld a,(pr_th)
+		and $10
+		jr z,p2_cell1__z
+		call pri_tile
+		jp p2_put
+p2_cell1__z:	call p2_rowb		; zeros where the group holds pixels
+		and (hl)
+		ret z
+		jp p2_zero
+
+; Slot 6 = the Layer 2 page of group p2_g; DE = the cell (p2_g, pr_r) there
+p2_page:	ld a,(p2_g)
+		ld e,a
+		rrca
+		rrca
+		and $3F
+		add a,L2W_PAGE
+		ld hl,pri_pg
+		cp (hl)
+		jr z,p2_page__s
+		ld (hl),a
+		nextreg $56,a
+p2_page__s:	ld a,e
+		and 3
+		add a,a
+		add a,a
+		add a,a
+		or $C0
+		ld d,a
+		ld a,(pr_r)
+		add a,a
+		add a,a
+		add a,a
+		ld e,a
+		ret
+
+; Cell (p2_g, pr_r): zeros, and its row's bit in P2_ROWS cleared
+p2_zero:	call p2_rowb
+		cpl
+		and (hl)
+		ld (hl),a
+		call p2_page
+		ld c,e
+		xor a
+		ld b,8
+p2_zero__c:
+		rept 8
+		ld (de),a
+		inc e
+		endr
+		ld e,c
+		inc d
+		djnz p2_zero__c
+		ret
+
+; Cell (p2_g, pr_r): the tile of pr_tl/pr_th, a column of Layer 2 after the
+; other for its 8 pixels; its row's bit in P2_ROWS set
+p2_put:		call p2_rowb
+		or (hl)
+		ld (hl),a
+		call p2_page
+		ld a,(pr_th)
+		ld b,a
+		and 1
+		ld h,a
+		ld a,(pr_tl)
+		ld l,a
+		add hl,hl
+		add hl,hl
+		add hl,hl
+		add hl,hl
+		add hl,hl		; tile * 32
+		ld a,h
+		add a,$80		; Next tile definitions at $8000
+		ld h,a
+		ld a,b
+		and 8
+		add a,a
+		ld c,a			; $10: the sprite palette (entries 16-31)
+		ld a,b
+		ld (p2_fl),a
+		bit 2,a			; V flip: from the last row up
+		jr z,p2_put__v
+		ld a,28
+		add hl,a
+p2_put__v:	ld a,8
+		ld (p2_n),a
+p2_put__r:	ld b,4
+		ld a,(p2_fl)
+		bit 1,a			; H flip
+		jr nz,p2_put__f
+p2_put__p:	ld a,(hl)
+		swapnib
+		and $0F
+		or c
+		ld (de),a
+		inc d
+		ld a,(hl)
+		and $0F
+		or c
+		ld (de),a
+		inc d
+		inc hl
+		djnz p2_put__p
+		jr p2_put__n
+p2_put__f:	inc hl
+		inc hl
+		inc hl
+p2_put__q:	ld a,(hl)
+		and $0F
+		or c
+		ld (de),a
+		inc d
+		ld a,(hl)
+		swapnib
+		and $0F
+		or c
+		ld (de),a
+		inc d
+		dec hl
+		djnz p2_put__q
+		ld a,5
+		add hl,a
+p2_put__n:	ld a,d
+		sub 8
+		ld d,a
+		inc e
+		ld a,(p2_fl)
+		bit 2,a
+		jr z,p2_put__d
+		ld a,l			; V flip: back 2 rows
+		sub 8
+		ld l,a
+		jr nc,p2_put__d
+		dec h
+p2_put__d:	ld a,(p2_n)
+		dec a
+		ld (p2_n),a
+		jr nz,p2_put__r
+		ret
+
+; pri_redo: every priority cell whose tile changed (pri_chg), then pri_chg
+; is cleared
+p2_redraw:	xor a
+		ld (pri_redo),a
+		ld (pr_r),a
+p2_redraw__r:	xor a
+		ld (pr_c),a
+		call pri_ent		; HL = the row's first entry (high byte)
+		ld b,32
+p2_redraw__c:	bit 4,(hl)
+		jr z,p2_redraw__n
+		push hl
+		push bc
+		ld a,32
+		sub b
+		ld (pr_c),a
+		call pri_ent
+		call pri_tbit		; HL = its pri_chg byte, A = bit
+		and (hl)
+		call nz,p2_cell
+		pop bc
+		pop hl
+p2_redraw__n:	inc hl
+		inc hl
+		djnz p2_redraw__c
+		ld a,(pr_r)
+		inc a
+		ld (pr_r),a
+		cp 32
+		jr nz,p2_redraw__r
+		ld hl,pri_chg
+		ld b,64
+p2_redraw__z:	ld (hl),0
+		inc hl
+		djnz p2_redraw__z
+		ret
+
+p2_k:		db 0			; K, the first map column shown
+p2_kc:		db 0			; the ring's first cell column
+p2_bg:		db 0			; and its group
+p2_g:		db 0			; the group being drawn
+p2_fl:		db 0			; the entry's high byte while it is drawn
+p2_n:		db 0			; rows left to draw
+P2_ROWS		equ $1400		; per group, 4 bytes: the rows that may hold pixels
+					; (MAP_PAGE, here at $0000, after the A8 map)
+
+; ----------------------------------------------------------------------
+; Code pages (far_go in fw.asm calls this with this page at $2000): the
+; RAM page and address of entry far_e of the file's page far_p. Returns
+; A = the RAM page, HL = the entry. A page the file does not have, or an
+; entry the page does not list, stops the game (fw_fatal). Keeps BC, DE.
+; Notes slot 1's page before the call in far_prev, and in pg_under too
+; when it is not a code page (the outermost call: the game's own page).
+far_find:	ld hl,pg_irq		; the game's interrupt entries through pg_irq
+		ld (irq_t1+1),hl	; (irq_slot1 puts $0038 back)
+		ld (irq_t2+1),hl
+		ld a,(cur_mmu+1)
+		ld (far_prev),a
+		sub CODE_PAGE
+		cp CODE_MAX
+		jr c,far_find__in
+		ld a,(far_prev)
+		ld (pg_under),a
+far_find__in:	ld a,(far_p)
+		cp CODE_MAX
+		jp nc,fw_fatal
+		ld hl,pg_ram
+		add hl,a
+		ld a,(hl)
+		or a
+		jp z,fw_fatal
+		push de
+		ld d,a			; the RAM page
+		ld a,CODE_MAX
+		add hl,a		; pg_n
+		ld a,(far_e)
+		cp (hl)
+		jp nc,fw_fatal
+		ld e,a
+		ld a,CODE_MAX
+		add hl,a		; pg_first
+		ld a,e
+		add a,(hl)		; the entry's place in pg_ent
+		ld hl,pg_ent
+		add hl,a
+		add hl,a
+		ld a,(hl)
+		inc hl
+		ld h,(hl)
+		ld l,a
+		ld a,d
+		pop de
+		ret
+; From pg_irq (fw.asm): a game interrupt entry, its return slot at irq_s,
+; while irq_t1 and irq_t2 lead to pg_irq. The game's handler must not see
+; a code page in $2000-$3FFF. If cur_mmu+1 names one (the interrupt came
+; while a far call's entry ran), cur_mmu+1 becomes the game's page under it
+; (pg_under), and pg_tramp (fw.asm) goes in the return slot to put the code
+; page back when the handler returns. If not, no far call is running, and
+; irq_t1 and irq_t2 go back to $0038. fw2_call then maps cur_mmu+1 in slot
+; 1, which also covers an interrupt between a write of cur_mmu+1 and its
+; NEXTREG. One such return is pending at a time: while a frame handler
+; runs, the runtime holds further events (frm_run). Uses A, HL.
+irq_slot1:	ld a,(cur_mmu+1)
+		sub CODE_PAGE
+		cp CODE_MAX
+		jr c,irq_slot1__cp
+		ld hl,$0038
+		ld (irq_t1+1),hl
+		ld (irq_t2+1),hl
+		ret
+irq_slot1__cp:	ld a,(cur_mmu+1)
+		ld (pg_tramp_p+1),a
+		push de
+		ld hl,(irq_s)
+		ld e,(hl)
+		inc hl
+		ld d,(hl)
+		ld (pg_tramp_j1+1),de
+		ld (pg_tramp_j2+1),de
+		ld (hl),pg_tramp>>8
+		dec hl
+		ld (hl),255&pg_tramp
+		ld hl,(isr_sp)		; a frame entry (irq_go, frm_rec): its noted
+		ld a,(irq_s)		; return address is now pg_tramp, so that
+		cp l			; frm_run still sees the handler run
+		jr nz,irq_slot1__nf
+		ld a,(irq_s+1)
+		cp h
+		jr nz,irq_slot1__nf
+		ld hl,(isr_ret)
+		or a
+		sbc hl,de
+		jr nz,irq_slot1__nf
+		ld hl,pg_tramp
+		ld (isr_ret),hl
+irq_slot1__nf:	pop de
+		ld a,(pg_under)
+		ld (cur_mmu+1),a
+		ret
+; From fw_ula_irq (fw.asm): the pause NMI goes to the game's $0066, its
+; return slot at DE. As irq_slot1, the handler gets the game's page in
+; slot 1 if a far call's entry runs, and returns through pg_tramp. irq_t1
+; and irq_t2 stay as they are, and the NMI is not a frame entry. Uses A,
+; HL, DE.
+nmi_slot1:	ld a,(cur_mmu+1)
+		sub CODE_PAGE
+		cp CODE_MAX
+		ret nc
+		ld a,(cur_mmu+1)
+		ld (pg_tramp_p+1),a
+		ex de,hl
+		ld e,(hl)
+		inc hl
+		ld d,(hl)
+		ld (pg_tramp_j1+1),de
+		ld (pg_tramp_j2+1),de
+		ld (hl),pg_tramp>>8
+		dec hl
+		ld (hl),255&pg_tramp
+		ld a,(pg_under)
+		ld (cur_mmu+1),a
+		ret
+; ----------------------------------------------------------------------
+; Tiles from cart ROM. tc_build (fw4) converts the whole cart at game start
+; into CONVT_PAGE: page n of the cart in page CONVT_PAGE + n, every 4 bytes
+; converted as one row of a tile, at the same offset. vram_block calls
+; kn_block (fw2_call) after every block. For a block not read from RAM,
+; kn_note takes each tile the block wrote whole, from one cart page, with
+; its source 4-byte aligned like its VRAM address (so its rows are rows of
+; the converted page): it notes the tile's converted copy in TKC_PAGE (page
+; and address in slot 6) and sets its kn_pages bit in place of its
+; dirty_pages bit. tile_flush (fw3) copies such a tile from the converted
+; page instead of converting the shadow. Any later write to the tile sets
+; its dirty_pages bit, and the shadow is converted as before.
+; TKC_PAGE, at $C000 while it is used:
+KN_PAGES	equ $C000+(255&dirty_pages)	; per VRAM page a bit per tile, at the same
+					; low byte as dirty_pages
+TK_PG		equ $C100		; per tile (512): the converted page
+TK_LO		equ $C300		; per tile: the address, low byte
+TK_HI		equ $C500		; per tile: the address, high byte ($C0-$DF)
+; ----------------------------------------------------------------------
+; From kn_entry (fw.asm) at the end of vram_block, through fw2_call, for a
+; block not read from RAM or the trace buffer: DE = the source after the
+; block. Ends with tw_check's work.
+kn_block:
+		call kn_note
+		ld a,(tw_cnt+1)
+		cp TW_MAX
+		ret c
+		jp tw_flush
+; DE = the source after the block
+kn_note:
+		ld hl,(blk_cnt)
+		ex de,hl
+		or a
+		sbc hl,de		; HL = the block's source
+		ld de,(blk_start)
+		ld a,l
+		sub e
+		and 3
+		ret nz			; source and VRAM address not aligned alike
+		push hl
+		ld hl,(blk_cnt)
+		add hl,de		; the VRAM end
+		ld a,h
+		cp $40
+		jr c,kn_block__e
+		jp nz,kn_block__r
+		ld a,l
+		or a
+		jp nz,kn_block__r	; the block wraps past $3FFF
+kn_block__e:	ld a,l
+		and $E0
+		ld l,a
+		ld (kn_end),hl		; the end of the last whole tile
+		ld hl,31
+		add hl,de
+		ld a,l
+		and $E0
+		ld l,a			; HL = the first whole tile
+		or a
+		sbc hl,de		; its offset in the block
+		ld b,h
+		ld c,l
+		pop hl
+		add hl,bc		; HL = its source
+		ex de,hl
+		add hl,bc
+		ex de,hl		; DE = the first whole tile
+		push hl
+		ld hl,(kn_end)
+		or a
+		sbc hl,de
+		jp c,kn_block__r
+		jp z,kn_block__r	; no whole tile
 		add hl,hl
 		add hl,hl
 		add hl,hl
 		ld a,h
-		cp $10
-		jr c,noise_upd__pok
-		ld hl,$0FFF
-noise_upd__pok:		push hl
-		ld d,l
-		ld e,0
-		ld a,$FE
-		call ay_write
+		ld (kn_n),a		; whole tiles
+		ld a,e
+		call tmask		; the first tile's bit
+		ld (kn_bit),a
+		ld a,e			; BC = TK_PG + tile (VRAM address / 32)
+		rlca
+		rlca
+		rlca
+		and 7
+		ld c,a
+		ld a,d
+		add a,a
+		add a,a
+		add a,a
+		or c
+		ld c,a
+		ld a,d
+		rlca
+		rlca
+		rlca
+		and 1
+		add a,255&(TK_PG>>8)
+		ld b,a
 		pop hl
-		ld d,h
-		ld e,1
-		ld a,$FE
-		call ay_write
-		ld d,%00111110		; tone A on, noise off
-noise_upd__mix:		ld e,7
-		ld a,$FE
-		jp ay_write
+		nextreg $56,TKC_PAGE
+kn_block__t:	; DE = the tile's VRAM address, HL = its source, BC = TK_PG + tile
+		push hl
+		ld h,255&((region_tab)>>8)
+		ld l,d
+		ld a,(hl)
+		pop hl
+		or a
+		jp z,kn_block__rg
+		cp 3
+		jp z,kn_block__rg	; name table rows that hold tiles too
+		cp 2
+		jp nz,kn_block__nx	; the name table
+		ld a,e
+		and $C0
+		cp $40
+		jp nz,kn_block__nx	; sprite table bytes the VDP reads
+kn_block__rg:	ld a,h
+		or $E0
+		inc a
+		jr nz,kn_block__in
+		ld a,l
+		cp $E1
+		jp nc,kn_block__nx	; the source runs into the next 8K slot
+kn_block__in:	ld a,h
+		rlca
+		rlca
+		rlca
+		and 7
+		cp 6
+		jp nc,kn_block__nx	; SMS RAM
+		push hl
+		ld hl,cur_mmu
+		add hl,a
+		ld a,(hl)
+		ld hl,fw_npages
+		sub CART_PAGE
+		jr c,kn_block__np
+		cp (hl)
+		jr nc,kn_block__np	; cart RAM
+		pop hl
+kn_block__nt:	add a,CONVT_PAGE
+		ld (bc),a		; TK_PG: the converted page
+		inc b
+		inc b
+		ld a,l
+		ld (bc),a		; TK_LO
+		inc b
+		inc b
+		ld a,h
+		and $1F
+		or $C0
+		ld (bc),a		; TK_HI: in slot 6
+		dec b
+		dec b
+		dec b
+		dec b
+		push hl
+		ld h,255&((region_tab)>>8)
+		ld l,d
+		set 6,l			; dirty_pages entry off, kn_pages entry on
+		ld a,(kn_bit)
+		cpl
+		and (hl)
+		ld (hl),a
+		ld h,255&(KN_PAGES>>8)
+		ld a,(kn_bit)
+		or (hl)
+		ld (hl),a
+		ld (kn_any),a
+		pop hl
+		jp kn_block__nx
+kn_block__np:	pop hl
+kn_block__nx:	ld a,(kn_bit)
+		rlca
+		ld (kn_bit),a
+		inc bc
+		ld a,e
+		add a,32
+		ld e,a
+		jr nc,kn_block__d
+		inc d
+kn_block__d:	ld a,l
+		add a,32
+		ld l,a
+		jr nc,kn_block__s
+		inc h
+kn_block__s:	ld a,(kn_n)
+		dec a
+		ld (kn_n),a
+		jp nz,kn_block__t
+kn_block__x:	ld a,(cur_mmu+6)
+		nextreg $56,a
+		ret
+kn_block__r:	pop hl
+		ret
+
+kn_end:		dw 0
+kn_n:		db 0
+kn_bit:		db 0
+
+; The table of the overlay's code pages. The loader clears it before it
+; reads a file and fills it from the file's PAGE chunks, through MMU6.
+pg_tab:
+pg_ram:		ds CODE_MAX		; RAM page of each page number, 0 = none
+pg_n:		ds CODE_MAX		; its number of entries
+pg_first:	ds CODE_MAX		; its first entry in pg_ent
+pg_ent:		ds 2*CODE_ENTS		; entry addresses, in $2000-$3FFF
 
 
 fw2_end:

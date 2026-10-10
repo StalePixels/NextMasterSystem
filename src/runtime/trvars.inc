@@ -25,8 +25,8 @@ tr_pc:		dw 0
 tr_cok:		db 0			; port C's class is the trace's
 tr_loop:	db 0			; the copy ends in a jump back over the site
 tr_nout:	db 0			; outputs in the copied range
-tr_rr:		db 0			; next cache entry to fill
+tr_gen:		db 0			; code generation << 3 (tr_newcode)
 tr_aptr:	dw TR_CODE		; next free byte of trace code
 tr_key:		db 0			; trace class, + $10 for a port C trace
 tr_gcls:	db 0			; class of port C at the site
-tr_idx:		db 0			; cache entry being filled
+tr_after:	dw 0			; the first byte after the run (tr_rscan), for tr_build

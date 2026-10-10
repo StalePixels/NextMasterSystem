@@ -1,11 +1,18 @@
 # NextMasterSystem: build/nms.nex
 #
 #   make          build everything
+#   make TRACE=1  the trace build, build/trace/nms.nex: the runtime with its
+#                 checks for test tools (src/runtime/vdpcheck.asm)
 #   make clean    remove build/
 #
 # Needs z88dk 2.4 (zcc and z88dk-z80asm on PATH), make, sh, awk and sed.
 
 BUILD  := build
+RTDEFS :=
+ifeq ($(TRACE),1)
+BUILD  := build/trace
+RTDEFS := -DTRACE_BUILD
+endif
 RT     := src/runtime
 SH     := src/shell
 ZCC    ?= zcc
@@ -17,10 +24,11 @@ ABS    := $(CURDIR)
 # linked into the high half of one 16K bank. To add a module: add its name
 # here, set <name>_SEG, add its PAGE_ number to src/shell/nm.h. See
 # docs/design.md, "Adding a C module".
-MODULES := session loader info
+MODULES := session loader info overlay
 session_SEG := BANK_54_H
 loader_SEG  := BANK_55_H
 info_SEG    := BANK_56_H
+overlay_SEG := BANK_57_H
 # objects that must come first in their bank (the CRC32 table is page aligned)
 loader_FIRST := $(BUILD)/loader/crc32.o
 
@@ -42,7 +50,7 @@ $(1)_ORDERED := $$($(1)_FIRST) $$(filter-out $$($(1)_FIRST),$$($(1)_OBJ))
 BANK_OBJ += $$($(1)_ORDERED)
 SEGFLAGS_$(1) := --codeseg$$($(1)_SEG) --constseg$$($(1)_SEG) \
                  --dataseg$$($(1)_SEG) --bssseg$$($(1)_SEG)
-$$(BUILD)/$(1)/%.o: $$(SH)/$(1)/%.c $$(BUILD)/memplan.h $$(BUILD)/fwsyms.h $$(SH)/nm.h
+$$(BUILD)/$(1)/%.o: $$(SH)/$(1)/%.c $$(BUILD)/memplan.h $$(BUILD)/fwsyms.h $$(SH)/nm.h $$(SH)/nms.h
 	@mkdir -p $$(@D)
 	$$(ZCC) $$(CFLAGS) -c $$(SEGFLAGS_$(1)) $$< -o $$@
 $$(BUILD)/$(1)/%.o: $$(SH)/$(1)/%.asm $$(BUILD)/memplan.h
@@ -53,14 +61,15 @@ $(foreach m,$(MODULES),$(eval $(call module_rules,$(m))))
 
 # ---- the runtime pages ---------------------------------------------------
 RT_SRC := $(wildcard $(RT)/*.asm) $(wildcard $(RT)/*.inc)
-RT_BINS := $(BUILD)/rt/runtime_fw.bin $(BUILD)/rt/runtime_fw2.bin $(BUILD)/rt/runtime_fw3.bin
+RT_BINS := $(BUILD)/rt/runtime_fw.bin $(BUILD)/rt/runtime_fw2.bin $(BUILD)/rt/runtime_fw3.bin \
+           $(BUILD)/rt/runtime_fw4.bin
 
 .PHONY: all clean
 all: $(BUILD)/nms.nex
 
 $(BUILD)/rt/runtime.map: $(RT_SRC)
 	@mkdir -p $(BUILD)/rt
-	cd $(RT) && $(Z80ASM) -mz80n -b -m -s -split-bin -O$(ABS)/$(BUILD)/rt runtime.asm
+	cd $(RT) && $(Z80ASM) -mz80n -b -m -s -split-bin $(RTDEFS) -O$(ABS)/$(BUILD)/rt runtime.asm
 
 $(RT_BINS): $(BUILD)/rt/runtime.map
 
@@ -74,7 +83,7 @@ $(BUILD)/memplan.h: $(RT)/memplan.inc
 # The runtime's addresses the shell needs, from the runtime's map.
 FWSYMS := fw_crc:FW_CRC fw_start_addr:FW_START_ADDR fw_start_sp:FW_START_SP \
           rast_hook:RAST_HOOK ramp_hook:RAMP_HOOK fw_flags:FW_FLAGS \
-          nr_saved:NR_SAVED fw_resume:FW_RESUME
+          nr_saved:NR_SAVED fw_resume:FW_RESUME pg_tab:PG_TAB
 $(BUILD)/fwsyms.inc $(BUILD)/fwsyms.h: $(BUILD)/rt/runtime.map
 	@echo "; generated from the runtime map, do not edit" > $(BUILD)/fwsyms.inc
 	@echo "/* generated from the runtime map, do not edit */" > $(BUILD)/fwsyms.h
@@ -83,12 +92,13 @@ $(BUILD)/fwsyms.inc $(BUILD)/fwsyms.h: $(BUILD)/rt/runtime.map
 	  a=$$(awk -v s=$$s '$$1 == s { print $$3; exit }' $<); \
 	  [ -n "$$a" ] || { echo "symbol $$s not in $<" >&2; exit 1; }; \
 	  echo "defc $$n = $$a" >> $(BUILD)/fwsyms.inc; \
+	  echo "#define $$n ($$a)" | sed 's/\$$/0x/' >> $(BUILD)/fwsyms.h; \
 	done
 	@a=$$(awk '$$1 == "FW_ABI" { print $$3; exit }' $<); \
 	  echo "#define FW_ABI ($${a/\$$/0x})" | sed 's/\$$/0x/' >> $(BUILD)/fwsyms.h
 
 # ---- the shell --------------------------------------------------------------
-$(BUILD)/res/%.o: $(SH)/%.c $(BUILD)/memplan.h $(BUILD)/fwsyms.h $(SH)/nm.h
+$(BUILD)/res/%.o: $(SH)/%.c $(BUILD)/memplan.h $(BUILD)/fwsyms.h $(SH)/nm.h $(SH)/nms.h
 	@mkdir -p $(@D)
 	$(ZCC) $(CFLAGS) -c $< -o $@
 
@@ -105,4 +115,4 @@ $(BUILD)/nms.nex: $(RESIDENT_OBJ) $(BANK_OBJ) $(RT_BINS) tools/check-layout
 	tools/check-layout $(BUILD)/rt/runtime.map $(BUILD)/nms.map
 
 clean:
-	rm -rf $(BUILD)
+	rm -rf build

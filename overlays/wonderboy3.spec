@@ -4,6 +4,10 @@
 # bank 0 VDP routines at $0AC6-$0B4C and $0F75-$0F83. The remaining CHECK low
 # lines were looked at: operands of other instructions (a call to $41ED, a relative jump to $3400)
 # or data.
+# RST $20 is a jump through the table of words that follows the RST, indexed by A.
+# A scan that followed every such table found no other I/O instruction: the game
+# does its VDP I/O through RST $28 (OUT ($BF),A) and RST $30 (OUT ($BE),A), and
+# every mapper store in that code is in the list below.
 name Wonder Boy III - The Dragon's Trap
 cart 679E1676
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and interrupt mode 1 setup) becomes the vector,

@@ -4,6 +4,9 @@ cart A577CE46
 # line-0 palette and display: the race turns the display off for part of each
 # frame's work; on the Next that ran into the picture as a black band (batch 5)
 toppal
+# priority: the boats pass under priority tiles (the rack in the bath race,
+# in 224-line mode)
+priority
 # No free RST vector: the cart starts by disabling interrupts, setting SP to $DFFF and calling $0100.
 # $0000-$0002 becomes the vector; the game starts at the CALL ($0005) with SP $DFFF.
 vector 00 io
@@ -487,12 +490,25 @@ site 3BB4C   ; OTIR
 site 3BB4F   ; OUT ($BE),A
 site 3BB6D   ; OUT ($BE),A
 site 3BB72   ; OUT ($BE),A
+# The game runs a RAM copy of this ROM block (ROM $3BB99-$3BCB9 is RAM $D9D9-$DAF9).
+# The scan rated the next ten sites low; the SMS reference runs all of them. $3BBE0
+# and $3BBE4 (C = $BE) write the row of faces on the character choice screen.
+site 3BB99   ; OUT ($BE),A
+site 3BBA1   ; OUT ($BE),A
+site 3BBA7   ; OUT ($BE),A
+site 3BBAF   ; OUT ($BE),A
+site 3BBE0   ; OUT (C),A
+site 3BBE4   ; OUT (C),A
 site 3BC30   ; OTIR
 site 3BC33   ; OUT ($BE),A
 site 3BC45   ; OTIR
 site 3BC48   ; OUT ($BE),A
+site 3BC5C   ; OTIR
+site 3BC5F   ; OUT ($BE),A
 site 3BC6E   ; OUT ($BE),A
 site 3BC74   ; OUT ($BE),A
+site 3BCB6   ; OTIR
+site 3BCB9   ; OUT ($BE),A
 site 3BCC1   ; OUT ($BF),A
 site 3BCC4   ; OUT ($BF),A
 site 3BCC8   ; OUT ($BF),A
@@ -697,21 +713,11 @@ codem 3BD01   ; LD ($8000),A
 # CHECK low: site 35CF8  OUT ($F0),A  (fm_address)
 # CHECK low: site 384C9  OUT (C),A  (port in C)
 # CHECK low: site 389F8  IND  (port in C)
-# CHECK low: site 3BB99  OUT ($BE),A  (vdp_data)
-# CHECK low: site 3BBA1  OUT ($BE),A  (vdp_data)
-# CHECK low: site 3BBA7  OUT ($BE),A  (vdp_data)
-# CHECK low: site 3BBAF  OUT ($BE),A  (vdp_data)
-# CHECK low: site 3BBE0  OUT (C),A  (port in C)
-# CHECK low: site 3BBE4  OUT (C),A  (port in C)
 # CHECK low: site 3BBFD  IN A,($7E)  (v_counter)
 # CHECK low: site 3BBFF  OUT ($BE),A  (vdp_data)
 # CHECK low: site 3BC03  OUT ($BE),A  (vdp_data)
-# CHECK low: site 3BC5C  OTIR  (port in C)
-# CHECK low: site 3BC5F  OUT ($BE),A  (vdp_data)
 # CHECK low: site 3BC83  OUT ($BE),A  (vdp_data)
 # CHECK low: site 3BC87  OUT ($BE),A  (vdp_data)
-# CHECK low: site 3BCB6  OTIR  (port in C)
-# CHECK low: site 3BCB9  OUT ($BE),A  (vdp_data)
 # CHECK low: site 3C012  IN A,($BD)  (vdp_status)
 # CHECK low: site 3CA93  OUT (C),B  (port in C)
 # CHECK low: site 3CDEC  INIR  (port in C)

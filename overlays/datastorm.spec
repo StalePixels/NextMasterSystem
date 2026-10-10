@@ -5,11 +5,11 @@
 # The game itself uses RST $08 (at $0202/$0206); $10-$30 are free (zeros).
 name DataStorm 1.00
 cart 37B775D6
-vector 10 out_n
-vector 18 in_n
-vector 20 ed
-vector 28 ld_de_a
-vector 30 outi_run
+# One io vector for every I/O site: only with it can the builder give a loop its trace form,
+# so the loops that copy the sprite table go to the VDP as one block each.
+vector 10 io
+vector 18 ld_de_a
+vector 20 outi_run
 # crt0: IM 1 -> IM 2, so the Next line interrupt enters through the framework
 asm 0001 2   ; IM 1 -> IM 2
     im 2

@@ -233,6 +233,13 @@ site 00B92   ; OUT ($BE),A
 site 00BAE   ; OUT ($BF),A
 site 00BB5   ; OUT ($BF),A
 site 00BBA   ; OUT ($BE),A
+# Round change: the playfield scrolls to the next round and these write each new
+# name table row. The JR NZ before each first OUT jumps into the operand of
+# LD H,$AF, which runs as XOR A.
+site 02791   ; OUT ($BE),A
+site 02797   ; OUT ($BE),A
+site 0285B   ; OUT ($BE),A
+site 02861   ; OUT ($BE),A
 mapst 000D6   ; LD ($FFFE),A
 # CHECK mapper at 0011D ($011D bank 0): LDIR $FFFC-$FFFF
 mapst 00123   ; LD ($FFFF),A
@@ -315,11 +322,7 @@ mapst 0A87D   ; LD ($FFFE),A
 # CHECK low: site 02207  IN A,($3E)  (unmapped_read)
 # CHECK low: site 0234B  IN A,($3E)  (unmapped_read)
 # CHECK low: site 024B3  IN A,($3E)  (unmapped_read)
-# CHECK low: site 02791  OUT ($BE),A  (vdp_data)
-# CHECK low: site 02797  OUT ($BE),A  (vdp_data)
 # CHECK low: site 027C0  IN A,($3E)  (unmapped_read)
-# CHECK low: site 0285B  OUT ($BE),A  (vdp_data)
-# CHECK low: site 02861  OUT ($BE),A  (vdp_data)
 # CHECK low: site 02C04  IN A,($7E)  (v_counter)
 # CHECK low: site 02C4A  IN A,($7E)  (v_counter)
 # CHECK low: site 02C96  IN A,($BE)  (vdp_data)
@@ -591,10 +594,10 @@ mapst 0A87D   ; LD ($FFFE),A
 # CHECK low: site 17CAE  IN A,($DC)  (joypad_a)
 # CHECK low: site 17DC3  OUT ($BE),A  (vdp_data)
 # CHECK low: site 17DC8  OUT ($BE),A  (vdp_data)
-# CHECK low: site 17FA8  OUT ($BE),A  (vdp_data)
-# CHECK low: site 17FAC  OUT ($BE),A  (vdp_data)
-# CHECK low: site 17FB0  OUT ($BE),A  (vdp_data)
-# CHECK low: site 17FB5  OUT ($BE),A  (vdp_data)
+site 17FA8   ; OUT ($BE),A
+site 17FAC   ; OUT ($BE),A
+site 17FB0   ; OUT ($BE),A
+site 17FB5   ; OUT ($BE),A
 # CHECK low: site 1DC55  IN A,($3E)  (unmapped_read)
 # CHECK low: site 1DCB2  IN A,($7E)  (v_counter)
 # CHECK low: site 1DCD4  IN A,($3E)  (unmapped_read)
@@ -740,6 +743,7 @@ mapst 02904   ; LD ($FFFF),A
 mapst 02953   ; LD ($FFFE),A
 mapst 02979   ; LD ($FFFE),A
 mapst 02AE2   ; LD ($FFFF),A
+mapst 02B18   ; LD ($FFFE),A (byte scan: medium; in the same routine as 02AE2 to 02B3B)
 mapst 02B1D   ; LD ($FFFF),A
 mapst 02B34   ; LD ($FFFE),A
 mapst 02B3B   ; LD ($FFFF),A

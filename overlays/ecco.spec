@@ -1,6 +1,9 @@
 # Ecco the Dolphin, drafted by tools/mkspec.py from sitescan output.
 name Ecco the Dolphin
 cart 6687FAB9
+# tilecache: whole tiles copied from cart ROM are not converted again (MAME,
+# game frames 300-2300: framework cycles -1.7%, frames over 100% 4 -> 1)
+tilecache
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and interrupt mode 1 setup) becomes the vector,
 # the game starts at $0003 (the framework does DI and IM 2).
 vector 00 io
@@ -36,10 +39,6 @@ site 001D4   ; OTIR
 site 001D9   ; OUT ($BF),A
 site 001DD   ; OUT ($BF),A
 site 001DF   ; OTIR
-site 001F8   ; OUT ($BF),A
-site 001FB   ; OUT ($BF),A
-site 00200   ; OUTI
-site 00202   ; OUTI
 site 00220   ; OUT ($BF),A
 site 00227   ; OUT ($BF),A
 site 0022C   ; OTIR
@@ -304,22 +303,23 @@ mapsthl 01E11   ; LD ($FFFE),HL
 # CHECK low: site 6ADEA  IN A,($C0)  (joypad_a)
 # CHECK low: site 71267  IN B,(C)  (port in C)
 # CHECK low: site 76821  IN A,($C0)  (joypad_a)
-# CHECK low: site 784F1  OUT ($7F),A  (psg)
-# CHECK low: site 78506  OUT ($7F),A  (psg)
-# CHECK low: site 7850F  OUT ($7F),A  (psg)
-# CHECK low: site 7851A  OUT ($7F),A  (psg)
-# CHECK low: site 78545  OUT ($7F),A  (psg)
-# CHECK low: site 78699  OUT ($7F),A  (psg)
-# CHECK low: site 786D0  OUT ($7F),A  (psg)
-# CHECK low: site 786D9  OUT ($7F),A  (psg)
-# CHECK low: site 786F4  OUT ($7F),A  (psg)
-# CHECK low: site 786F8  OUT ($7F),A  (psg)
-# CHECK low: site 787AE  OUT ($7F),A  (psg)
-# CHECK low: site 787C4  OUT ($7F),A  (psg)
-# CHECK low: site 787DC  OUT ($7F),A  (psg)
-# CHECK low: site 787E0  OUT ($7F),A  (psg)
-# CHECK low: site 787EE  OUT ($7F),A  (psg)
-# CHECK low: site 7882C  OUT ($7F),A  (psg)
+# Sound driver PSG writes, bank 30: a byte-for-byte copy of bank 22 (patched above as 58xxx).
+site 784F1   ; OUT ($7F),A
+site 78506   ; OUT ($7F),A
+site 7850F   ; OUT ($7F),A
+site 7851A   ; OUT ($7F),A
+site 78545   ; OUT ($7F),A
+site 78699   ; OUT ($7F),A
+site 786D0   ; OUT ($7F),A
+site 786D9   ; OUT ($7F),A
+site 786F4   ; OUT ($7F),A
+site 786F8   ; OUT ($7F),A
+site 787AE   ; OUT ($7F),A
+site 787C4   ; OUT ($7F),A
+site 787DC   ; OUT ($7F),A
+site 787E0   ; OUT ($7F),A
+site 787EE   ; OUT ($7F),A
+site 7882C   ; OUT ($7F),A
 # CHECK low: site 788A2  IN C,(C)  (port in C)
 # CHECK low: site 788B4  OUT (C),C  (port in C)
 # CHECK low: site 788BE  OUT (C),C  (port in C)
@@ -336,3 +336,44 @@ mapst 01209   ; LD ($FFFE),A
 # not patched (data): mapst 32461  LD ($FFFF),A  (13 RST or NOP opcodes around it (looks like data); 32 bytes of valid code before it)
 # not patched (data): mapsthl 4511C  LD ($FFFD),HL  (21 RST or NOP opcodes around it (looks like data); 32 bytes of valid code before it)
 # not patched (data): mapsthl 45480  LD ($FFFD),HL  (32 bytes of valid code before it; no valid code after it)
+# Name table column upload in the frame handler ($01E8-$020F), as native code in page 0.
+# The game writes one column of 28 name table cells (2 bytes each) from its RAM copy at
+# $C000 (64 bytes a row) to VRAM $3800 + E + 64 * row, E = ($CBE3) AND $3F, with two
+# control writes and two OUTI per row: about 230,000 Next cycles through the traps,
+# in the frames where the screen scrolls by a column.
+asm 001E8 40         ; RES 4,(HL) and the column loop, up to the DJNZ at $020E
+    rst $00
+    db far_io, pg_ntcol, ent_ntcol
+    jp $0210
+endasm
+page 0 ntcol
+; ntcol: HL = $CA9A. Does what the game's code at $01E8-$020F does: RES 4,(HL),
+; then the 28 cells of name table column E = ($CBE3) AND $3F, from $C000 + E
+; + 64 * row to VRAM $3800 + E + 64 * row, in one call to the framework's
+; jt_vwrite (28 runs of 2 bytes, 64 bytes apart in the source and in VRAM).
+; Returns with the registers that code leaves: A = 1, B = 0, C = $3E,
+; HL = $C000 + E + 28 * 64, DE = $7F00 + E.
+ntcol:  res 4,(hl)
+        ld a,($CBE3)
+        and $3F
+        ld e,a
+        ld d,0
+        ld hl,$C000
+        add hl,de               ; the source: row 0 of the column
+        ld d,$38                ; DE = VRAM $3800 + E
+        push ix
+        push iy
+        ld ix,64                ; the source step
+        ld iy,64                ; the VRAM step
+        ld bc,$021C             ; 28 runs of 2 bytes
+        xor a                   ; the source as the game sees it
+        call jt_vwrite
+        pop iy
+        pop ix
+        ld bc,28*64
+        add hl,bc
+        ld d,$7F                ; registers as the game's loop leaves them
+        ld a,1
+        ld bc,$003E
+        ret
+endpage

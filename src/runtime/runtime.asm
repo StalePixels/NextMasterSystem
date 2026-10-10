@@ -1,7 +1,8 @@
-; runtime.asm: the three runtime pages, assembled as sections of one module
+; runtime.asm: the four runtime pages, assembled as sections of one module
 ; so they share symbols. Each section is written to its own file by
 ; z80asm -split-bin: fw (page at $E000), fw2 (page at $2000), fw3 (page at
-; $0000). Each section is padded to one 8K page. See docs/design.md.
+; $0000), fw4 (page at $2000). Each section is padded to one 8K page. See
+; docs/design.md.
 
 		include "memplan.inc"
 
@@ -18,4 +19,9 @@
 		section fw3
 		org $0000
 		include "fw3.asm"
+		defs 0x2000-$		; pad to one 8K page (an overflow is an assembler error)
+
+		section fw4
+		org $2000
+		include "fw4.asm"
 		defs 0x2000-$		; pad to one 8K page (an overflow is an assembler error)

@@ -684,6 +684,7 @@ class Routine:
         self.exits = []          # (kind, state)
         self.dispatch = None     # 'inline' or ('arg', pair)
         self.nodes = set()
+        self.edges = {}          # node -> [(successor, tag)] inside the routine
 
 
 class Summary:
@@ -713,6 +714,7 @@ class Scanner:
         self.copies_prev = []
         self.code_starts_prev = set()
         self.harvest_src = {}
+        self.task_entries = set()
         self.struct_dispatch = set()
         self.slot1_banked_prev = False
         self.slot1_banked_cur = False
@@ -1219,11 +1221,42 @@ class Scanner:
                     direct.add(m)
                     queue.append(m)
         R.nodes = seen
+        R.edges = edges
+        self.stack_switches(seen, states)
         for n in sorted(seen, key=lambda x: (repr(x[0]), x[1])):
             if self.decode_node(n) is not None:
                 lst = self.ctx.setdefault(n, [])
                 for st in states[n]:
                     lst.append((entry, st, n not in direct))
+
+    def stack_switches(self, nodes, states):
+        """Report a RET that runs on a stack loaded from a register or from RAM.
+
+        LD SP,HL / LD SP,(nn) with an unknown value, then RET, is a task or
+        coroutine switch: the RET goes to an address kept on another stack, and
+        the code it starts is not followed. Without this report the RET looks
+        like a plain return.
+        """
+        nodes = sorted(nodes, key=nkey)
+        loads = []
+        for m in nodes:
+            ins = self.decode_node(m)
+            if ins is None or ins.sem[0] != 'ld16' or ins.sem[1] != 'SP':
+                continue
+            src = ins.sem[2]
+            if isinstance(src, tuple) and src[0] == 'imm':
+                continue
+            if any(self.step(st, ins)['stack'] is None for st in states[m]):
+                loads.append(m)
+        if not loads:
+            return
+        what = ', '.join('%s %s' % (h4(m[1]), self.decode_node(m).text) for m in sorted(loads, key=nkey)[:3])
+        for m in nodes:
+            ins = self.decode_node(m)
+            if ins is not None and ins.sem[0] in ('ret', 'reti') and any(st['stack'] is None for st in states[m]):
+                self.stack_switch.add(m)
+                self.unresolved.append((m, 'RET', None, 'an address on a stack the routine switched to (%s): '
+                                        'a task or coroutine switch; the tasks it starts are not followed' % what))
 
     def add_routine(self, node, kind, caller=None, edge_heur=False):
         R = self.routines.get(node)
@@ -1532,6 +1565,7 @@ class Scanner:
         self.indirect_resolved = []
         self.bad_nodes = set()
         self.bad_why = {}
+        self.stack_switch = set()
 
     def end_round(self):
         summ = {}
@@ -1730,8 +1764,15 @@ def main():
     ap.add_argument('--name', help='output file prefix (default: cart file name)')
     ap.add_argument('--no-harvest', action='store_true', help='do not follow code addresses that the code stores into RAM')
     ap.add_argument('--unroll', type=int, default=8, help='distinct states kept per instruction before joining (default 8)')
+    ap.add_argument('--no-tracedef', action='store_true',
+                    help='run without tools/tracedef.py: the trace and run forms are not costed and the costs differ from the overlay builder\'s (printed in the summary)')
+    ap.add_argument('--handler', action='append', default=[],
+                    help='frame cost model: the game\'s own interrupt handler entry, hex ADDR or BANK:ADDR (repeatable)')
     args = ap.parse_args()
+    TRACEDEF_OFF[0] = args.no_tracedef
+    load_tracedef()         # fail now, not after the scan
 
+    args.entry = args.entry + args.handler
     rom = open(args.cart, 'rb').read()
     header = 0
     if len(rom) % 16384 == 512:
@@ -1749,6 +1790,9 @@ def main():
             mapper = 'codemasters'
             result = scan(rom, mapper, args)
     result['mapper'] = mapper
+    TRACEDEF_OFF[0] = args.no_tracedef
+    result['cost'] = frame_cost(result['sc'], [parse_addr(h, result['sc']) for h in args.handler])
+    result['rules'] = pattern_rules(result, rom, mapper, args)
     write_outputs(result, rom, crc, header, name, args)
 
 
@@ -1780,14 +1824,60 @@ def harvest_dirty(sc, k):
     nodes = R.nodes
     if nodes & sc.bad_nodes:
         return True
+    # a task started from a table of task entries may call code the game put in RAM
+    stops = ('bank',) if k in sc.task_entries else ('ram', 'bank')
     for (n, via, target, why) in sc.unresolved:
-        if n in nodes and why in ('ram', 'bank'):
+        if n in nodes and why in stops:
             return True
     for n in nodes:
         ins = sc.decode_node(n)
         if ins is not None and ins.sem[0] in ('outn', 'inn') and ins.sem[1] not in HARVEST_PORTS:
             return True
     return False
+
+
+def task_table_words(sc):
+    """Words of a ROM table that the code stores into RAM, in a cart that switches stacks.
+
+    A task scheduler starts a task by writing its start address, read from a
+    table of task entry points, onto the task's own stack, byte by byte through
+    a register pointer; a RET after LD SP later jumps there. Only used when a
+    stack switch was found, because outside that pattern a table word stored to
+    RAM is usually a data pointer. A store to a fixed address is not used.
+    Returns {word: storing node}.
+    """
+    out = {}
+    done = set()
+    for n, ctxs in sc.ctx.items():
+        ins = sc.decode_node(n)
+        sem = ins.sem
+        for (rt, s, _h) in ctxs:
+            v = None
+            # a byte store through a register pointer: a task's stack is not at a fixed address
+            if sem[0] == 'ld8' and not isinstance(sem[1], str) and sem[1][0] == 'mem' and isinstance(sem[2], str):
+                a = sc.addr_of(s, sem[1])
+                if isinstance(a, int) and a < 0xC000:
+                    continue
+                for p in ('BC', 'DE', 'HL'):
+                    if sem[2] in PAIRS[p]:
+                        v = pget(s, p)
+            if not (isinstance(v, tuple) and v[0] == 'word' and isinstance(v[1], int) and v[1] < 0xC000):
+                continue
+            base = v[1]
+            if (base, s['bank1'], s['bank2']) in done:
+                continue
+            done.add((base, s['bank1'], s['bank2']))
+            slot = base >> 14
+            if slot < 2 and not (slot == 1 and s['bank1'] != 1 % sc.nb):
+                region = sc.region_for(slot, slot)
+            elif isinstance(s['bank2'] if slot == 2 else s['bank1'], int):
+                region = sc.region_for(slot, s['bank2'] if slot == 2 else s['bank1'])
+            else:
+                continue
+            ents, _nbytes = sc.table_targets(rt, n, region, base, s)
+            for (w, _nodes) in ents:
+                out.setdefault(w, n)
+    return out
 
 
 def harvest(sc):
@@ -1824,6 +1914,11 @@ def harvest(sc):
     for n, vals in per_node.items():
         if len(vals) == 1:
             words.setdefault(next(iter(vals)), n)
+    task_ws = set()
+    if sc.stack_switch:
+        for w, n in task_table_words(sc).items():
+            words.setdefault(w, n)
+            task_ws.add(w)
     out = []
     covered = set()
     for nn, ctxs in sc.ctx.items():
@@ -1856,6 +1951,8 @@ def harvest(sc):
         if ok and count >= 2:
             out.append(node)
             sc.harvest_src[node] = words[w]
+            if w in task_ws:
+                sc.task_entries.add(node)
     return out
 
 
@@ -1943,6 +2040,7 @@ def scan(rom, mapper, args):
     if extra:
         sc.run(seeds + extra)
     sc.harvested = harvested
+    sc.final_seeds = seeds + extra
 
     return collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, len(extra), args)
 
@@ -2036,7 +2134,7 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
         return txt if how == 'local' else '%s (%s)' % (txt, how)
 
     rst_used = {}
-    for n in sorted(sc.ctx, key=lambda n: (node_off(n) if node_off(n) is not None else 1 << 30, n[1])):
+    for n in sorted(sc.ctx, key=lambda n: (node_off(n) if node_off(n) is not None else 1 << 30, nkey(n))):
         ins = sc.decode_node(n)
         sem = ins.sem
         t = sem[0]
@@ -2157,31 +2255,10 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
                 code.setdefault(o, kind)
     table_only = sc.table_bytes - set(code)
 
-    # I/O byte patterns in bytes never reached
-    unreached = []
-    ED_IO = {0x40 + 8 * r: 'IN %s,(C)' % R8[r] for r in range(8) if r != 6}
-    ED_IO.update({0x41 + 8 * r: 'OUT (C),%s' % R8[r] for r in range(8) if r != 6})
-    ED_IO.update({0xA2: 'INI', 0xA3: 'OUTI', 0xAA: 'IND', 0xAB: 'OUTD', 0xB2: 'INIR', 0xB3: 'OTIR', 0xBA: 'INDR', 0xBB: 'OTDR'})
-    for o in range(len(rom) - 1):
-        if o in code or o in sc.table_bytes or (o + 1) in code:
-            continue
-        b0, b1 = rom[o], rom[o + 1]
-        if b0 in (0xD3, 0xDB):
-            d = 'out' if b0 == 0xD3 else 'in'
-            txt = ('OUT (%s),A' if d == 'out' else 'IN A,(%s)') % h2(b1)
-            cl = port_class(b1, d)
-            c = 'low' if b1 in COMMON_PORTS else 'very-low'
-        elif b0 == 0xED and b1 in ED_IO:
-            txt, cl, c = ED_IO[b1], 'port in C', 'low'
-        else:
-            continue
-        bank = o >> 14
-        addr = o if o < 0x8000 else 0x8000 + (o & 0x3FFF)
-        unreached.append({'addr': addr, 'bank': bank, 'offset': o, 'bytes': '%02X %02X' % (b0, b1), 'insn': txt,
-                          'kind': 'io_unreached', 'target': h2(b1) if b0 != 0xED else '', 'class': cl,
-                          'confidence': c, 'how': 'byte pattern in bytes no path reached', 'note': ''})
-
-    unreached += mapper_byte_scan(sc, rom, code)
+    # I/O and mapper store byte patterns in bytes never reached
+    bev = ByteEvidence(sc, rom, code)
+    unreached = io_byte_scan(sc, rom, code, bev)
+    unreached += mapper_byte_scan(sc, rom, code, bev)
 
     # log comparison
     static_io = set(x['addr'] for x in sites if x['kind'] in ('in', 'out', 'in_c', 'out_c', 'block_in', 'block_out'))
@@ -2195,6 +2272,182 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
             'table_only': table_only, 'conflicts': conflicts, 'vectors': vectors, 'log_cmp': log_cmp,
             'log_notes': log_notes, 'ram_pcs': ram_pcs, 'cdl_warn': cdl_warn, 'static_rounds': static_rounds,
             'n_extra': n_extra, 'logs': logs}
+
+
+class ByteEvidence:
+    """Evidence that a byte pattern no path reached is code, for the byte scans.
+
+    The tests: a JP or CALL somewhere in the cart targets it (and, when asked,
+    a JR or DJNZ, or a branch to the one-byte instruction just before it), the
+    bytes before it decode as a run of valid instructions that ends exactly on
+    it, and the instructions after it decode cleanly. Tile data and zero
+    padding decode as runs of RST and NOP.
+    """
+
+    def __init__(self, sc, rom, code):
+        self.sc, self.rom, self.code = sc, rom, code
+        self.refs = {}          # JP nn / CALL nn (plain and conditional), by target
+        self.rel = {}           # JR, JR cc and DJNZ, by target
+        for o in range(len(rom) - 2):
+            b0 = rom[o]
+            if b0 in (0xC3, 0xCD) or (b0 & 0xC7) in (0xC2, 0xC4):
+                self.refs.setdefault(rom[o + 1] | rom[o + 2] << 8, []).append(o)
+        for o in range(len(rom) - 1):
+            if rom[o] in (0x10, 0x18, 0x20, 0x28, 0x30, 0x38):
+                self.rel.setdefault(o + 2 + s8(rom[o + 1]), []).append(o)
+
+    def cpu(self, o):
+        return o if o < 0x8000 else 0x8000 | (o & 0x3FFF)
+
+    def dec(self, o):
+        rom = self.rom
+        if o < 0 or o >= len(rom):
+            return None
+        ins = decode(lambda i: rom[o + i] if o + i < len(rom) else None, self.cpu(o))
+        if ins is None or ins.sem[0] == 'bad' or self.sc.implausible(ins):
+            return None
+        return ins
+
+    def referenced(self, o, relative=False):
+        """Offsets of branches that target o. relative: also JR and DJNZ, and branches to a
+        one-byte instruction just before o that runs on into it."""
+        code = self.code
+        rs = [r for r in self.refs.get(self.cpu(o), []) if code.get(r) != 'arg']
+        if o >= 0x8000:
+            rs = [r for r in rs if r >> 14 == o >> 14]
+        if not relative:
+            return rs
+        rs = rs + [r for r in self.rel.get(o, []) if code.get(r) != 'arg' and r >> 14 == o >> 14]
+        p = self.dec(o - 1)
+        if p is not None and len(p.raw) == 1 and p.sem[0] not in ('ret', 'reti', 'jpind', 'rst'):
+            before = [r for r in self.refs.get(self.cpu(o - 1), []) + self.rel.get(o - 1, [])
+                      if code.get(r) != 'arg' and (o - 1 < 0x8000 or r >> 14 == o >> 14)]
+            rs = rs + [r for r in before if r not in rs]
+        return rs
+
+    def back_chain(self, o):
+        """The longest chain (at most 32 bytes) of valid instructions that ends exactly at o."""
+        for s in range(max(0, o - 32), o):
+            p, chain = s, []
+            while p < o:
+                ins = self.dec(p)
+                if ins is None:
+                    break
+                chain.append(ins)
+                p += len(ins.raw)
+            if p == o:
+                return chain
+        return []
+
+    def fwd_chain(self, o, n):
+        """Up to n valid instructions from o, stopping after an unconditional jump or return; None if one is invalid."""
+        rom = self.rom
+        p, chain = o, []
+        for _ in range(n):
+            ins = self.dec(p)
+            if ins is None or (ins.raw == [0xFF] and p + 1 < len(rom) and rom[p + 1] == 0xFF):
+                return None
+            chain.append(ins)
+            t = ins.sem[0]
+            if t in ('jpind', 'reti') or (t == 'ret' and ins.sem[1] is None) or (t in ('jp', 'jr') and ins.sem[2] is None):
+                break
+            p += len(ins.raw)
+        return chain
+
+    def setter_before(self, o, src):
+        """Text of the instruction just before o that loads src for a store or OUT.
+
+        It steps back over up to two NOP, LD A,A or (when src is not HL) EX (SP),HL,
+        which games put before an OUT to the VDP as a delay.
+        """
+        rom = self.rom
+        skip = (0x00, 0x7F) if src == 'HL' else (0x00, 0x7F, 0xE3)
+        end = o
+        for _ in range(3):
+            for k in (4, 3, 2, 1):
+                ins = self.dec(end - k)
+                if ins is not None and len(ins.raw) == k and mapper_setter(ins, src):
+                    return ins.text
+            if end < 1 or rom[end - 1] not in skip:
+                return None
+            end -= 1
+        return None
+
+    def rate(self, o, data, setter, relative=False):
+        """Confidence and evidence list for a pattern at o.
+
+        data: a reason the bytes are data, or None. setter: text of a setter, or None.
+        """
+        ev = []
+        if setter:
+            ev.append('after ' + setter)
+        refs_o = self.referenced(o, relative)
+        if refs_o:
+            ev.append('branch target from %s' % ' '.join('$%05X' % r for r in refs_o[:4]) if relative else
+                      'JP/CALL target from %s' % ' '.join('$%05X' % r for r in refs_o[:4]))
+        back = self.back_chain(o)
+        run = sum(len(x.raw) for x in back)
+        if run >= 8:
+            ev.append('%d bytes of valid code before it' % run)
+        fwd = self.fwd_chain(o, 6)
+        filler = []
+        if fwd is None:
+            ev.append('no valid code after it')
+        else:
+            filler = [x for x in back + fwd[1:] if x.sem[0] == 'rst' or x.raw == [0]]
+        if data or fwd is None:
+            conf = 'low'
+        elif setter or refs_o:
+            conf = 'high'
+        elif len(filler) >= 4:
+            conf = 'low'
+            ev.insert(0, '%d RST or NOP opcodes around it (looks like data)' % len(filler))
+        elif run >= 8:
+            conf = 'medium'
+        else:
+            conf = 'low'
+        if data:
+            ev.insert(0, data)
+        return conf, ev
+
+
+ED_IO = {0x40 + 8 * r: 'IN %s,(C)' % R8[r] for r in range(8) if r != 6}
+ED_IO.update({0x41 + 8 * r: 'OUT (C),%s' % R8[r] for r in range(8) if r != 6})
+ED_IO.update({0xA2: 'INI', 0xA3: 'OUTI', 0xAA: 'IND', 0xAB: 'OUTD', 0xB2: 'INIR', 0xB3: 'OTIR', 0xBA: 'INDR', 0xBB: 'OTDR'})
+
+
+def io_byte_scan(sc, rom, code, bev):
+    """IN, OUT and ED I/O byte patterns that no path reached, rated by the same evidence as the mapper byte scan.
+
+    A port SMS games do not use is always very-low. For an OUT the setter is the
+    instruction just before it loading A. A branch target with no setter and no
+    valid code before it is medium, not high.
+    """
+    rows = []
+    for o in range(len(rom) - 1):
+        if o in code or o in sc.table_bytes or (o + 1) in code:
+            continue
+        b0, b1 = rom[o], rom[o + 1]
+        if b0 in (0xD3, 0xDB):
+            d = 'out' if b0 == 0xD3 else 'in'
+            txt = ('OUT (%s),A' if d == 'out' else 'IN A,(%s)') % h2(b1)
+            cl = port_class(b1, d)
+            port_c = 'low' if b1 in COMMON_PORTS else 'very-low'
+            setter = bev.setter_before(o, 'A') if d == 'out' else None
+        elif b0 == 0xED and b1 in ED_IO:
+            txt, cl, port_c, setter = ED_IO[b1], 'port in C', 'low', None
+        else:
+            continue
+        conf, ev = bev.rate(o, None, setter, relative=True)
+        if conf == 'high' and not setter and not any(e.endswith('bytes of valid code before it') for e in ev):
+            conf = 'medium'     # only a branch points at it, and data can supply one
+        if port_c == 'very-low':
+            conf = 'very-low'   # a port SMS games do not use: data, whatever the bytes around it look like
+            ev.insert(0, 'port not used by SMS games')
+        rows.append({'addr': bev.cpu(o), 'bank': o >> 14, 'offset': o, 'bytes': '%02X %02X' % (b0, b1), 'insn': txt,
+                     'kind': 'io_unreached', 'target': h2(b1) if b0 != 0xED else '', 'class': cl,
+                     'confidence': conf, 'how': 'byte pattern in bytes no path reached', 'note': '; '.join(ev) or 'no evidence'})
+    return rows
 
 
 def mapper_setter(ins, src):
@@ -2233,67 +2486,13 @@ def mapper_byte_patterns(rom, o, mapper):
     return None
 
 
-def mapper_byte_scan(sc, rom, code):
+def mapper_byte_scan(sc, rom, code, bev):
     """Mapper store byte patterns anywhere in the cart that no path reached as an instruction.
 
-    Each hit is rated by evidence that it is code: the instruction just before it
-    sets the stored register (a setter), a JP or CALL somewhere in the cart
-    targets it, the bytes before it decode as a run of valid instructions that
-    ends exactly on it, and the instructions after it decode cleanly. A hit that
-    overlaps reached code at another instruction boundary, or lies in a jump
-    table that was read, is data.
+    Each hit is rated by ByteEvidence, plus a setter: the instruction just before
+    it sets the stored register. A hit that overlaps reached code at another
+    instruction boundary, or lies in a jump table that was read, is data.
     """
-    def cpu(o):
-        return o if o < 0x8000 else 0x8000 | (o & 0x3FFF)
-
-    def dec(o):
-        if o < 0 or o >= len(rom):
-            return None
-        ins = decode(lambda i: rom[o + i] if o + i < len(rom) else None, cpu(o))
-        if ins is None or ins.sem[0] == 'bad' or sc.implausible(ins):
-            return None
-        return ins
-
-    # JP nn and CALL nn (plain and conditional) anywhere in the cart, by target
-    refs = {}
-    for o in range(len(rom) - 2):
-        b0 = rom[o]
-        if b0 in (0xC3, 0xCD) or (b0 & 0xC7) in (0xC2, 0xC4):
-            refs.setdefault(rom[o + 1] | rom[o + 2] << 8, []).append(o)
-
-    def referenced(o):
-        a = cpu(o)
-        rs = [r for r in refs.get(a, []) if code.get(r) != 'arg']
-        return rs if o < 0x8000 else [r for r in rs if r >> 14 == o >> 14]
-
-    def back_chain(o):
-        """The longest chain (at most 32 bytes) of valid instructions that ends exactly at o."""
-        for s in range(max(0, o - 32), o):
-            p, chain = s, []
-            while p < o:
-                ins = dec(p)
-                if ins is None:
-                    break
-                chain.append(ins)
-                p += len(ins.raw)
-            if p == o:
-                return chain
-        return []
-
-    def fwd_chain(o, n):
-        """Up to n valid instructions from o, stopping after an unconditional jump or return; None if one is invalid."""
-        p, chain = o, []
-        for _ in range(n):
-            ins = dec(p)
-            if ins is None or (ins.raw == [0xFF] and p + 1 < len(rom) and rom[p + 1] == 0xFF):
-                return None
-            chain.append(ins)
-            t = ins.sem[0]
-            if t in ('jpind', 'reti') or (t == 'ret' and ins.sem[1] is None) or (t in ('jp', 'jr') and ins.sem[2] is None):
-                break
-            p += len(ins.raw)
-        return chain
-
     rows = []
     for o in range(len(rom) - 2):
         m = mapper_byte_patterns(rom, o, sc.mapper)
@@ -2302,61 +2501,23 @@ def mapper_byte_scan(sc, rom, code):
         length, text, src, form = m
         if code.get(o) == 'op':
             continue            # reached as an instruction: the flow scan classified it
-        ev, data = [], None
+        data = None
         if any(code.get(o + i) for i in range(length)):
             data = 'overlaps code that was reached at another instruction boundary'
         elif any((o + i) in sc.table_bytes for i in range(length)):
             data = 'inside a jump table that was read'
-        setter = None
         if src is None:
             setter = 'LD HL,$FF%02X' % rom[o + 1]
         else:
-            end = o
-            for _ in range(3):
-                for k in (4, 3, 2, 1):
-                    ins = dec(end - k)
-                    if ins is not None and len(ins.raw) == k and mapper_setter(ins, src):
-                        setter = ins.text
-                        break
-                if setter or end < 1 or rom[end - 1] not in (0x00, 0x7F):
-                    break
-                end -= 1        # step back over NOP or LD A,A
+            setter = bev.setter_before(o, src)
         if not setter:
             for q in range(o - 6, o - 2):
                 m2 = mapper_byte_patterns(rom, q, sc.mapper) if q >= 0 else None
                 if m2 and m2[0] in (3, 4) and q + m2[0] <= o:
                     setter = 'another mapper store, %s at $%05X' % (m2[1], q)
                     break
-        if setter:
-            ev.append('after ' + setter)
-        refs_o = referenced(o)
-        if refs_o:
-            ev.append('JP/CALL target from %s' % ' '.join('$%05X' % r for r in refs_o[:4]))
-        back = back_chain(o)
-        run = sum(len(x.raw) for x in back)
-        if run >= 8:
-            ev.append('%d bytes of valid code before it' % run)
-        fwd = fwd_chain(o, 6)
-        filler = []
-        if fwd is None:
-            ev.append('no valid code after it')
-        else:
-            # tile data and zero padding decode as runs of RST and NOP
-            filler = [x for x in back + fwd[1:] if x.sem[0] == 'rst' or x.raw == [0]]
-        if data or fwd is None:
-            conf = 'low'
-        elif setter or refs_o:
-            conf = 'high'
-        elif len(filler) >= 4:
-            conf = 'low'
-            ev.insert(0, '%d RST or NOP opcodes around it (looks like data)' % len(filler))
-        elif run >= 8:
-            conf = 'medium'
-        else:
-            conf = 'low'
-        if data:
-            ev.insert(0, data)
-        rows.append({'addr': cpu(o), 'bank': o >> 14, 'offset': o, 'bytes': ' '.join('%02X' % x for x in rom[o:o + length]),
+        conf, ev = bev.rate(o, data, setter)
+        rows.append({'addr': bev.cpu(o), 'bank': o >> 14, 'offset': o, 'bytes': ' '.join('%02X' % x for x in rom[o:o + length]),
                      'insn': text, 'kind': 'mapper_unreached', 'target': form, 'class': 'byte scan',
                      'confidence': conf, 'how': 'byte scan, no path reached it', 'note': '; '.join(ev) or 'no evidence'})
     return rows
@@ -2464,6 +2625,2225 @@ def fmt_off(o):
     return '' if o is None else '$%05X' % o
 
 
+# ------------------------------------------------------------ frame cost model
+#
+# On the Next every SMS I/O instruction runs through the engine's io trap, which
+# costs far more than the instruction does on an SMS. The model adds up, per
+# routine, the Next cycles of the native instructions and of the traps, and
+# compares them with the Next frame. docs/sitescan.md describes the method and
+# the output.
+#
+# All costs are Next CPU cycles (28 MHz). They were measured in MAME tbblue with
+# the engine built from public/ at commit 03a88f6: a test cart runs each form
+# between two breakpoints that print totalcycles (median over passes, with the
+# trace cache warm), and the same forms were timed at Alien Syndrome's own
+# sites. The 'otir' and 'run' rows and OUT (C),r to the control port were
+# measured again, the same way, on the ABI 7 engine.
+# Values marked "est." are derived from the measured ones, not measured.
+# Re-measure them when the runtime's I/O paths change.
+
+NEXT_FRAME = 567264          # 311 lines of 1,824 cycles
+
+# A data port write costs more or less by the VRAM region it lands in (the
+# runtime keeps a converted copy of tiles, name table and sprite table).
+# The region is not known statically, so a VRAM cost is a range over tile
+# data, sprite table and name table. CRAM writes cost more and are not in the
+# range. Each entry: (fixed cycles per instruction, cycles per byte).
+VRAM_REGIONS = ('tile', 'sat', 'nt')
+COST_VDATA = {
+    'outn':  {'tile': (0, 1138), 'sat': (0, 956), 'nt': (0, 1328), 'cram': (0, 2885)},   # OUT (n),A
+    'outc':  {'tile': (0, 1571), 'sat': (0, 1389), 'nt': (0, 1761), 'cram': (0, 3318)},   # OUT (C),r
+    'outi':  {'tile': (0, 1871), 'sat': (0, 1689), 'nt': (0, 2061), 'cram': (0, 3618)},   # OUTI, OUTD
+    # OTIR, and OUTI; JR NZ,-2 (the overlay makes it an OTIR)
+    'otir':  {'tile': (3163, 24), 'sat': (3075, 25), 'nt': (4399, 235), 'cram': (1162, 651)},
+    # a run of OUTI or OUTD in a row, done in one trap (tracedef.RUN_BREAK_EVEN).
+    # A run of other outputs, or of OUTI mixed with them, costs more: 16
+    # OUT ($BE),A 13,765 in tile data, 32 OUTI and OUT ($BE),A mixed 21,286.
+    'run':   {'tile': (5998, 180), 'sat': (5919, 180), 'nt': (6352, 446), 'cram': (5917, 687)},
+    # a trace (tools/tracedef.py): fixed per trap, per output on top of the
+    # native code of the copy, which runs at native speed
+    'trace': {'tile': (4240, 223), 'sat': (4910, 223), 'nt': (5800, 437), 'cram': (1890, 940)},
+    'in':    {'tile': (0, 859), 'sat': (0, 859), 'nt': (0, 859), 'cram': (0, 859)},       # IN A,(n)
+    'inc':   {'tile': (0, 1637), 'sat': (0, 1637), 'nt': (0, 1637), 'cram': (0, 1637)},   # IN r,(C), est.
+    'ini':   {'tile': (0, 1833), 'sat': (0, 1833), 'nt': (0, 1833), 'cram': (0, 1833)},   # INI, IND
+    'inir':  {'tile': (485, 1348), 'sat': (485, 1348), 'nt': (485, 1348), 'cram': (485, 1348)},  # est.
+}
+# The other port classes. 'other' is every class not named (no-effect writes,
+# memory and I/O control, FM, unmapped reads). VDP control: the address byte
+# pair; a register write costs more (up to 3,546 for register 2, which
+# rebuilds the tilemaps).
+COST_PORT = {
+    'outn':  {'vdp_control': (0, 760), 'psg': (0, 1089), 'other': (0, 485)},
+    'outc':  {'vdp_control': (0, 1120), 'psg': (0, 1522), 'other': (0, 1033)},    # psg est.
+    'outi':  {'vdp_control': (0, 1493), 'psg': (0, 1822), 'other': (0, 1218)},    # est.
+    'otir':  {'vdp_control': (1200, 1057), 'psg': (1587, 600), 'other': (1200, 300)},  # psg 4 bytes 3,987; rest est.
+    'run':   {'vdp_control': (1200, 1057), 'psg': (1587, 600), 'other': (1200, 300)},  # est.
+    'trace': {'vdp_control': (4240, 700), 'psg': (4240, 700), 'other': (4240, 300)},   # est.
+    'in':    {'vdp_status': (0, 888), 'v_counter': (0, 832), 'h_counter': (0, 577),
+              'joypad_a': (0, 639), 'joypad_b_misc': (0, 563), 'other': (0, 577)},
+    'inc':   {'vdp_status': (0, 1666), 'v_counter': (0, 1610), 'h_counter': (0, 1355),
+              'joypad_a': (0, 1417), 'joypad_b_misc': (0, 1341), 'other': (0, 1355)},  # status measured, rest est.
+    'ini':   {'other': (0, 1355)},     # est.
+    'inir':  {'other': (485, 870)},    # est.
+}
+
+
+class Cost:
+    """Next cycles as a range lo..hi (the range comes from unknown VRAM regions);
+    unk: a loop count on some path is unknown, and that loop is counted as one pass."""
+    __slots__ = ('lo', 'hi', 'unk')
+
+    def __init__(self, lo=0, hi=None, unk=False):
+        self.lo, self.hi, self.unk = lo, (lo if hi is None else hi), unk
+
+    def __add__(self, o):
+        return Cost(self.lo + o.lo, self.hi + o.hi, self.unk or o.unk)
+
+    def times(self, n):
+        return Cost(self.lo * n, self.hi * n, self.unk)
+
+    def most(self, o):
+        return Cost(max(self.lo, o.lo), max(self.hi, o.hi), self.unk or o.unk)
+
+    def txt(self):
+        if self.lo == self.hi:
+            return '%d' % self.lo
+        return '%d-%d' % (self.lo, self.hi)
+
+
+ZERO = Cost()
+
+# Z80 T-states of the unprefixed opcodes $00-$3F and $C0-$FF; conditional
+# branches as not taken. _TAKEN: the extra T-states when the branch is taken.
+_T0 = [4, 10, 7, 6, 4, 4, 7, 4, 4, 11, 7, 6, 4, 4, 7, 4,
+       8, 10, 7, 6, 4, 4, 7, 4, 12, 11, 7, 6, 4, 4, 7, 4,
+       7, 10, 16, 6, 4, 4, 7, 4, 7, 11, 16, 6, 4, 4, 7, 4,
+       7, 10, 13, 6, 11, 11, 10, 4, 7, 11, 13, 6, 4, 4, 7, 4]
+_T3 = [5, 10, 10, 10, 10, 11, 7, 11, 5, 10, 10, 0, 10, 17, 7, 11,
+       5, 10, 10, 11, 10, 11, 7, 11, 5, 4, 10, 11, 10, 0, 7, 11,
+       5, 10, 10, 19, 10, 11, 7, 11, 5, 4, 10, 4, 10, 0, 7, 11,
+       5, 10, 10, 4, 10, 11, 7, 11, 5, 6, 10, 4, 10, 0, 7, 11]
+
+
+def _t_unprefixed(op):
+    if op < 0x40:
+        return _T0[op]
+    if op < 0xC0:
+        if op == 0x76:
+            return 4
+        return 7 if (op & 7) == 6 or 0x70 <= op < 0x78 else 4
+    return _T3[op - 0xC0]
+
+
+def tstates(raw):
+    """Z80 T-states of an instruction, conditional branches not taken, block
+    instructions for one pass."""
+    op = raw[0]
+    if op == 0xCB:
+        b = raw[1]
+        if b & 7 == 6:
+            return 12 if 0x40 <= b < 0x80 else 15
+        return 8
+    if op == 0xED:
+        b = raw[1]
+        if 0xA0 <= b < 0xC0:
+            return 21 if b >= 0xB0 else 16
+        x = b & 0xC7
+        if x in (0x40, 0x41):
+            return 12
+        if x == 0x42:
+            return 15
+        if x == 0x43:
+            return 20
+        if x == 0x45:
+            return 14
+        if b in (0x67, 0x6F):
+            return 18
+        if b in (0x47, 0x4F, 0x57, 0x5F):
+            return 9
+        return 8
+    if op in (0xDD, 0xFD):
+        b = raw[1]
+        if b == 0xCB:
+            return 20 if 0x40 <= raw[3] < 0x80 else 23
+        if b in (0x34, 0x35):
+            return 23
+        if b == 0x36 or (0x40 <= b < 0xC0 and b != 0x76 and ((b & 7) == 6 or 0x70 <= b < 0x78)):
+            return 19
+        return _t_unprefixed(b) + 4
+    return _t_unprefixed(op)
+
+
+def taken_extra(ins):
+    """Extra Next cycles when a conditional branch is taken."""
+    t = ins.sem[0]
+    if t in ('jr', 'djnz') and (t == 'djnz' or ins.sem[2]):
+        return 5
+    return 0
+
+
+def mem_reads(ins):
+    """Memory reads of an instruction: its own bytes plus the data it reads."""
+    sem = ins.sem
+    t = sem[0]
+    n = len(ins.raw)
+
+    def is_mem(o):
+        return isinstance(o, tuple) and o[0] in ('mem', 'abs')
+    if t == 'ld8' and is_mem(sem[2]):
+        n += 1
+    elif t == 'ld16' and isinstance(sem[2], tuple) and sem[2][0] == 'abs':
+        n += 2
+    elif t in ('pop', 'exsp', 'ret', 'reti'):
+        n += 2
+    elif t in ('alu', 'inc8', 'dec8') and is_mem(sem[-1] if t == 'alu' else sem[1]):
+        n += 1
+    elif t == 'cb' and is_mem(sem[3]):
+        n += 1
+    elif t == 'rxd':
+        n += 1
+    elif t == 'block' and sem[1][:2] in ('LD', 'CP', 'OU', 'OT'):
+        n += 1
+    return n
+
+
+def native_cycles(ins):
+    """Next cycles of a native instruction: its T-states plus one cycle per
+    memory read (measured: writes and I/O add nothing, every read one)."""
+    return tstates(ins.raw) + mem_reads(ins)
+
+
+def port_index(p):
+    """The runtime's port class number: A7 A6 A0."""
+    return ((p >> 6) & 3) << 1 | (p & 1)
+
+
+def trap_cost(form, pclass, count=1):
+    """Cost of `count` outputs or inputs of one trap form to a port class
+    (None: unknown), with the trap's fixed part once."""
+    if pclass == 'vdp_data' or pclass is None:
+        tab = COST_VDATA[form]
+        vals = [tab[r][0] + tab[r][1] * count for r in VRAM_REGIONS]
+        lo, hi = min(vals), max(vals)
+        if pclass is None:
+            other = COST_PORT[form]
+            ov = [f + p * count for (f, p) in other.values()]
+            lo, hi = min(lo, min(ov)), max(hi, max(ov))
+        return Cost(lo, hi)
+    tab = COST_PORT[form]
+    f, p = tab.get(pclass, tab['other'])
+    return Cost(f + p * count)
+
+
+def nkey(n):
+    """Sort key of a node (region, address): the region tag is a string, whose
+    hash changes from run to run, so set order must never decide a result."""
+    return (repr(n[0]), n[1])
+
+
+TRACEDEF_OFF = [False]      # set by --no-tracedef
+
+
+def load_tracedef():
+    """tools/tracedef.py, from this script's own folder. Without it the trace
+    costs differ from the overlay builder's, so a missing module is an error
+    unless --no-tracedef was given (then None)."""
+    if TRACEDEF_OFF[0]:
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import tracedef
+    except ImportError as e:
+        sys.exit('sitescan: cannot import tracedef.py from %s (%s); copy it next to sitescan.py, '
+                 'or pass --no-tracedef to scan without it (the costs then differ)' % (here, e))
+    return tracedef
+
+
+class Loop:
+    def __init__(self, header):
+        self.header = header
+        self.body = {header}
+        self.latches = set()
+        self.parent = None
+
+    def body_sorted(self):
+        return sorted(self.body, key=nkey)
+
+    def latches_sorted(self):
+        return sorted(self.latches, key=nkey)
+
+
+class FrameCost:
+    """Per-routine Next cost, interrupt context and interrupt state."""
+
+    def __init__(self, sc, handlers=()):
+        self.sc = sc
+        self.calls_at = {}
+        self._dedges = {}
+        # calls from code reached by proven flow only
+        self.callers = {}
+        for callee, lst in sc.callers_prev.items():
+            for (crt, cnode, cs) in lst:
+                R = sc.routines.get(crt)
+                if R is None or cnode not in self.dedges(R):
+                    continue
+                self.callers.setdefault(callee, []).append((crt, cnode, cs))
+                self.calls_at.setdefault((crt, cnode), []).append(callee)
+        for k, lst in self.calls_at.items():
+            self.calls_at[k] = sorted(set(lst), key=nkey)
+        self.io = {}            # node -> (form, classes or None)
+        self.vdp_write = {}     # node -> 'data' / 'control'
+        self._find_io()
+        self.trace_info = self._traces()
+        self.loops = {}
+        self.memo = {}
+        self.noret = set()      # routines with no path that returns
+        self.evals = 0
+        z = sc.region_for(0, 0)
+        self.vec_irq = [(z, 0x0038), (z, 0x0066)] + list(handlers)
+        # a jump from another routine into the reset code restarts the game: no
+        # path through it returns
+        R0 = sc.routines.get((z, 0x0000))
+        self.reset_nodes = set(R0.nodes) if R0 is not None else set()
+        self.irq_set = self._reach_live([e for e in self.vec_irq if e in sc.routines])
+        # foreground: not reached from the handler, or called from code outside it
+        self.fg_set = set(e for e in sc.routines if e not in self.vec_irq and
+                          (e not in self.irq_set or
+                           any(c not in self.irq_set for (c, _n, _s) in self.callers.get(e, ()))))
+        self.iff_entry, self.iff_node = self._iff()
+
+    def dedges(self, R):
+        """R's edges of proven flow: not through a jump table whose length the
+        scanner guessed (its entries past the real end are often data)."""
+        d = self._dedges.get(R.entry)
+        if d is None:
+            d = {}
+            work = [R.entry]
+            while work:
+                n = work.pop()
+                if n in d:
+                    continue
+                d[n] = [x for x in R.edges.get(n, ()) if x[1] == 'd']
+                work.extend(m for (m, _t) in d[n] if m not in d)
+            self._dedges[R.entry] = d
+        return d
+
+    # ---- I/O sites
+
+    def _c_values(self, n):
+        vals = set()
+        unknown = False
+        for (rt, s, _h) in self.sc.ctx[n]:
+            v = s['C']
+            if isinstance(v, int):
+                vals.add(v)
+                continue
+            for x in self.sc.resolve_multi(rt, [v], self.callers):
+                if x is None:
+                    unknown = True
+                else:
+                    vals.add(x[0])
+        return vals, unknown
+
+    def _find_io(self):
+        sc = self.sc
+        for n in sc.ctx:
+            ins = sc.decode_node(n)
+            sem = ins.sem
+            t = sem[0]
+            if t in ('outn', 'inn'):
+                d = 'out' if t == 'outn' else 'in'
+                ports, unk = {sem[1]}, False
+                form = 'outn' if t == 'outn' else 'in'
+            elif t in ('outC', 'inC') or (t == 'block' and (sem[1] in BLOCK_IN or sem[1] in BLOCK_OUT)):
+                d = 'in' if (t == 'inC' or sem[1] in BLOCK_IN) else 'out'
+                if t == 'outC':
+                    form = 'outc'
+                elif t == 'inC':
+                    form = 'inc'
+                elif sem[1] in ('OUTI', 'OUTD'):
+                    form = 'outi'
+                elif sem[1] in ('OTIR', 'OTDR'):
+                    form = 'otir'
+                elif sem[1] in ('INI', 'IND'):
+                    form = 'ini'
+                else:
+                    form = 'inir'
+                ports, unk = self._c_values(n)
+            else:
+                continue
+            classes = set(port_class(p, d) for p in ports)
+            if unk or not classes:
+                classes.add(None)
+            self.io[n] = (form, classes)
+            if d == 'out':
+                if 'vdp_data' in classes or None in classes:
+                    self.vdp_write[n] = 'data'
+                elif 'vdp_control' in classes:
+                    self.vdp_write[n] = 'control'
+
+    def _patched_reader(self, region):
+        sc = self.sc
+        sent = 0x1FF
+
+        def rd(a):
+            a &= 0xFFFF
+            n = (region, a)
+            if n in self.io:
+                return sent
+            p = (region, (a - 1) & 0xFFFF)
+            if p in self.io:
+                ins = sc.decode_node(p)
+                if ins.sem[0] == 'outn':
+                    return port_index(ins.sem[1])
+                if ins.sem[0] == 'inn':
+                    return 8 + port_index(ins.sem[1])
+                return ins.raw[1]
+            o = sc.off_of(region, a)
+            return 0xFF if o is None else sc.rom[o]
+        return rd, sent
+
+    def _traces(self):
+        """Output sites as the overlay patches them: 'otir' for OUTI; JR NZ,-2
+        (or JP NZ to itself), 'run' or 'trace' for the trace forms tracedef
+        chooses, else 'single'. Returns node -> (kind, region start, region end, loop)."""
+        sc = self.sc
+        out = {}
+        tracedef = load_tracedef()
+        readers = {}
+        for n, (form, _cl) in sorted(self.io.items(), key=lambda x: (repr(x[0][0]), x[0][1])):
+            region, a = n
+            ins = sc.decode_node(n)
+            if ins.sem[0] == 'block' and ins.sem[1] == 'OUTI':
+                nx = sc.decode_node((region, (a + 2) & 0xFFFF))
+                if nx is not None and nx.sem[0] in ('jr', 'jp') and nx.sem[1] == a and nx.sem[2] == 'NZ':
+                    out[n] = ('otir', a, a + 2 + len(nx.raw), True)
+                    continue
+            if tracedef is None or form not in ('outn', 'outc', 'outi') or n in out:
+                continue
+            if region not in readers:
+                readers[region] = self._patched_reader(region)
+            rd, sent = readers[region]
+            try:
+                if not tracedef.choose(rd, a, sent):
+                    continue
+                v = tracedef.verdict(rd, a, sent)
+            except (IndexError, TypeError):
+                continue
+            if v[0] == 'run':
+                # the call does the whole run: every site in it is part of the run
+                for i in range(v[1]):
+                    out[(region, (a + 2 * i) & 0xFFFF)] = ('run', a + 2 * i, a + 2 * i + 2, False)
+            elif v[0] == 'copy':
+                out[n] = ('trace', v[1], v[2], v[4])
+        return out
+
+    # ---- call graph
+
+    def _reach(self, roots, stop=()):
+        seen = set()
+        work = list(roots)
+        adj = {}
+        for (a, n), bs in self.calls_at.items():
+            adj.setdefault(a, set()).update(bs)
+        while work:
+            e = work.pop()
+            if e in seen:
+                continue
+            seen.add(e)
+            for m in adj.get(e, ()):
+                if m not in seen and m not in stop:
+                    work.append(m)
+        return seen
+
+    def live_nodes(self, R):
+        """Nodes of R from which a return to the caller can be reached."""
+        preds = {}
+        exits = []
+        for n, es in self.dedges(R).items():
+            for (m, _t) in es:
+                preds.setdefault(m, set()).add(n)
+        for n in self.dedges(R):
+            ins = self.sc.decode_node(n)
+            if ins is not None and self.is_exit(R, n, ins):
+                exits.append(n)
+        live = set()
+        exits = [n for n in exits if n not in self.reset_nodes or R.entry[1] == 0x0000]
+        while exits:
+            n = exits.pop()
+            if n in live:
+                continue
+            live.add(n)
+            exits.extend(preds.get(n, ()))
+        return live
+
+    def _reach_live(self, roots):
+        """Routines called on paths that return, from the roots on: the code an
+        interrupt handler runs before it returns."""
+        seen = set()
+        work = list(roots)
+        while work:
+            e = work.pop()
+            if e in seen:
+                continue
+            seen.add(e)
+            R = self.sc.routines[e]
+            for n in self.live_nodes(R):
+                for m in self.calls_at.get((e, n), ()):
+                    if m not in seen:
+                        work.append(m)
+        return seen
+
+    # ---- interrupt enable state
+
+    def _iff(self):
+        """IFF1 at each routine entry and node: a set of 'on', 'off', 'unknown'."""
+        sc = self.sc
+        z = sc.region_for(0, 0)
+        entry = {}
+        for e, R in sc.routines.items():
+            if e in self.vec_irq or e == (z, 0x0000):
+                entry[e] = {'off'}
+            elif not self.callers.get(e):
+                entry[e] = {'unknown'}
+            else:
+                entry[e] = set()
+        effect = {e: {'in'} for e in sc.routines}      # exit state in terms of 'in' (= entry state)
+        node_rel = {}
+        for _ in range(12):
+            changed = False
+            for e, R in sc.routines.items():
+                rel = self._iff_routine(R, effect)
+                node_rel[e] = rel
+                ex = set()
+                for n, v in rel.items():
+                    ins = sc.decode_node(n)
+                    if ins is not None and ins.sem[0] in ('ret', 'reti'):
+                        ex |= v
+                if not ex:
+                    ex = {'in'}
+                if ex != effect[e]:
+                    effect[e] = ex
+                    changed = True
+            if not changed:
+                break
+        for _ in range(64):
+            changed = False
+            for callee, lst in self.callers.items():
+                if callee not in entry or callee in self.vec_irq:
+                    continue
+                for (crt, cnode, _cs) in lst:
+                    rel = node_rel.get(crt, {}).get(cnode, {'in'})
+                    v = set()
+                    for x in rel:
+                        v |= entry.get(crt, {'unknown'}) if x == 'in' else {x}
+                    if not v <= entry[callee]:
+                        entry[callee] |= v
+                        changed = True
+            if not changed:
+                break
+        node = {}
+        for e, rel in node_rel.items():
+            for n, v in rel.items():
+                r = set()
+                for x in v:
+                    r |= (entry[e] or {'unknown'}) if x == 'in' else {x}
+                node[(e, n)] = r
+        return entry, node
+
+    def _iff_routine(self, R, effect):
+        sc = self.sc
+        st = {R.entry: {'in'}}
+        work = [R.entry]
+        while work:
+            n = work.pop()
+            ins = sc.decode_node(n)
+            if ins is None:
+                continue
+            v = st[n]
+            if ins.text == 'DI':
+                v = {'off'}
+            elif ins.text == 'EI':
+                v = {'on'}
+            elif ins.sem[0] in ('call', 'rst'):
+                callees = self.calls_at.get((R.entry, n), ())
+                if callees:
+                    nv = set()
+                    for c in callees:
+                        for x in effect.get(c, {'in'}):
+                            nv |= v if x == 'in' else {x}
+                    v = nv
+            for (m, _tag) in self.dedges(R).get(n, ()):
+                old = st.get(m)
+                if old is None or not v <= old:
+                    st[m] = (old or set()) | v
+                    work.append(m)
+        return st
+
+    # ---- loops
+
+    def _loops(self, R):
+        got = self.loops.get(R.entry)
+        if got is not None:
+            return got
+        edges = self.dedges(R)
+        preds = {}
+        for n, es in edges.items():
+            for (m, _t) in es:
+                preds.setdefault(m, set()).add(n)
+        back = set()
+        state = {}
+        stack = [(R.entry, iter(edges.get(R.entry, ())))]
+        state[R.entry] = 1
+        while stack:
+            n, it = stack[-1]
+            for (m, _t) in it:
+                s = state.get(m)
+                if s is None:
+                    state[m] = 1
+                    stack.append((m, iter(edges.get(m, ()))))
+                    break
+                if s == 1:
+                    back.add((n, m))
+            else:
+                state[n] = 2
+                stack.pop()
+        loops = {}
+        for (u, h) in sorted(back, key=lambda b: (nkey(b[0]), nkey(b[1]))):
+            L = loops.get(h)
+            if L is None:
+                L = loops[h] = Loop(h)
+            L.latches.add(u)
+            work = [u]
+            while work:
+                x = work.pop()
+                if x in L.body:
+                    continue
+                L.body.add(x)
+                work.extend(preds.get(x, ()))
+        order = sorted(loops.values(), key=lambda L: (len(L.body), nkey(L.header)))
+        for i, L in enumerate(order):
+            for P in order[i + 1:]:
+                if L.header in P.body and P is not L and L.body <= P.body | {L.header}:
+                    L.parent = P
+                    break
+        inner = {}
+        for L in order:            # smallest first: the innermost loop of a node
+            for x in L.body_sorted():
+                inner.setdefault(x, L)
+        res = (loops, inner, preds, back)
+        self.loops[R.entry] = res
+        return res
+
+    def _counter(self, R, L, preds):
+        """The register (or pair) a loop counts down to zero in, or None."""
+        sc = self.sc
+        for u in L.latches_sorted():
+            ins = sc.decode_node(u)
+            t = ins.sem[0]
+            if t == 'djnz':
+                return 'B'
+            if t not in ('jr', 'jp') or ins.sem[2] != 'NZ':
+                continue
+            x = u
+            seen = 0
+            pend_pop = False
+            while seen < 24:
+                seen += 1
+                ps = [p for p in preds.get(x, ()) if p in L.body]
+                if len(ps) != 1:
+                    break
+                x = ps[0]
+                pi = sc.decode_node(x)
+                s = pi.sem
+                k = s[0]
+                if k == 'pop' and s[1] == 'AF':
+                    pend_pop = True
+                    continue
+                if k == 'push' and s[1] == 'AF' and pend_pop:
+                    pend_pop = False
+                    continue
+                if pend_pop:
+                    break
+                if k in ('ld8', 'ld16', 'push', 'pop', 'inc16', 'dec16', 'exde', 'exx', 'outn', 'outC', 'nop', 'st16') \
+                        and pi.text not in ('LD A,I', 'LD A,R'):
+                    continue            # these leave the flags alone
+                if k == 'block' and s[1] in ('OUTI', 'OUTD', 'INI', 'IND'):
+                    return 'B'
+                if k == 'dec8' and isinstance(s[1], str) and s[1] in R8 and s[1] != '(HL)':
+                    return s[1]
+                if k == 'alu' and s[1] == 'OR' and isinstance(s[2], str):
+                    # DEC rr; LD A,hi; OR lo: a 16-bit count
+                    q = [p for p in preds.get(x, ()) if p in L.body]
+                    if len(q) == 1:
+                        li = sc.decode_node(q[0])
+                        if li.sem[0] == 'ld8' and li.sem[1] == 'A' and isinstance(li.sem[2], str):
+                            for name, hl in PAIRS.items():
+                                if set(hl) == {li.sem[2], s[2]}:
+                                    return name
+                break
+        return None
+
+    def _value(self, R, n, reg, env, need, counter=False):
+        """Largest value of reg (8-bit register or pair) at node n over the
+        routine's states; None if unknown. counter: n is the head of a loop that
+        counts reg down, and its states hold the passes the scanner unrolled
+        (v, v-1, ...); only a value whose successor is not there is an entry value."""
+        sc = self.sc
+        if counter:
+            vals = []
+            for (rt, s, _h) in sc.ctx.get(n, ()):
+                if rt == R.entry:
+                    vals.append(self._value_in(s, reg, env, need))
+            ints = set(v for v in vals if isinstance(v, int))
+            mask = 0xFFFF if reg in PAIRS else 0xFF
+            ents = [v for v in ints if ((v + 1) & mask) not in ints]
+            return max(ents) if ents else None
+        best = None
+        for (rt, s, _h) in sc.ctx.get(n, ()):
+            if rt != R.entry:
+                continue
+            if reg in PAIRS:
+                h, lo = PAIRS[reg]
+                hv, lv = self._resolve(s[h], env, need), self._resolve(s[lo], env, need)
+                v = (hv << 8 | lv) if isinstance(hv, int) and isinstance(lv, int) else None
+            else:
+                v = self._resolve(s[reg], env, need)
+            if v is None:
+                continue
+            best = v if best is None else max(best, v)
+        return best
+
+    def _value_in(self, s, reg, env, need):
+        if reg in PAIRS:
+            h, lo = PAIRS[reg]
+            hv, lv = self._resolve(s[h], env, need), self._resolve(s[lo], env, need)
+            return (hv << 8 | lv) if isinstance(hv, int) and isinstance(lv, int) else None
+        return self._resolve(s[reg], env, need)
+
+    @staticmethod
+    def _resolve(v, env, need):
+        if isinstance(v, int):
+            return v
+        if isinstance(v, tuple) and v[0] == 'arg':
+            x = env.get(v[1])
+            if x is None:
+                need.add(v[1])
+            return x
+        return None
+
+    # ---- cost
+
+    def node_cost(self, R, n, env, need, stack):
+        sc = self.sc
+        ins = sc.decode_node(n)
+        if ins is None:
+            return ZERO
+        c = Cost(native_cycles(ins))
+        io = self.io.get(n)
+        tr = self.trace_info.get(n)
+        if io is not None:
+            form, classes = io
+            if tr is not None and tr[0] == 'otir':
+                c = ZERO            # the loop around it carries the cost (see loop_total)
+            elif form in ('otir', 'inir'):
+                cnt = self._value(R, n, 'B', env, need)
+                k = None
+                for cl in classes:
+                    tc = trap_cost(form, cl, 1 if cnt is None else (cnt or 256))
+                    k = tc if k is None else k.most(tc)
+                c = Cost(k.lo, k.hi, cnt is None)
+            else:
+                f = form
+                if tr is not None:
+                    f = tr[0]
+                k = None
+                for cl in classes:
+                    if tr is not None:
+                        tc = trap_cost(f, cl, 1)
+                        fx = trap_cost(f, cl, 0)
+                        tc = Cost(tc.lo - fx.lo, tc.hi - fx.hi)
+                        if not self._trace_covered(n, tr):
+                            tc = tc + fx
+                    else:
+                        tc = trap_cost(f, cl, 1)
+                    k = tc if k is None else k.most(tc)
+                c = c + k
+        elif ins.sem[0] == 'block' and ins.sem[1] in ('LDIR', 'LDDR', 'CPIR', 'CPDR'):
+            cnt = self._value(R, n, 'BC', env, need)
+            per = 21 + 3
+            if cnt is None:
+                c = Cost(per, per, True)
+            else:
+                c = Cost(per * (cnt or 0x10000) - 5)
+        callees = self.calls_at.get((R.entry, n))
+        if callees:
+            best = None
+            for e in callees:
+                ce = self.callee_env(R, n, env, need)
+                k = self.routine_cost(e, ce, stack, need, (R.entry, n))
+                best = k if best is None else best.most(k)
+            c = c + best
+        return c
+
+    def _trace_covered(self, n, tr):
+        """A trace site inside the region of another trace that starts earlier
+        (or a later OUTI of a run): it runs inside that trap."""
+        region, a = n
+        if tr[0] == 'run':
+            p = self.trace_info.get((region, (a - 2) & 0xFFFF))
+            return p is not None and p[0] == 'run'
+        if tr[0] == 'trace' and tr[3]:
+            return True         # a loop trace: the loop carries the fixed part
+        for d in range(2, 120):
+            p = self.trace_info.get((region, (a - d) & 0xFFFF))
+            if p is not None and p[0] == 'trace' and p[1] <= a < p[2]:
+                return True
+        return False
+
+    def callee_env(self, R, n, env, need):
+        sc = self.sc
+        out = {}
+        for r in ('A', 'B', 'C', 'D', 'E', 'H', 'L'):
+            vals = set()
+            ok = True
+            for (rt, s, _h) in sc.ctx.get(n, ()):
+                if rt != R.entry:
+                    continue
+                v = s[r]
+                if isinstance(v, int):
+                    vals.add(v)
+                elif isinstance(v, tuple) and v[0] == 'arg' and env.get(v[1]) is not None:
+                    vals.add(env[v[1]])
+                else:
+                    ok = False
+            if ok and vals:
+                out[r] = max(vals)
+        return out
+
+    def routine_cost(self, e, env, stack, need_up=None, at=None):
+        """Worst-case cost of one call of routine e with the given entry values.
+        Entry values the routine's loop counts need and env lacks are added to
+        need_up when the caller (at = (caller entry, call node)) passes them on."""
+        R = self.sc.routines.get(e)
+        if R is None or e in stack or len(stack) > 40:
+            return ZERO
+        key = (e, tuple(sorted(env.items())))
+        hit = self.memo.get(key)
+        if hit is None:
+            self.evals += 1
+            need = set()
+            stack = stack | {e}
+            c = self._path(R, None, R.entry, env, need, stack, {}, set(), False)
+            if c is None:
+                self.noret.add(e)
+                c = self._path(R, None, R.entry, env, need, stack, {}, set(), True)
+            hit = self.memo[key] = (c, frozenset(need))
+        c, need = hit
+        if need and need_up is not None and at is not None:
+            crt, cnode = at
+            for (rt, s, _h) in self.sc.ctx.get(cnode, ()):
+                if rt != crt:
+                    continue
+                for r in need:
+                    v = s[r]
+                    if isinstance(v, tuple) and v[0] == 'arg':
+                        need_up.add(v[1])
+        return c
+
+    def is_exit(self, R, n, ins):
+        """A return to the routine's caller, or a RET on a stack the routine
+        switched to (the end of an interrupt handler that restores SP, or a task
+        switch); not a jump through a pushed address."""
+        if ins.sem[0] not in ('ret', 'reti'):
+            return False
+        nxt = (n[0], (n[1] + len(ins.raw)) & 0xFFFF)
+        return all(m == nxt for (m, _t) in self.dedges(R).get(n, ()))
+
+    def _path(self, R, ctx, n, env, need, stack, memo, active, anyend):
+        """Longest cost from node n to a return of the routine (ctx None) or to
+        the end of one pass of loop ctx; None when no such path exists. With
+        anyend, a path may also end where the scanner lost the flow."""
+        if n in memo:
+            return memo[n]
+        if n in active:
+            return ZERO if anyend else None
+        loops, inner, preds, back = self._loops(R)
+        # the outermost loop inside ctx that holds n
+        L, x = None, inner.get(n)
+        while x is not None and x is not ctx:
+            L, x = x, x.parent
+        if x is not ctx:
+            L = None
+        active.add(n)
+        opts = []
+        if L is not None:
+            c = self.loop_total(R, L, env, need, stack)
+            for x in L.body_sorted():
+                for (m, _t) in self.dedges(R).get(x, ()):
+                    if m in L.body:
+                        continue
+                    if ctx is not None and (m == ctx.header or m not in ctx.body):
+                        opts.append(ZERO)
+                        continue
+                    r = self._path(R, ctx, m, env, need, stack, memo, active, anyend)
+                    if r is not None:
+                        opts.append(r)
+                ins = self.sc.decode_node(x)
+                if ins is not None and self.is_exit(R, x, ins):
+                    opts.append(ZERO)
+        else:
+            c = self.node_cost(R, n, env, need, stack)
+            ins = self.sc.decode_node(n)
+            es = self.dedges(R).get(n, ()) if ins is not None else ()
+            if ins is not None and self.is_exit(R, n, ins):
+                opts.append(ZERO)
+            for (m, _t) in es:
+                if m in self.reset_nodes and R.entry[1] != 0x0000 and n not in self.reset_nodes:
+                    continue
+                extra = Cost(taken_extra(ins)) if ins.sem[0] in ('jr', 'djnz') and m[1] == ins.sem[1] else ZERO
+                if ctx is not None and (m == ctx.header or m not in ctx.body):
+                    opts.append(extra)
+                    continue
+                r = self._path(R, ctx, m, env, need, stack, memo, active, anyend)
+                if r is not None:
+                    opts.append(extra + r)
+            if not es and anyend:
+                opts.append(ZERO)
+        if not opts and anyend:
+            opts.append(ZERO)
+        res = None
+        if opts:
+            best = opts[0]
+            for o in opts[1:]:
+                best = best.most(o)
+            res = c + best
+        active.discard(n)
+        memo[n] = res
+        return res
+
+    def loop_count(self, R, L, env, need):
+        loops, inner, preds, back = self._loops(R)
+        reg = self._counter(R, L, preds)
+        if reg is None:
+            return None, None
+        # a loop inside L that counts down the same register uses up the count:
+        # L's passes and the inner passes share it, so L counts as one pass
+        regs = set(PAIRS.get(reg, (reg,)))
+        for M in loops.values():
+            if M is L or M.header not in L.body:
+                continue
+            P = M.parent
+            while P is not None and P is not L:
+                P = P.parent
+            if P is None:
+                continue
+            r2 = self._counter(R, M, preds)
+            if r2 is not None and regs & set(PAIRS.get(r2, (r2,))):
+                return reg, 1
+        v = self._value(R, L.header, reg, env, need, counter=True)
+        if v is None:
+            return reg, None
+        return reg, (v or (0x10000 if reg in PAIRS else 0x100))
+
+    def loop_total(self, R, L, env, need, stack):
+        reg, cnt = self.loop_count(R, L, env, need)
+        tr = self.trace_info.get(L.header)
+        if tr is not None and tr[0] == 'otir':
+            # OUTI; JR NZ,-2: one OTIR trap for the whole loop
+            k = None
+            for cl in self.io[L.header][1]:
+                tc = trap_cost('otir', cl, 1 if cnt is None else cnt)
+                k = tc if k is None else k.most(tc)
+            return Cost(k.lo, k.hi, cnt is None)
+        loops, inner, preds, back = self._loops(R)
+        p = self._path(R, L, L.header, env, need, stack, {}, set(), True)
+        fixed = ZERO
+        for x in L.body_sorted():
+            t = self.trace_info.get(x)
+            if t is not None and t[0] == 'trace' and t[3] and inner.get(x) is L:
+                for cl in self.io[x][1]:
+                    fixed = fixed.most(trap_cost('trace', cl, 0))
+        if cnt is None:
+            return fixed + Cost(p.lo, p.hi, True)
+        return fixed + p.times(cnt)
+
+    def loop_report(self, R, env):
+        """(header, count register, count, cost of one pass) for the routine's outer loops."""
+        loops, inner, preds, back = self._loops(R)
+        out = []
+        need = set()
+        for L in sorted(loops.values(), key=lambda L: nkey(L.header)):
+            if L.parent is not None:
+                continue
+            reg, cnt = self.loop_count(R, L, env, need)
+            p = self._path(R, L, L.header, env, need, frozenset({R.entry}), {}, set(), True)
+            out.append((L.header, reg, cnt, p))
+        return out
+
+    def evaluate(self, e):
+        """Worst cost of routine e over the entry values its callers pass:
+        (cost, env used, partial) where partial means some callers pass values
+        the scanner does not know."""
+        c = self.routine_cost(e, {}, frozenset(), None, None)
+        hit = self.memo.get((e, ()))
+        need = set(hit[1]) if hit else set()
+        if not need:
+            return c, {}, False
+        regs = sorted(need)
+        combos = self.sc.resolve_multi(e, [('arg', r) for r in regs], self.callers)
+        best, benv, partial = None, {}, not combos
+        for x in combos[:64]:
+            if x is None:
+                partial = True
+                continue
+            env = dict(zip(regs, x))
+            k = self.routine_cost(e, env, frozenset(), None, None)
+            if best is None or (k.unk, -k.hi) < (best.unk, -best.hi):
+                best, benv = k, env
+        if best is None:
+            return c, {}, True
+        return best, benv, partial
+
+    def own_vdp_iff_on(self, e):
+        """Whether routine e's own instructions write the VDP with interrupts on."""
+        R = self.sc.routines[e]
+        return any(n in self.vdp_write and 'on' in self.iff_node.get((e, n), ()) for n in self.dedges(R))
+
+    def writes_ctrl(self, roots):
+        for e in roots:
+            R = self.sc.routines.get(e)
+            if R is None:
+                continue
+            for n in self.dedges(R):
+                if self.vdp_write.get(n) == 'control' or (n in self.io and 'vdp_control' in self.io[n][1]):
+                    return True
+        return False
+
+
+def frame_cost(sc, handlers):
+    """Run the frame cost model. Returns a dict for write_outputs."""
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), 20000))
+    fc = FrameCost(sc, handlers)
+    z = sc.region_for(0, 0)
+    rows = {}
+    for e in sorted(sc.routines, key=lambda x: (repr(x[0]), x[1])):
+        c, env, partial = fc.evaluate(e)
+        rows[e] = (c, env, partial)
+    irq_roots = [e for e in fc.vec_irq if e in sc.routines]
+    handler = ZERO
+    for e in irq_roots:
+        if e[1] == 0x0038 or e in handlers:
+            handler = handler.most(rows[e][0])
+    ctrl = fc.writes_ctrl(fc.irq_set)
+    # a write sequence longer than the time between the handler's end and the
+    # next frame interrupt is cut by the handler. When the handler's own worst
+    # case is a frame or more, the frame alone is the limit.
+    limit = NEXT_FRAME - handler.lo if handler.lo < NEXT_FRAME else NEXT_FRAME
+
+    def callees(e):
+        R = sc.routines[e]
+        out = set()
+        for n in fc.dedges(R):
+            out.update(fc.calls_at.get((e, n), ()))
+        return out
+    race, overrun = [], []
+    for e, (c, env, partial) in rows.items():
+        if e in fc.fg_set and e not in fc.irq_set and ctrl and c.hi > limit and fc.own_vdp_iff_on(e):
+            if all(rows[x][0].hi <= limit or x == e for x in callees(e) if x in rows):
+                race.append(e)
+        if e in fc.irq_set and c.hi > NEXT_FRAME:
+            if all(rows[x][0].hi <= NEXT_FRAME or x == e for x in callees(e) if x in rows):
+                overrun.append(e)
+    return {'fc': fc, 'rows': rows, 'handler': handler, 'handler_ctrl': ctrl, 'limit': limit,
+            'race': race, 'overrun': overrun, 'irq_roots': irq_roots}
+
+
+def write_cost(res, name, out, w):
+    """NAME.cost.tsv and the frame cost section of the summary."""
+    cm = res.get('cost')
+    if cm is None:
+        return
+    sc, fc, rows = res['sc'], cm['fc'], cm['rows']
+
+    def where(e):
+        return '%s bank %s' % (h4(e[1]), node_bank_s(e))
+
+    def ctx_of(e):
+        i, f = e in fc.irq_set, e in fc.fg_set
+        return 'both' if i and f else 'irq' if i else 'fg' if f else '-'
+
+    def iff_of(e):
+        v = fc.iff_entry.get(e) or {'unknown'}
+        return 'mixed' if {'on', 'off'} <= v else '/'.join(sorted(v))
+
+    def vdp_of(e):
+        k = set(fc.vdp_write.get(n) for n in fc.dedges(sc.routines[e])) - {None}
+        return '+'.join(sorted(k)) or '-'
+
+    def count_of(c, partial):
+        return 'unknown' if c.unk else 'partial' if partial else 'known'
+
+    def args_of(env):
+        return ' '.join('%s=%s' % (r, h2(v)) for r, v in sorted(env.items()))
+
+    def loops_of(e, env):
+        txt = []
+        for (hd, reg, cnt, p) in fc.loop_report(sc.routines[e], env):
+            txt.append('%s x%s %s' % (h4(hd[1]), cnt if cnt is not None else '?', p.txt()))
+        return ', '.join(txt)
+
+    cols = ['entry', 'bank', 'offset', 'context', 'iff', 'vdp', 'returns', 'cost_lo', 'cost_hi', 'frames', 'count', 'args', 'loops']
+    with open(os.path.join(out, name + '.cost.tsv'), 'w') as f:
+        f.write('\t'.join(cols) + '\n')
+        for e, (c, env, partial) in sorted(rows.items(), key=lambda x: (-x[1][0].hi, nkey(x[0]))):
+            f.write('\t'.join([h4(e[1]), node_bank_s(e), fmt_off(sc.off_of(e[0], e[1])), ctx_of(e), iff_of(e),
+                                vdp_of(e), 'no' if e in fc.noret else 'yes', str(c.lo), str(c.hi), '%.3f' % (c.hi / NEXT_FRAME),
+                                count_of(c, partial), args_of(env), loops_of(e, env)]) + '\n')
+
+    def line(e):
+        c, env, partial = rows[e]
+        x = '    %s: %s cycles (%.2f frames), counts %s' % (where(e), c.txt(), c.hi / NEXT_FRAME, count_of(c, partial))
+        if env:
+            x += ', with ' + args_of(env)
+        lp = loops_of(e, env)
+        if lp:
+            x += '; loops ' + lp
+        return x
+
+    w('Frame cost (Next cycles; a Next frame is %d):' % NEXT_FRAME)
+    h = cm['handler']
+    w('  interrupt handler: %s cycles (%.2f frames) from %s; it %s the VDP control port' %
+      (h.txt(), h.hi / NEXT_FRAME, ', '.join(h4(e[1]) for e in cm['irq_roots']) or 'no vector',
+       'writes' if cm['handler_ctrl'] else 'does not write'))
+    w('  race: foreground routines that write the VDP with interrupts on and cost more than %d (%s): %d' %
+      (cm['limit'], 'the frame minus the handler' if cm['limit'] < NEXT_FRAME else
+       'the frame; the handler\'s worst case is a frame or more', len(cm['race'])))
+    for e in sorted(cm['race'], key=lambda e: -rows[e][0].hi):
+        w(line(e))
+    w('  overrun: interrupt routines that cost more than a frame: %d' % len(cm['overrun']))
+    for e in sorted(cm['overrun'], key=lambda e: -rows[e][0].hi):
+        w(line(e))
+    top = [e for e in rows if e in fc.fg_set and e not in fc.irq_set and e not in fc.noret and fc.own_vdp_iff_on(e)]
+    top.sort(key=lambda e: -rows[e][0].hi)
+    if top:
+        w('  costliest foreground routines that write the VDP with interrupts on:')
+        for e in top[:8]:
+            w(line(e))
+    w('')
+
+
+# ------------------------------------------------------------------ pattern rules
+#
+# Code shapes found in particular games that cost time or break on the Next.
+# Each rule adds its own rows to NAME.sites.tsv and a section to the summary;
+# no rule changes the rows of the main scan. docs/sitescan.md describes them.
+
+RULE_CAP = 2 * NEXT_FRAME       # time searches stop here
+
+
+def _ram_addr(a):
+    return isinstance(a, int) and 0xC000 <= a < 0x10000
+
+
+def _vals(sc, rt, v):
+    """Ints a value can have at a node of routine rt (its own constant, or
+    through the callers); empty when unknown."""
+    if isinstance(v, int):
+        return {v}
+    if isinstance(v, tuple) and sc._argform(v):
+        return set(x[0] for x in sc.resolve_multi(rt, [v], sc.callers_prev) if x is not None)
+    return set()
+
+
+def _mem_addrs(sc, rt, s, o):
+    """Addresses of a memory operand ('abs', nn) or ('mem', reg, d) in state s."""
+    if o[0] == 'abs':
+        return {o[1]}
+    if o[0] == 'mem':
+        return set((v + o[2]) & 0xFFFF for v in _vals(sc, rt, pget(s, o[1])))
+    return set()
+
+
+# ---- rule 1: A-indexed inline jump tables after an RST or CALL
+
+def _linear(sc, node, depth, limit=40):
+    """The instructions from node on in run order, following unconditional
+    JP nn and expanding calls into short helpers that end in RET; None when
+    the code branches or does not decode."""
+    seq = []
+    n = node
+    for _ in range(limit):
+        ins = sc.decode_node(n)
+        if ins is None or ins.sem[0] == 'bad':
+            return None
+        t = ins.sem[0]
+        nxt = (n[0], (n[1] + len(ins.raw)) & 0xFFFF)
+        if t in ('call', 'rst') and (t == 'rst' or ins.sem[2] is None):
+            if depth >= 2:
+                return None
+            tgt = ins.sem[1]
+            same = n[0][0] == 'rom' and n[0][1] == tgt >> 14
+            sub = _linear(sc, (sc.region_for(tgt >> 14, n[0][2] if same else tgt >> 14), tgt), depth + 1, 16)
+            if sub is None or not sub or sub[-1].sem[0] != 'ret':
+                return None
+            seq += sub[:-1]
+            n = nxt
+            continue
+        if t == 'jp' and ins.sem[2] is None:
+            n = (n[0], ins.sem[1])
+            continue
+        if t in ('jp', 'jr', 'djnz', 'call') or (t == 'ret' and ins.sem[1] is not None):
+            return None
+        seq.append(ins)
+        if t in ('ret', 'reti', 'jpind'):
+            return seq
+        n = nxt
+    return None
+
+
+def inline_dispatcher(sc, node):
+    """True when the routine at node takes its return address, adds twice A
+    to it, reads the word there and jumps to it: a table of words follows each
+    call, indexed by A."""
+    seq = _linear(sc, node, 0)
+    if not seq or seq[-1].sem[0] not in ('ret', 'jpind'):
+        return False
+    i = 0
+    while i < len(seq) and seq[i].sem[0] == 'push' and seq[i].sem[1] != 'HL':
+        i += 1
+    if i >= len(seq) or seq[i].text not in ('EX (SP),HL', 'POP HL'):
+        return False
+    rest = seq[i + 1:]
+    twice = sum(1 for x in rest if x.text in ('ADD A,A', 'SLA A', 'RLCA', 'ADD HL,HL'))
+    adds = sum(1 for x in rest if x.text in ('ADD HL,DE', 'ADD HL,BC'))
+    loads = sum(1 for x in rest if x.sem[0] == 'ld8' and x.sem[2] == ('mem', 'HL', 0))
+    if not (twice or adds >= 2) or loads < 2:
+        return False
+    if seq[-1].sem[0] == 'jpind':
+        return True
+    return any(x.text in ('EX (SP),HL', 'PUSH HL', 'PUSH DE') for x in rest)
+
+
+def _block_starts(sc):
+    """ROM offsets where the listing starts a new run of code."""
+    spans = sorted(set((sc.off_of(n[0], n[1]), len(sc.decode_node(n).raw)) for n in sc.ctx
+                       if sc.off_of(n[0], n[1]) is not None))
+    out = set()
+    prev = None
+    for o, ln in spans:
+        if prev is None or o > prev:
+            out.add(o)
+        prev = max(prev or 0, o + ln)
+    return out
+
+
+def _prev_insn(sc, ends, n):
+    m = ends.get((n[0], n[1]))
+    return (m, sc.decode_node(m)) if m is not None else (None, None)
+
+
+def inline_tables(sc, disp, bound):
+    """Read the table after every call of the dispatchers in disp.
+    Returns a list of (site node, dispatcher, table start, mask, words, end reason)."""
+    ends = {}
+    for n in sc.ctx:
+        ins = sc.decode_node(n)
+        ends[(n[0], (n[1] + len(ins.raw)) & 0xFFFF)] = n
+    out = []
+    for d in disp:
+        sites = set(cn for (_crt, cn, _cs) in sc.callers_prev.get(d, ()))
+        for cn in sorted(sites, key=lambda x: (repr(x[0]), x[1])):
+            ins = sc.decode_node(cn)
+            region, a = cn
+            t0 = (a + len(ins.raw)) & 0xFFFF
+            o0 = sc.off_of(region, t0)
+            if o0 is None:
+                continue
+            mask = None
+            p, pi = _prev_insn(sc, ends, cn)
+            if pi is not None and pi.text == 'DEC A':
+                p, pi = _prev_insn(sc, ends, p)
+            if pi is not None and pi.sem[0] == 'alu' and pi.sem[1] == 'AND' and pi.sem[2][0] == 'imm':
+                m = pi.sem[2][1]
+                if (m + 1) & m == 0:
+                    mask = m + 1
+            hi = 0x7FFF if a < 0x8000 else 0xBFFF
+            bank = region[2] if region[0] == 'rom' else None
+            words = []
+            limit = 0x10000
+            why = '128 entries'
+            for k in range(mask or 128):
+                if t0 + 2 * k >= limit:
+                    why = 'reached the lowest target after the table'
+                    break
+                o = o0 + 2 * k
+                if o + 1 >= sc.size:
+                    why = 'end of the cart'
+                    break
+                if k and (o in bound or o + 1 in bound):
+                    why = 'reached known code'
+                    break
+                w = sc.rom[o] | sc.rom[o + 1] << 8
+                if not (0x100 <= w <= hi):
+                    why = 'word %s is not a code address' % h4(w)
+                    break
+                if words and (w > max(words) + 0x800 or w < min(words) - 0x800):
+                    why = 'word %s is far from the others' % h4(w)
+                    break
+                words.append(w)
+                if t0 < w < limit:
+                    limit = w
+            else:
+                if mask:
+                    why = 'AND %s before the call' % h2(mask - 1)
+            out.append((cn, d, t0, mask, words, why, bank))
+    return out
+
+
+def _word_node(sc, w, site):
+    region = site[0]
+    slot = w >> 14
+    if slot == 2:
+        if region[0] != 'rom' or region[1] != 2:
+            return None
+        return (sc.region_for(2, region[2]), w)
+    return (sc.region_for(slot, slot), w)
+
+
+def _word_off(sc, w, site):
+    n = _word_node(sc, w, site)
+    return None if n is None else sc.off_of(n[0], n[1])
+
+
+SITE_KINDS_NEW = ('out', 'in', 'out_c', 'in_c', 'block_out', 'block_in', 'mapper', 'codem_store',
+                  'cartarea_store', 'ram_copy')
+
+
+def rule_inline(res, rom, mapper, args):
+    """Rule 1. Returns (rows, text lines)."""
+    sc = res['sc']
+    z = sc.region_for(0, 0)
+    cands = set()
+    for e, R in sc.routines.items():
+        if e[0] == z and e[1] in range(8, 0x40, 8) and 'rst' in R.kinds:
+            cands.add(e)
+        elif len(sc.callers_prev.get(e, ())) >= 2:
+            cands.add(e)
+    disp = sorted((e for e in cands if inline_dispatcher(sc, e)
+                   and sc.summ_prev.get(e, DEFAULT_SUMMARY).dispatch != 'inline'), key=lambda e: e[1])
+    rows, text = [], []
+    if not disp:
+        return rows, text
+    seeds = list(getattr(sc, 'final_seeds', []))
+    cur = sc
+    extra = []
+    tables = []
+    rescans = 0
+    for _round in range(8):
+        bound = _block_starts(cur)
+        first = inline_tables(cur, [d for d in disp if d in cur.routines], bound)
+        tg = set()
+        for (cn, d, t0, mask, words, why, bank) in first:
+            tg.update(o for o in (_word_off(cur, w, cn) for w in words) if o is not None)
+        tables = inline_tables(cur, [d for d in disp if d in cur.routines], bound | tg)
+        new = []
+        for (cn, d, t0, mask, words, why, bank) in tables:
+            for w in words:
+                m = _word_node(cur, w, cn)
+                if m is not None and m not in extra and m not in cur.routines:
+                    new.append(m)
+        new = sorted(set(new), key=lambda x: (repr(x[0]), x[1]))
+        if not new:
+            break
+        extra += new
+        sc2 = Scanner(rom, mapper, args.unroll)
+        sc2.run(seeds + [(m, 'table') for m in extra])
+        cur = sc2
+        rescans += 1
+    for (cn, d, t0, mask, words, why, bank) in tables:
+        rows.append({'addr': cn[1], 'bank': node_bank_s(cn), 'offset': cur.off_of(cn[0], cn[1]), 'bytes': cur.decode_node(cn).hexbytes(), 'insn': cur.decode_node(cn).text,
+                     'kind': 'inline_table', 'target': h4(t0), 'class': 'dispatcher %s' % h4(d[1]),
+                     'confidence': 'medium', 'how': 'inline-table',
+                     'note': '%d entries (%s): %s' % (len(words), why, ' '.join(h4(w) for w in words))})
+    text.append('  dispatchers: ' + ', '.join('%s bank %s' % (h4(d[1]), node_bank_s(d)) for d in disp))
+    text.append('  tables read: %d; entry points added: %d; rescans: %d' % (len(tables), len(extra), rescans))
+    if cur is sc:
+        return rows, text
+    r2 = collect(cur, rom, [], [], set(), None, cur.rounds, 0, args)
+    old = set((r['kind'], r['offset'], r['addr']) for r in res['sites'])
+    added = []
+    for r in r2['sites']:
+        if r['kind'] in SITE_KINDS_NEW and (r['kind'], r['offset'], r['addr']) not in old:
+            r = dict(r)
+            r['confidence'] = 'medium'
+            r['how'] = 'inline-table'
+            r['note'] = ('reached only through an inline table; ' + r['note']).rstrip('; ')
+            rows.append(r)
+            added.append(r)
+    text.append('  sites reached only through the tables: %d' % len(added))
+    for r in added:
+        text.append('    %s bank %s offset %s  %-20s %-12s %s %s' % (h4(r['addr']), r['bank'], fmt_off(r['offset']), r['insn'],
+                                                                  r['kind'], r['target'], r['class']))
+    return rows, text
+
+
+# ---- rule 2: a mailbox byte that a second plain store can overwrite
+
+def _accesses(sc, rt, s, ins):
+    """Memory accesses at known RAM addresses: list of (addr, what, value),
+    what = 'read', 'store' (a plain store) or 'rmw' (INC, DEC, SET, RES...)."""
+    sem = ins.sem
+    t = sem[0]
+    out = []
+
+    def mem(o):
+        return isinstance(o, tuple) and o[0] in ('abs', 'mem')
+    if t == 'ld8':
+        if mem(sem[1]):
+            v = sc.g8(s, sem[2])
+            for a in _mem_addrs(sc, rt, s, sem[1]):
+                out.append((a, 'store', v if isinstance(v, int) else None))
+        if mem(sem[2]):
+            for a in _mem_addrs(sc, rt, s, sem[2]):
+                out.append((a, 'read', None))
+    elif t == 'st16':
+        for a in (sem[1], (sem[1] + 1) & 0xFFFF):
+            out.append((a, 'store', None))
+    elif t == 'ld16' and isinstance(sem[2], tuple) and sem[2][0] == 'abs':
+        out += [(sem[2][1], 'read', None), ((sem[2][1] + 1) & 0xFFFF, 'read', None)]
+    elif t == 'alu' and mem(sem[2]):
+        out += [(a, 'read', None) for a in _mem_addrs(sc, rt, s, sem[2])]
+    elif t in ('inc8', 'dec8') and mem(sem[1]):
+        out += [(a, 'rmw', None) for a in _mem_addrs(sc, rt, s, sem[1])]
+    elif t == 'cb' and mem(sem[3]):
+        out += [(a, 'read' if sem[1] == 'BIT' else 'rmw', None) for a in _mem_addrs(sc, rt, s, sem[3])]
+    return [x for x in out if _ram_addr(x[0])]
+
+
+class PathMin(FrameCost):
+    """The frame cost model with the cheapest path instead of the costliest:
+    the shortest run time of a routine, loops with a known count counted in
+    full and other loops once. mode 'next': Next cycles, each I/O instruction
+    at its cheapest trap; mode 'sms': Z80 T-states."""
+
+    def __init__(self, fc, mode):
+        self.__dict__.update(fc.__dict__)
+        self.memo = {}
+        self.noret = set()
+        self.mode = mode
+
+    def node_cost(self, R, n, env, need, stack):
+        if self.mode == 'next':
+            c = FrameCost.node_cost(self, R, n, env, need, stack)
+            return Cost(c.lo, c.lo, c.unk)
+        ins = self.sc.decode_node(n)
+        if ins is None:
+            return ZERO
+        c = Cost(tstates(ins.raw))
+        if ins.sem[0] == 'block' and ins.sem[1] in ('LDIR', 'LDDR', 'CPIR', 'CPDR'):
+            cnt = self._value(R, n, 'BC', env, need)
+            c = Cost(21 * (cnt or 0x10000) - 5) if cnt is not None else Cost(16, 16, True)
+        elif ins.sem[0] == 'block' and ins.sem[1] in ('OTIR', 'OTDR', 'INIR', 'INDR'):
+            cnt = self._value(R, n, 'B', env, need)
+            c = Cost(21 * (cnt or 256) - 5) if cnt is not None else Cost(16, 16, True)
+        callees = self.calls_at.get((R.entry, n))
+        if callees:
+            best = None
+            for e in callees:
+                k = self.routine_cost(e, self.callee_env(R, n, env, need), stack, need, (R.entry, n))
+                best = k if best is None or k.lo < best.lo else best
+            c = c + best
+        return c
+
+    def _path(self, R, ctx, n, env, need, stack, memo, active, anyend):
+        if n in memo:
+            return memo[n]
+        if n in active:
+            return ZERO if anyend else None
+        loops, inner, preds, back = self._loops(R)
+        L, x = None, inner.get(n)
+        while x is not None and x is not ctx:
+            L, x = x, x.parent
+        if x is not ctx:
+            L = None
+        active.add(n)
+        opts = []
+        if L is not None:
+            c = self.loop_total(R, L, env, need, stack)
+            for x in L.body_sorted():
+                for (m, _t) in self.dedges(R).get(x, ()):
+                    if m in L.body:
+                        continue
+                    if ctx is not None and (m == ctx.header or m not in ctx.body):
+                        opts.append(ZERO)
+                        continue
+                    r = self._path(R, ctx, m, env, need, stack, memo, active, anyend)
+                    if r is not None:
+                        opts.append(r)
+                ins = self.sc.decode_node(x)
+                if ins is not None and self.is_exit(R, x, ins):
+                    opts.append(ZERO)
+        else:
+            c = self.node_cost(R, n, env, need, stack)
+            ins = self.sc.decode_node(n)
+            es = self.dedges(R).get(n, ()) if ins is not None else ()
+            if ins is not None and self.is_exit(R, n, ins):
+                opts.append(ZERO)
+            for (m, _t) in es:
+                if m in self.reset_nodes and R.entry[1] != 0x0000 and n not in self.reset_nodes:
+                    continue
+                if ctx is not None and (m == ctx.header or m not in ctx.body):
+                    opts.append(ZERO)
+                    continue
+                r = self._path(R, ctx, m, env, need, stack, memo, active, anyend)
+                if r is not None:
+                    opts.append(r)
+            if not es and anyend:
+                opts.append(ZERO)
+        if not opts and anyend:
+            opts.append(ZERO)
+        res = None
+        if opts:
+            res = c + min(opts, key=lambda k: k.lo)
+        active.discard(n)
+        memo[n] = res
+        return res
+
+    def shortest(self, e):
+        """Shortest time of one call of e, or None when no path returns."""
+        if e not in self.sc.routines:
+            return None
+        c = self.routine_cost(e, {}, frozenset(), None, None)
+        return None if e in self.noret else c.lo
+
+
+class MinTime:
+    """Shortest run time from one instruction to another, over every edge the
+    scanner found (table entries too), through calls and returns: called
+    routines that the path does not enter cost their shortest time
+    (PathMin), and loops on the path itself count once. A HALT or a loop
+    that waits for the frame interrupt (no stores, no calls, and a read of the
+    VDP status, the V counter, or one fixed RAM byte) ends a path: the handler
+    runs there. So does a call of a routine that always waits (every path to
+    its return meets a HALT, a wait loop, or a call of such a routine)."""
+
+    def __init__(self, fc, irq_stores):
+        self.fc, self.sc = fc, fc.sc
+        self.pm = (PathMin(fc, 'next'), PathMin(fc, 'sms'))
+        self.skip = {}
+        self.cost = {}
+        self.calls = {}
+        for callee, lst in self.sc.callers_prev.items():
+            for (crt, cnode, _cs) in lst:
+                self.calls.setdefault((crt, cnode), set()).add(callee)
+        for k, cs in self.calls.items():
+            self.calls[k] = sorted(cs, key=nkey)
+        self.wait = set()
+        for e, R in self.sc.routines.items():
+            for L in fc._loops(R)[0].values():
+                if self._waits(e, L, irq_stores):
+                    self.wait |= L.body
+
+    def _waits(self, e, L, irq_stores):
+        sc = self.sc
+        polls = False
+        for n in L.body_sorted():
+            ins = sc.decode_node(n)
+            t = ins.sem[0]
+            if t in ('call', 'rst', 'st16', 'outn', 'outC', 'block', 'halt'):
+                return False
+            if t == 'ld8' and not isinstance(ins.sem[1], str):
+                return False
+            if t == 'inn' and port_class(ins.sem[1], 'in') in ('vdp_status', 'v_counter'):
+                polls = True
+            for (rt, s, _h) in sc.ctx.get(n, ())[:4]:
+                if rt != e:
+                    continue
+                for (a, what, _v) in _accesses(sc, rt, s, ins):
+                    if what == 'read' and a in irq_stores:
+                        polls = True
+                    # a fixed RAM byte polled by a loop with no stores and no
+                    # calls: only another context can end the loop
+                    if what == 'read' and isinstance(a, int) and 0xC000 <= a <= 0xFFFB:
+                        polls = True
+        return polls
+
+    def node(self, e, n):
+        """(Next cycles, SMS T-states) of one run of node n in routine e, without
+        its callees; False for a HALT or a wait loop."""
+        key = (e, n)
+        c = self.cost.get(key)
+        if c is None:
+            ins = self.sc.decode_node(n)
+            sem = ins.sem
+            if sem[0] == 'halt' or n in self.wait:
+                c = False
+            else:
+                nx, ts = native_cycles(ins), tstates(ins.raw)
+                cnt = 1
+                if sem[0] == 'block' and sem[1] in ('LDIR', 'LDDR', 'CPIR', 'CPDR', 'OTIR', 'OTDR', 'INIR', 'INDR'):
+                    reg = 'BC' if sem[1][:2] in ('LD', 'CP') else 'B'
+                    vals = set()
+                    for (rt, s, _h) in self.sc.ctx.get(n, ()):
+                        if rt == e:
+                            v = pget(s, reg) if reg == 'BC' else s['B']
+                            vals.add(v if isinstance(v, int) else None)
+                    if vals and None not in vals:
+                        cnt = min(vals) or (0x10000 if reg == 'BC' else 0x100)
+                    ts = 21 * cnt - 5
+                    nx = 24 * cnt - 5
+                io = self.fc.io.get(n)
+                if io is not None:
+                    form, classes = io
+                    nx = min(trap_cost(form, cl, cnt).lo for cl in classes)
+                c = (nx, ts)
+            self.cost[key] = c
+        return c
+
+    def passable(self, c):
+        """False when every path through routine c to its return meets a HALT,
+        a wait loop, or a call of a routine that always waits."""
+        memo = self.__dict__.setdefault('_pass', {})
+        if c in memo:
+            return memo[c]
+        memo[c] = True          # recursion: assume passable
+        R = self.sc.routines.get(c)
+        if R is None:
+            return True
+        ok = False
+        work, seen = [c], set()
+        while work and not ok:
+            n = work.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            ins = self.sc.decode_node(n)
+            if ins.sem[0] == 'halt' or n in self.wait:
+                continue
+            callees = self.calls.get((c, n), ())
+            if callees and not any(self.passable(x) for x in callees):
+                continue
+            if not callees and (self._is_exit(c, n, ins) or (ins.sem[0] == 'ret' and ins.sem[1] is not None)):
+                ok = True
+                break
+            work.extend(self._succ(c, n))
+        memo[c] = ok
+        return ok
+
+    def skip_cost(self, c):
+        if not self.passable(c):
+            return None
+        if c not in self.skip:
+            a, b = self.pm[0].shortest(c), self.pm[1].shortest(c)
+            self.skip[c] = None if a is None or b is None else (a, b)
+        return self.skip[c]
+
+    def _succ(self, e, n):
+        R = self.sc.routines.get(e)
+        return [m for (m, _t) in R.edges.get(n, ())] if R is not None else []
+
+    def _is_exit(self, e, n, ins):
+        if ins.sem[0] not in ('ret', 'reti'):
+            return False
+        nxt = (n[0], (n[1] + len(ins.raw)) & 0xFFFF)
+        return all(m == nxt for m in self._succ(e, n))
+
+    def between(self, starts, goal):
+        """(Next cycles, SMS T-states, anon) from the end of a start node to
+        the start of goal on the shortest path, or None. The search first
+        keeps to paths whose returns all match a call on the path; only when
+        there is none does it allow a return with no known stack (to any
+        caller of the routine), and then anon is True."""
+        for anon_ok in (False, True):
+            r = self._between(starts, goal, anon_ok)
+            if r is not None:
+                return r + (anon_ok,)
+        return None
+
+    def _between(self, starts, goal, anon_ok):
+        sc = self.sc
+        # routines whose calls can lead to goal: only those are entered
+        rev = {}
+        for (crt, _cn), cs in self.calls.items():
+            for c in cs:
+                rev.setdefault(c, set()).add(crt)
+        work = [rt for (rt, _s, _h) in sc.ctx.get(goal, ())]
+        self.enter = set()
+        while work:
+            x = work.pop()
+            if x in self.enter:
+                continue
+            self.enter.add(x)
+            work.extend(rev.get(x, ()))
+        heap = []
+        k = 0
+        for (n, e) in starts:
+            c = self.node(e, n)
+            if c is False:
+                continue
+            for m in self._next(e, n, (), anon_ok):
+                k += 1
+                heapq.heappush(heap, (c[0] + m[3], c[1] + m[4], k, m[0], m[1], m[2]))
+        seen = set()
+        while heap:
+            nx, ts, _k, n, e, stack = heapq.heappop(heap)
+            if nx > RULE_CAP:
+                return None
+            if n == goal:
+                return (nx, ts)
+            key = (n, e, stack)
+            if key in seen:
+                continue
+            seen.add(key)
+            if len(seen) > 200000:
+                return None
+            c = self.node(e, n)
+            if c is False:
+                continue
+            for m in self._next(e, n, stack, anon_ok):
+                k += 1
+                heapq.heappush(heap, (nx + c[0] + m[3], ts + c[1] + m[4], k, m[0], m[1], m[2]))
+        return None
+
+    def _next(self, e, n, stack, anon_ok=True):
+        """Successors (node, routine, stack, extra Next, extra SMS)."""
+        sc = self.sc
+        ins = sc.decode_node(n)
+        out = []
+        callees = self.calls.get((e, n), ())
+        succ = self._succ(e, n)
+        if callees:
+            for c in callees:
+                if len(stack) < 8 and c in self.enter:
+                    out.append((c, c, stack + ((e, n),), 0, 0))
+                k = self.skip_cost(c)
+                if k is not None:
+                    out += [(m, e, stack, k[0], k[1]) for m in succ]
+            if ins.sem[0] == 'call' and ins.sem[2] is not None:
+                nxt = (n[0], (n[1] + len(ins.raw)) & 0xFFFF)
+                out += [(m, e, stack, 0, 0) for m in succ if m == nxt]
+            return out
+        cond_ret = ins.sem[0] == 'ret' and ins.sem[1] is not None
+        if self._is_exit(e, n, ins) or cond_ret:
+            if stack:
+                pe, pn = stack[-1]
+                out += [(m, pe, stack[:-1], 0, 0) for m in self._succ(pe, pn)]
+            elif anon_ok:
+                for (crt, cnode, _cs) in sc.callers_prev.get(e, ()):
+                    if crt in sc.routines:
+                        out += [(m, crt, (), 0, 0) for m in self._succ(crt, cnode)]
+            if cond_ret:
+                nxt = (n[0], (n[1] + len(ins.raw)) & 0xFFFF)
+                out += [(m, e, stack, 0, 0) for m in succ if m == nxt]
+            return out
+        return [(m, e, stack, 0, 0) for m in succ]
+
+
+def _ramclear_seed(sc, n, ins):
+    """True for LD (HL),x at the head of the RAM-clear idiom LD (HL),x; ...;
+    LDIR: it writes one byte of a range, not a mailbox clear."""
+    sem = ins.sem
+    if sem[0] != 'ld8' or sem[1] != ('mem', 'HL', 0):
+        return False
+    m = (n[0], (n[1] + len(ins.raw)) & 0xFFFF)
+    for _ in range(4):
+        nx = sc.decode_node(m)
+        if nx is None:
+            return False
+        if nx.sem[0] == 'block':
+            return nx.sem[1] == 'LDIR'
+        m = (m[0], (m[1] + len(nx.raw)) & 0xFFFF)
+    return False
+
+
+MAILBOX_WINDOW = 0.1            # SMS frames between the stores below which a race is unlikely
+
+
+def _mailbox_conf(p):
+    """medium for a pair that has a window of at least MAILBOX_WINDOW SMS
+    frames and under a frame on the SMS too; low otherwise (an interrupt is
+    unlikely to land between the stores, or on the SMS it always does)."""
+    sms = p[0][1]
+    return 'medium' if MAILBOX_WINDOW * SMS_FRAME_T <= sms < SMS_FRAME_T else 'low'
+
+
+def rule_mailbox(res):
+    sc, cm = res['sc'], res['cost']
+    fc = cm['fc']
+    irq_r, irq_w0, irq_st = {}, {}, set()
+    irq_inc = set()
+    fg_st = {}
+    fg_reads = {}
+    fg_read_nodes = {}
+    fg_writers = {}
+    for e, R in sc.routines.items():
+        irq = e in fc.irq_set
+        fg = e in fc.fg_set and not irq
+        if not irq and not fg:
+            continue
+        for n in fc.dedges(R):
+            ins = sc.decode_node(n)
+            for (rt, s, _h) in sc.ctx.get(n, ()):
+                if rt != e:
+                    continue
+                for (a, what, v) in _accesses(sc, rt, s, ins):
+                    if irq:
+                        if what == 'read':
+                            irq_r.setdefault(a, set()).add(n)
+                        elif what == 'store':
+                            irq_st.add(a)
+                            if v == 0 and not _ramclear_seed(sc, n, ins):
+                                irq_w0.setdefault(a, set()).add(n)
+                        else:
+                            irq_st.add(a)
+                            if ins.sem[0] in ('inc8', 'dec8'):
+                                irq_inc.add(a)
+                    else:
+                        if what == 'read' or what == 'rmw':
+                            fg_reads.setdefault(a, set()).add(e)
+                        if what == 'read':
+                            fg_read_nodes.setdefault(a, set()).add((n, e))
+                        else:
+                            fg_writers.setdefault(a, set()).add(e)
+                        if what == 'store' and v != 0:
+                            fg_st.setdefault(a, {}).setdefault(n, set()).add((e, v))
+    mt = MinTime(fc, irq_st)
+    # a byte the interrupt increments is a counter, and one that a foreground
+    # routine reads outside a wait loop, without writing it, is a state the
+    # foreground dispatches on: neither is a request that a second store can
+    # lose
+    boxes = sorted(a for a in irq_r if a in irq_w0 and a in fg_st and a not in irq_inc and
+                   all(n in mt.wait or e in fg_writers.get(a, ()) for (n, e) in fg_read_nodes.get(a, ())))
+    rows, text = [], []
+    for a in boxes:
+        stores = {}
+        for n, evs in fg_st[a].items():
+            plain = [(e, v) for (e, v) in evs if e not in fg_reads.get(a, ())]
+            if plain:
+                stores[n] = plain
+        nodes = sorted(stores, key=lambda n: (sc.off_of(n[0], n[1]) or 0, nkey(n)))[:12]
+        if len(nodes) < 2:
+            continue
+        rd = sorted(irq_r[a], key=nkey)
+        cl = sorted(irq_w0[a], key=nkey)
+        found = []
+        for s1 in nodes:
+            starts = [(s1, e) for (e, _v) in sorted(set(stores[s1]), key=repr)]
+            for s2 in nodes:
+                if s2 == s1:
+                    continue
+                t = mt.between(starts, s2)
+                if t is not None:
+                    found.append((t[:2], s1, s2, t[2]))
+        if not found:
+            text.append('  %s: read and cleared by the interrupt context at %s; foreground plain stores at %s; '
+                        'no path from one store to another within %d cycles' %
+                        (h4(a), ' '.join(h4(n[1]) for n in rd + cl), ' '.join(h4(n[1]) for n in nodes), RULE_CAP))
+            continue
+        pairs = []
+        for (t, s1, s2, anon) in found:
+            vs1 = set(v for (_e, v) in stores[s1])
+            vs2 = set(v for (_e, v) in stores[s2])
+            if None not in vs1 and vs1 == vs2 and len(vs1) == 1:
+                continue            # the same value twice loses nothing
+            if t[0] < NEXT_FRAME:
+                pairs.append((t, s1, s2, anon))
+
+        def vals_of(n):
+            return ','.join(sorted(set(h2(v) if v is not None else '?' for (_e, v) in stores[n])))
+
+        def pair_txt(p):
+            t, s1, s2, anon = p
+            return '%s stores %s, then %s stores %s: %d Next cycles (%.2f frames), %d SMS T-states (%.2f SMS frames)' % (
+                h4(s1[1]), vals_of(s1), h4(s2[1]), vals_of(s2), t[0], t[0] / NEXT_FRAME, t[1], t[1] / SMS_FRAME_T) + (
+                ' (needs a return with no known stack)' if anon else '')
+        head = 'interrupt context reads %s at %s and clears it at %s' % (
+            h4(a), ' '.join(h4(n[1]) for n in rd), ' '.join(h4(n[1]) for n in cl))
+        if not pairs:
+            text.append('  %s: %s; no two foreground stores with different values within a frame of each other' %
+                        (h4(a), head))
+            continue
+        # the row: the pair of highest confidence; among equals one whose path
+        # has a known stack, then the longest SMS time
+        pairs.sort(key=lambda p: (_mailbox_conf(p) != 'medium', p[3], -p[0][1], p[0][0]))
+        t, s1, s2, anon = pairs[0]
+        over = t[1] >= SMS_FRAME_T
+        note = ('%s; %d store pairs under a frame on the Next (shortest paths); longest on the SMS: %s%s' %
+                (head, len(pairs), pair_txt(pairs[0]),
+                 '; over a frame on the SMS: only the Next can lose the first store' if over else
+                 '; the SMS time is a lower bound'))
+        cls = ('under a frame, SMS over' if over else
+               'under a frame, caller unknown' if anon else 'under a frame')
+        conf = _mailbox_conf(pairs[0])
+        ins = sc.decode_node(s2)
+        rows.append({'addr': s2[1], 'bank': node_bank_s(s2), 'offset': sc.off_of(s2[0], s2[1]),
+                     'bytes': ins.hexbytes(), 'insn': ins.text, 'kind': 'mailbox_race', 'target': h4(a),
+                     'class': cls, 'confidence': conf,
+                     'how': 'static', 'note': note})
+        text.append('  %s: %s; %d store pairs under a frame on the Next:' % (h4(a), head, len(pairs)))
+        for p in pairs[:6]:
+            text.append('    ' + pair_txt(p))
+        if len(pairs) > 6:
+            text.append('    ... %d more' % (len(pairs) - 6))
+    return rows, text
+
+
+SMS_FRAME_T = 59736             # 262 lines of 228 T-states
+
+
+# ---- rule 3: column and rectangle streamers
+
+def _writes_in(fc, e, n, env=None, depth=0, active=frozenset(), sink=None):
+    """(control writes, data writes, unknown) of one run of node n of routine
+    e, with its callees; loops in the callees count with the values the call
+    passes; unknown: some such loop count is not known (counted once)."""
+    sc = fc.sc
+    env = env or {}
+    R = sc.routines[e]
+    ctrl = data = 0
+    unk = False
+    w = fc.vdp_write.get(n)
+    if w is not None:
+        if sink is not None:
+            sink.add(n)
+        ins = sc.decode_node(n)
+        k = 1
+        if ins.sem[0] == 'block' and ins.sem[1] in ('OTIR', 'OTDR'):
+            b = fc._value(R, n, 'B', env, set())
+            if b is None:
+                unk = True
+            k = (b or 256) if b is not None else 1
+        if w == 'control':
+            ctrl += k
+        else:
+            data += k
+            io = fc.io.get(n)
+            if io is not None and 'vdp_control' in io[1]:
+                ctrl += k
+    if depth < 3:
+        for c in fc.calls_at.get((e, n), ()):
+            Rc = sc.routines.get(c)
+            if Rc is None or c in active:
+                continue
+            cenv = fc.callee_env(R, n, env, set())
+            loops, inner, preds, back = fc._loops(Rc)
+            for m in fc.dedges(Rc):
+                a, b, u = _writes_in(fc, c, m, cenv, depth + 1, active | {c}, sink)
+                if not a and not b:
+                    unk |= u
+                    continue
+                mult = 1
+                L = inner.get(m)
+                while L is not None:
+                    _r, cnt = fc.loop_count(Rc, L, cenv, set())
+                    if cnt is None:
+                        unk = True
+                    else:
+                        mult *= cnt
+                    L = L.parent
+                ctrl += a * mult
+                data += b * mult
+                unk |= u
+    return ctrl, data, unk
+
+
+def _adds_40(sc, e, n):
+    """'+$40' or '-$40' when node n adds $40 to an address, else None."""
+    ins = sc.decode_node(n)
+    sem = ins.sem
+    if sem[0] == 'add16':
+        for (rt, s, _h) in sc.ctx.get(n, ()):
+            if rt != e:
+                continue
+            for v in _vals(sc, rt, pget(s, sem[2])):
+                if v == 0x40:
+                    return '+$40'
+                if v == 0xFFC0:
+                    return '-$40'
+    elif sem[0] == 'alu' and sem[1] in ('ADD', 'SUB') and sem[2] == ('imm', 0x40):
+        return '+$40' if sem[1] == 'ADD' else '-$40'
+    elif sem[0] == 'alu' and sem[1] == 'ADD' and sem[2] == ('imm', 0xC0):
+        return '-$40'
+    return None
+
+
+def rule_streamers(res):
+    sc, cm = res['sc'], res['cost']
+    fc, crow = cm['fc'], cm['rows']
+    found = {}
+    for e in sorted(sc.routines, key=lambda x: (repr(x[0]), x[1])):
+        R = sc.routines[e]
+        loops, inner, preds, back = fc._loops(R)
+        good = {}
+        for L in loops.values():
+            ctrl = data = 0
+            step = None
+            env = crow[e][1] if e in crow else {}
+            for n in L.body_sorted():
+                a, b, _u = _writes_in(fc, e, n, env, sink=set())
+                ctrl += a
+                data += b
+                step = step or _adds_40(sc, e, n)
+            if ctrl >= 2 and data >= 1 and not step:
+                step = _pass_step(sc, fc, e, L)
+            if ctrl >= 2 and data >= 1 and step:
+                good[L.header] = L
+        for h, L in good.items():
+            if any(M.parent is L for M in good.values()):
+                continue            # report the innermost loop that streams
+            if h in found:
+                continue
+            env = crow[e][1] if e in crow else {}
+            need = set()
+            reg, cnt = fc.loop_count(R, L, env, need)
+            per = fc._path(R, L, L.header, env, need, frozenset({e}), {}, set(), True)
+            # data writes per pass, inner loops counted
+            cells = 0
+            unknown_inner = False
+            wnodes = set()
+            for n in L.body_sorted():
+                il = inner.get(n)
+                k = 1
+                M = il
+                while M is not None and M is not L:
+                    _r, c = fc.loop_count(R, M, env, need)
+                    if c is None:
+                        unknown_inner = True
+                    else:
+                        k *= c
+                    M = M.parent
+                _a, b, u = _writes_in(fc, e, n, env, sink=wnodes)
+                cells += k * b
+                unknown_inner |= u
+            total = fc.loop_total(R, L, env, need, frozenset({e}))
+            ctx = 'irq' if e in fc.irq_set and e not in fc.fg_set else 'both' if e in fc.irq_set else 'fg'
+            outer = L.parent
+            ocnt = fc.loop_count(R, outer, env, need)[1] if outer is not None else None
+            ps = _pass_step(sc, fc, e, L)
+            found[h] = (e, L, cnt, cells, unknown_inner, per, total, ctx, outer, ocnt,
+                        ('%s a pass' % ps) if ps else _adds_40_any(sc, e, L), wnodes)
+    rows, text = [], []
+    for h, (e, L, cnt, cells, unk, per, total, ctx, outer, ocnt, step, wn) in sorted(found.items(), key=lambda x: -x[1][6].hi):
+        ins = sc.decode_node(h)
+        note = ('routine %s (%s); passes %s, address step %s, %s%s VDP data writes a pass; one pass %s cycles, '
+                'loop %s cycles (%.2f frames)%s' %
+                (h4(e[1]), ctx, cnt if cnt is not None else '?', step, cells, '+' if unk else '', per.txt(),
+                 total.txt(), total.hi / NEXT_FRAME,
+                 '; inside loop %s x%s' % (h4(outer.header[1]), ocnt if ocnt is not None else '?') if outer else ''))
+        note += '; VDP writes at ' + ' '.join('%s(%s)' % (h4(m[1]), fmt_off(sc.off_of(m[0], m[1])))
+                                             for m in sorted(wn, key=lambda m: (sc.off_of(m[0], m[1]) or 0, nkey(m))))
+        rows.append({'addr': h[1], 'bank': node_bank_s(h), 'offset': sc.off_of(h[0], h[1]), 'bytes': ins.hexbytes(),
+                     'insn': ins.text, 'kind': 'streamer', 'target': h4(e[1]), 'class': ctx,
+                     'confidence': 'high' if cnt is not None else 'medium', 'how': 'static', 'note': note})
+        text.append('  %s bank %s: %s' % (h4(h[1]), node_bank_s(h), note))
+    return rows, text
+
+
+def _adds_40_any(sc, e, L):
+    for n in L.body_sorted():
+        s = _adds_40(sc, e, n)
+        if s:
+            return '%s at %s' % (s, h4(n[1]))
+    return '?'
+
+
+_STEP_PAIRS = ('BC', 'DE', 'HL', 'IX', 'IY')
+
+
+def _pass_step(sc, fc, e, L):
+    """A register pair that one pass of loop L moves by $40 or -$40 (net, on
+    some path through the body): 'HL +$40' and the like, or None. Follows INC,
+    DEC, ADD rr with a known value, the block instructions and EX DE,HL; a
+    call keeps only the pairs its summary keeps."""
+    R = sc.routines[e]
+    edges = fc.dedges(R)
+    paths = 0
+
+    def apply(st, n):
+        ins = sc.decode_node(n)
+        sem = ins.sem
+        t = sem[0]
+        st = dict(st)
+        if t == 'exde':
+            st['HL'], st['DE'] = st['DE'], st['HL']
+        elif t in ('inc16', 'dec16') and sem[1] in st:
+            o = st[sem[1]]
+            if o is not None:
+                st[sem[1]] = (o[0], o[1] + (1 if t == 'inc16' else -1))
+        elif t == 'add16' and sem[1] in st:
+            o = st[sem[1]]
+            k = set()
+            for (rt, s, _h) in sc.ctx.get(n, ()):
+                if rt == e:
+                    k |= _vals(sc, rt, pget(s, sem[2])) or {None}
+            if o is not None and len(k) == 1 and None not in k:
+                v = k.pop()
+                st[sem[1]] = (o[0], o[1] + (v if v < 0x8000 else v - 0x10000))
+            else:
+                st[sem[1]] = None
+        elif t == 'block':
+            d = 1 if sem[1] in ('LDI', 'LDIR', 'OUTI', 'OTIR', 'INI', 'INIR', 'CPI', 'CPIR') else -1
+            if sem[1][-1] == 'R':
+                st['HL'] = None
+                if sem[1][:2] == 'LD':
+                    st['DE'] = None
+            else:
+                if st['HL'] is not None:
+                    st['HL'] = (st['HL'][0], st['HL'][1] + d)
+                if sem[1] in ('LDI', 'LDD') and st['DE'] is not None:
+                    st['DE'] = (st['DE'][0], st['DE'][1] + d)
+        elif t in ('call', 'rst'):
+            for c in fc.calls_at.get((e, n), ()):
+                out = sc.summ_prev.get(c, DEFAULT_SUMMARY).out
+                for p in _STEP_PAIRS:
+                    if not all(out.get(h) == ('keep',) for h in PAIRS[p]):
+                        st[p] = None
+        elif t == 'pop' and sem[1] in st:
+            st[sem[1]] = None
+        elif t == 'ld16' and sem[1] in st:
+            st[sem[1]] = None
+        elif t in ('ld8', 'alu', 'inc8', 'dec8', 'cb', 'acc', 'inC', 'exx'):
+            dst = sem[1] if t in ('ld8', 'inc8', 'dec8') else sem[4] if t == 'cb' else sem[1] if t == 'inC' else None
+            if t == 'exx':
+                st = {p: (None if p in ('BC', 'DE', 'HL') else st[p]) for p in st}
+            for p in _STEP_PAIRS:
+                if isinstance(dst, str) and dst in PAIRS[p]:
+                    st[p] = None
+            if t == 'cb' and isinstance(sem[3], str):
+                for p in _STEP_PAIRS:
+                    if sem[3] in PAIRS[p] and sem[1] != 'BIT':
+                        st[p] = None
+        return st
+
+    start = {p: (p, 0) for p in _STEP_PAIRS}
+    work = [(L.header, start, frozenset())]
+    steps = 0
+    while work and paths < 64 and steps < 4000:
+        steps += 1
+        n, st, seen = work.pop()
+        st = apply(st, n)
+        for (m, _t) in edges.get(n, ()):
+            if m == L.header:
+                paths += 1
+                for p in _STEP_PAIRS:
+                    o = st[p]
+                    if o is not None and o[0] == p and o[1] in (0x40, -0x40):
+                        return '%s %s$40' % (p, '+' if o[1] > 0 else '-')
+            elif m in L.body and m not in seen:
+                work.append((m, st, seen | {n}))
+    return None
+
+
+# ---- rule 4: Sega planar RLE decoder
+
+RLE_CORE = bytes.fromhex('7E23B7C84FE67F47')
+RLE_CORE_DE = bytes.fromhex('1A13B7C8')      # the same core reading the stream through DE (Hang On)
+
+
+def rule_rle(res):
+    sc, cm = res['sc'], res['cost']
+    fc, crow = cm['fc'], cm['rows']
+    rom = sc.rom
+    byoff = {}
+    for n in sc.ctx:
+        o = sc.off_of(n[0], n[1])
+        if o is not None:
+            byoff.setdefault(o, []).append(n)
+    hits = []
+    i = rom.find(RLE_CORE)
+    while i >= 0:
+        hits.append((i, 'core'))
+        i = rom.find(RLE_CORE, i + 1)
+    for head, form in ((RLE_CORE[:4], 'variant'), (RLE_CORE_DE, 'variant-de')):
+        j = rom.find(head)
+        while j >= 0:
+            if not any(o == j for o, _k in hits) and 0xE6 in rom[j + 4:j + 8] and rom[rom.index(0xE6, j + 4) + 1] == 0x7F:
+                hits.append((j, form))
+            j = rom.find(head, j + 1)
+    rows, text = [], []
+    vec_ctrl = set(v for v in range(0, 0x40, 8) if rom[v:v + 2] == b'\xD3\xBF')
+    for o, form in sorted(hits):
+        window = rom[o:o + 64]
+        out_be = window.count(b'\xD3\xBE')
+        ctrl_bytes = window.count(b'\xD3\xBF') + sum(1 for b in window if b in (0xC7 + v for v in vec_ctrl))
+        nodes = byoff.get(o, [])
+        bank = o >> 14
+        if nodes:
+            n = nodes[0]
+            ents = sorted(set(rt for m in nodes for (rt, _s, _h) in sc.ctx[m]), key=nkey)
+            irq = [e for e in ents if e in fc.irq_set]
+            ctrl = data = 0
+            wn = set()
+            for e in ents:
+                R = sc.routines[e]
+                L = fc._loops(R)[1].get(n)
+                body = L.body if L is not None else {n}
+                for m in body:
+                    a, b, _u = _writes_in(fc, e, m, crow[e][1] if e in crow else {}, sink=wn)
+                    ctrl, data = max(ctrl, a), max(data, b)
+            cost = None
+            for e in ents:
+                if e in crow:
+                    c = crow[e][0]
+                    cost = c if cost is None else cost.most(c)
+            note = ('%s; routine %s; %s; loop: %d control and %d data writes a pass; routine cost %s cycles%s' %
+                    ('frame work: reached from the interrupt handler (%s)' % ' '.join(h4(e[1]) for e in irq) if irq else
+                     'not frame work: foreground only',
+                     ' '.join(h4(e[1]) for e in ents), form, ctrl, data, cost.txt() if cost else '?',
+                     ' (%.2f frames, loop count from the data)' % (cost.hi / NEXT_FRAME) if cost else ''))
+            note += '; VDP writes at ' + ' '.join('%s(%s)' % (h4(m[1]), fmt_off(sc.off_of(m[0], m[1])))
+                                                 for m in sorted(wn, key=lambda m: (sc.off_of(m[0], m[1]) or 0, nkey(m))))
+            calls = sorted(set(cn for e in ents for (_crt, cn, _cs) in sc.callers_prev.get(e, ())),
+                           key=lambda m: (sc.off_of(m[0], m[1]) or 0, nkey(m)))
+            note += '; called from ' + (' '.join('%s(%s)' % (h4(m[1]), fmt_off(sc.off_of(m[0], m[1]))) for m in calls)
+                                        or 'nowhere (a jump or table entry)')
+            addr, cls, conf = n[1], 'irq' if irq else 'fg', 'high'
+            ins = sc.decode_node(n)
+            bts, txt = ins.hexbytes(), ins.text
+        else:
+            addr = (o & 0x3FFF) | (0x8000 if bank >= 2 else bank * 0x4000)
+            cls, conf = 'unreached', 'low'
+            bts, txt = '7E', 'LD A,(HL)'
+            note = '%s; no path reached it; in the 64 bytes from the core: %d OUT ($BE),A, %d control writes' % (
+                form, out_be, ctrl_bytes)
+        rows.append({'addr': addr, 'bank': bank if not nodes else node_bank_s(nodes[0]), 'offset': o, 'bytes': bts,
+                     'insn': txt, 'kind': 'rle_decoder', 'target': form, 'class': cls, 'confidence': conf,
+                     'how': 'byte scan', 'note': note})
+        text.append('  offset %s (%s): %s' % (fmt_off(o), h4(addr), note))
+    return rows, text
+
+
+def pattern_rules(res, rom, mapper, args):
+    out = {'rows': [], 'sections': []}
+    for title, fn in (('Inline jump tables (an RST or CALL that adds 2*A to its return address and jumps '
+                       'through the word there)', lambda: rule_inline(res, rom, mapper, args)),
+                      ('Mailbox races (a RAM byte the interrupt context reads and clears, written by two '
+                       'foreground plain stores)', lambda: rule_mailbox(res)),
+                      ('Column and rectangle streamers (a loop with a VDP control write pair, data writes '
+                       'and an address step of $40)', lambda: rule_streamers(res)),
+                      ('Sega planar RLE decoders (core 7E 23 B7 C8 4F E6 7F 47)', lambda: rule_rle(res))):
+        rows, text = fn()
+        out['rows'] += rows
+        out['sections'].append((title, rows, text))
+    return out
+
+
+def write_rules(res, w):
+    pr = res.get('rules')
+    if not pr:
+        return
+    w('Pattern rules (rows in the sites file with kinds inline_table, mailbox_race, streamer, rle_decoder, '
+      'and new sites with how inline-table):')
+    for title, rows, text in pr['sections']:
+        w('  %s: %d rows' % (title, len(rows)))
+        for x in text:
+            w('  ' + x)
+    w('')
+
+
 def write_outputs(res, rom, crc, header, name, args):
     sc = res['sc']
     out = args.out
@@ -2471,8 +4851,9 @@ def write_outputs(res, rom, crc, header, name, args):
     order = {'out': 0, 'in': 0, 'out_c': 0, 'in_c': 0, 'block_out': 0, 'block_in': 0, 'mapper': 1, 'codem_store': 2,
              'cartarea_store': 3, 'rst': 4, 'rst_vector': 5, 'ram_copy': 6, 'ram_exec': 7, 'jump_table': 8,
              'indirect_resolved': 9, 'indirect_unresolved': 10, 'bank_unresolved': 11, 'target_unresolved': 12,
-             'inline_unresolved': 13, 'mapper_unreached': 19, 'io_unreached': 20}
-    rows = res['sites'] + res['unreached']
+             'inline_unresolved': 13, 'inline_table': 14, 'mailbox_race': 16, 'streamer': 17, 'rle_decoder': 18,
+             'mapper_unreached': 19, 'io_unreached': 20}
+    rows = res['sites'] + res['unreached'] + res.get('rules', {}).get('rows', [])
     rows.sort(key=lambda r: (order.get(r['kind'], 15), r['offset'] if r['offset'] is not None else 1 << 30, r['addr']))
     with open(os.path.join(out, name + '.sites.tsv'), 'w') as f:
         f.write('\t'.join(cols) + '\n')
@@ -2491,7 +4872,7 @@ def write_outputs(res, rom, crc, header, name, args):
         site_at = {}
         for r in res['sites']:
             site_at.setdefault((r['offset'], r['addr']), []).append(r['kind'])
-        nodes = sorted(sc.ctx, key=lambda n: (sc.off_of(n[0], n[1]) if sc.off_of(n[0], n[1]) is not None else 1 << 30, n[1]))
+        nodes = sorted(sc.ctx, key=lambda n: (sc.off_of(n[0], n[1]) if sc.off_of(n[0], n[1]) is not None else 1 << 30, nkey(n)))
         prev_end = None
         for n in nodes:
             ins = sc.decode_node(n)
@@ -2519,6 +4900,8 @@ def write_outputs(res, rom, crc, header, name, args):
     w('Analysis rounds: %d%s; dynamic or CDL entry points added after the static pass: %d' %
       (sc.rounds, ' (stopped when the rounds started to repeat; a table length alternates)' if sc.cycled else
        '' if sc.converged else ' (did not converge, results are from the last round)', res['n_extra']))
+    if TRACEDEF_OFF[0]:
+        w('WARNING: run with --no-tracedef; trace and run forms are not costed, so the costs differ from the overlay builder\'s')
     w('')
     io = [r for r in res['sites'] if r['kind'] in ('out', 'in', 'out_c', 'in_c', 'block_out', 'block_in')]
     w('I/O instructions found on code paths: %d' % len(io))
@@ -2598,7 +4981,7 @@ def write_outputs(res, rom, crc, header, name, args):
         w('')
     if sc.bad_nodes:
         w('Paths that stopped because the bytes do not look like code (likely data reached as code):')
-        for n in sorted(sc.bad_nodes, key=lambda n: (sc.off_of(n[0], n[1]) or 0, n[1])):
+        for n in sorted(sc.bad_nodes, key=lambda n: (sc.off_of(n[0], n[1]) or 0, nkey(n))):
             ins = sc.decode_node(n)
             w('  %s bank %s  %-20s %s' % (h4(n[1]), node_bank_s(n), ins.text if ins else '',
                                           sc.bad_why.get(n, 'invalid opcode or $FF fill')))
@@ -2608,11 +4991,13 @@ def write_outputs(res, rom, crc, header, name, args):
         w('Bytes decoded both as an opcode and as an operand (overlapping code paths): %d, first at %s' %
           (len(cs), ' '.join(fmt_off(o) for o in cs[:20])))
         w('')
-    lo = [r for r in res['unreached'] if r['confidence'] == 'low']
-    vl = [r for r in res['unreached'] if r['confidence'] == 'very-low']
-    w('I/O byte patterns in bytes no path reached: %d with a common SMS port or an ED I/O opcode, %d others (all in %s.sites.tsv as io_unreached)' % (len(lo), len(vl), name))
-    for r in lo:
-        w('  offset %s (bank %d, %s)  %-6s %s' % (fmt_off(r['offset']), r['bank'], h4(r['addr']), r['bytes'], r['insn']))
+    ib = [r for r in res['unreached'] if r['kind'] == 'io_unreached']
+    w('I/O byte patterns in bytes no path reached: %s (all in %s.sites.tsv as io_unreached; very-low rows are not listed here)' % (
+        ', '.join('%s %d' % (c, sum(1 for r in ib if r['confidence'] == c)) for c in ('high', 'medium', 'low', 'very-low')), name))
+    for r in ib:
+        if r['confidence'] != 'very-low':
+            w('  offset %s (bank %d, %s)  %-6s %-6s %-14s %s' % (fmt_off(r['offset']), r['bank'], h4(r['addr']), r['confidence'],
+                                                               r['bytes'], r['insn'], r['note']))
     w('')
     mb = [r for r in res['unreached'] if r['kind'] == 'mapper_unreached']
     w('Mapper store byte patterns in bytes no path reached (byte scan): %s (all in %s.sites.tsv as mapper_unreached)' % (
@@ -2650,6 +5035,8 @@ def write_outputs(res, rom, crc, header, name, args):
         w('')
     if res['cdl_warn']:
         w('CDL: ' + res['cdl_warn'])
+    write_cost(res, name, out, w)
+    write_rules(res, w)
     with open(os.path.join(out, name + '.summary.txt'), 'w') as f:
         f.write('\n'.join(L) + '\n')
     print('%s: %d I/O sites, %d mapper stores, %d unproven stores, code %d of %d bytes; output in %s' %

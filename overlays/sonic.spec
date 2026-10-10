@@ -75,18 +75,6 @@ site 005C9   ; OUT ($BF),A
 site 005CE   ; OUT ($BF),A
 site 005D5   ; OUT ($BE),A
 site 005DC   ; OUT ($BE),A
-site 00831   ; OUT ($BF),A
-site 00834   ; OUT ($BF),A
-site 0083D   ; OUTI
-site 0083F   ; OUTI
-site 008A6   ; OUT ($BF),A
-site 008AC   ; OUT ($BF),A
-site 008B8   ; OUTI
-site 008BA   ; OUTI
-site 008C3   ; OUT ($BF),A
-site 008C6   ; OUT ($BF),A
-site 008C8   ; OUTI
-site 008CA   ; OUTI
 site 009B7   ; OUT ($BF),A
 site 009BC   ; OUT ($BF),A
 site 009BF   ; OUT ($BE),A
@@ -110,42 +98,6 @@ site 027F3   ; IN A,($BE)
 site 027FB   ; OUT ($BF),A
 site 02800   ; OUT ($BF),A
 site 02807   ; OUT ($BE),A
-site 037F7   ; OUT ($BF),A
-site 037FC   ; OUT ($BF),A
-site 03803   ; OUTI
-site 03805   ; OUTI
-site 03807   ; OUTI
-site 03809   ; OUT ($BE),A
-site 0380B   ; OUTI
-site 0380D   ; OUTI
-site 0380F   ; OUTI
-site 03811   ; OUT ($BE),A
-site 03813   ; OUTI
-site 03815   ; OUTI
-site 03817   ; OUTI
-site 03819   ; OUT ($BE),A
-site 0381B   ; OUTI
-site 0381D   ; OUTI
-site 0381F   ; OUTI
-site 03821   ; OUT ($BE),A
-site 03833   ; OUT ($BF),A
-site 03838   ; OUT ($BF),A
-site 03845   ; OUTI
-site 03847   ; OUTI
-site 03849   ; OUTI
-site 0384B   ; OUT ($BE),A
-site 0384E   ; OUTI
-site 03850   ; OUTI
-site 03852   ; OUTI
-site 03854   ; OUT ($BE),A
-site 03857   ; OUTI
-site 03859   ; OUTI
-site 0385B   ; OUTI
-site 0385D   ; OUT ($BE),A
-site 03860   ; OUTI
-site 03862   ; OUTI
-site 03864   ; OUTI
-site 03866   ; OUT ($BE),A
 site 0388A   ; OUT ($BF),A
 site 0388F   ; OUT ($BF),A
 site 03894   ; OUT ($BE),A
@@ -327,3 +279,176 @@ mapst 00400   ; LD ($FFFF),A
 # code after them, or no code leading to them).
 # not patched (data): mapst 07681  LD ($FFFF),A  (no valid code after it)
 # not patched (data): mapst 2C9EE  LD ($FFFE),A  (6 RST or NOP opcodes around it (looks like data); 32 bytes of valid code before it)
+# The frame handler's VRAM uploads, as native code in page 0. The game runs them with
+# interrupts off between its frame event and its EI at $00C2. Through the I/O traps they
+# took about 210 lines of the Next's 311 while Sonic ran fast, so the framework's vertical
+# blank work waited for that EI and ran inside the next picture, where its copper update
+# and direct X scroll write tore the picture across (palm trunks broken sideways).
+# Name table column ($082F-$0843): 25 cells, one control write and two OUTI each, from
+# $D180 to VRAM HL' (alternate HL, with bit 14) and 64 bytes on, wrapping from row 28 to
+# row 0.
+asm 0082F 21
+    rst $00
+    db far_io, pg_colw, ent_colw
+    jp $0844
+endasm
+# Name table row ($08A5-$08CE; the RET at $08CF stays, $0855 jumps to it): 31 cells from
+# HL to VRAM DE (with bit 14), wrapping to the row's start ($D20E) at column 32.
+asm 008A5 42
+    rst $00
+    db far_io, pg_roww, ent_roww
+    ret
+endasm
+# Sonic's sprite tiles ($37EF-$3878): 96 lines of 3 bytes from HL with a fourth byte 0,
+# to VRAM $3680; bit 0 of (IY+6) reads the lines bottom up.
+asm 037EF 138
+    rst $00
+    db far_io, pg_artw, ent_artw
+    ret
+endasm
+page 0 colw roww artw
+; colw: as the game's loop at $082F-$0843. Leaves HL = $D180 source + 50, B = 0,
+; C = $BE, DE and the alternate registers as they were.
+colw:   push de
+        push ix
+        push iy
+        exx
+        push hl                 ; HL' = the first cell's VRAM address
+        exx
+        pop de
+        ld a,d                  ; row = (address - $3800) / 64
+        and $07
+        add a,a
+        add a,a
+        ld b,a
+        ld a,e
+        rlca
+        rlca
+        and $03
+        add a,b
+        ld b,a
+        ld a,28                 ; cells before the wrap at row 28
+        sub b
+        cp 25
+        jr c,.n1
+        ld a,25
+.n1:    ld c,a
+        ld b,2
+        ld ix,2
+        ld iy,64
+        xor a                   ; the source as the game sees it
+        call jt_vwrite
+        ld a,25
+        sub c
+        jr z,.done
+        push hl                 ; the rest from row 0
+        ld b,0
+        add hl,bc
+        add hl,bc
+        ld c,a
+        ld a,e
+        and $3F
+        ld e,a
+        ld d,$38
+        ld b,2
+        xor a
+        call jt_vwrite
+        pop hl
+.done:  pop iy
+        pop ix
+        pop de
+        ld bc,50
+        add hl,bc
+        ld bc,$00BE
+        ret
+; roww: as the game's code at $08A5-$08CE. Leaves HL = source + 62, B = 0, C = $BE.
+roww:   push de
+        push ix
+        push iy
+        ld a,e
+        and $3F
+        ld b,a
+        ld a,64                 ; bytes up to the row's end
+        sub b
+        cp 62
+        jr c,.n1
+        ld a,62
+.n1:    ld b,a
+        ld c,1
+        ld ix,0
+        ld iy,0
+        xor a
+        call jt_vwrite
+        ld a,62
+        sub b
+        jr z,.done
+        push hl                 ; the rest from the row's start
+        ld c,b
+        ld b,0
+        add hl,bc
+        ld b,a
+        ld c,1
+        ld a,($D20E)
+        ld e,a
+        xor a
+        call jt_vwrite
+        pop hl
+.done:  pop iy
+        pop ix
+        pop de
+        ld bc,62
+        add hl,bc
+        ld bc,$00BE
+        ret
+; artw: as the game's code at $37EF-$3878, HL = the tiles' source. Builds the 384
+; bytes in artbuf and writes them with one call. Leaves A = 0, HL = ($D28F).
+artw:   push ix
+        push iy
+        ld de,artbuf
+        ld b,96
+        bit 0,(iy+6)
+        jr nz,.flip
+.n:     ldi
+        ldi
+        ldi
+        inc bc                  ; LDI counts BC down; B is the line count
+        inc bc
+        inc bc
+        xor a
+        ld (de),a
+        inc de
+        djnz .n
+        jr .up
+.flip:  push bc
+        ld bc,$011D
+        add hl,bc
+        pop bc
+.f:     ldi
+        ldi
+        ldi
+        inc bc
+        inc bc
+        inc bc
+        xor a
+        ld (de),a
+        inc de
+        push bc
+        ld bc,-6
+        add hl,bc
+        pop bc
+        djnz .f
+.up:    ld hl,artbuf
+        ld de,$3680
+        ld bc,$C002             ; 2 runs of 192 bytes
+        ld ix,192
+        ld iy,192
+        ld a,1                  ; the source as mapped now: this page
+        call jt_vwrite
+        pop iy
+        pop ix
+        ld hl,($D28F)
+        ld ($D291),hl
+        xor a
+        ret
+artbuf: ds 384
+endpage

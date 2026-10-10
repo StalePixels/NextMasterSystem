@@ -26,7 +26,8 @@ describes the spec lines; docs/overlays.md describes the workflow. The draft:
 - turns high confidence mapper stores from the byte scan (kind
   mapper_unreached) into spec lines of the form sitescan names, and lists
   the medium and low ones as CHECK comments;
-- lists low confidence I/O byte patterns as comments, to be checked by hand.
+- lists high, medium and low confidence I/O byte patterns (kind io_unreached)
+  as CHECK comments with their evidence, to be checked by hand.
 - writes the cart line: the CRC32 of the cart, without a copier header;
 Everything it could not decide is a comment starting with "CHECK".
 """
@@ -166,8 +167,8 @@ for r in rows:
             out.append(f'{line}   # {r[4]}; {r[10]}')
         else:
             out.append(f'# CHECK byte scan {conf}: {line}  {r[4]}  ({r[10]})')
-    elif kind == 'io_unreached' and conf == 'low':
-        out.append(f'# CHECK low: site {a:05X}  {r[4]}  ({r[7]})')
+    elif kind == 'io_unreached' and conf in ('high', 'medium', 'low'):
+        out.append(f'# CHECK {conf}: site {a:05X}  {r[4]}  ({r[7]}; {r[10]})')
     elif kind in ('mapper', 'ram_exec', 'indirect_unresolved', 'bank_unresolved', 'cartarea_store'):
         out.append(f'# CHECK {kind} at {a:05X} ({r[0]} bank {r[1]}): {r[3]}  {r[4]} {r[6]}')
 print('\n'.join(out))

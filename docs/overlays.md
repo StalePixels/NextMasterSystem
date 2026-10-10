@@ -2,7 +2,7 @@
 
 An overlay file (`.nms`) tells NextMasterSystem how to patch one Master System cart. This guide takes a cart from scan to SD card. The file format is in [nms-format.md](nms-format.md).
 
-You need Python 3. You need `sjasmplus` only for a spec with a `rastercode` line or an `asm` block. All commands run from the repository root, and the tools are in `tools/`.
+You need Python 3. You need `sjasmplus` only for a spec with a `rastercode` line, an `asm` block or a `page` block. All commands run from the repository root, and the tools are in `tools/`.
 
 The steps:
 
@@ -33,7 +33,7 @@ A spec is a text file with one change per line. `mkspec.py` reads the scan and w
 The draft is not finished. Before you build it:
 
 - Keep the `cart` line. `mkspec.py` writes it with the cart's CRC32 in hex, for example `cart 0123ABCD`. `build-overlays.py` uses this line to find the cart, and `mknms.py` stops if the cart has another CRC32.
-- Go through every `CHECK` comment. A low-confidence site is a byte pattern that looks like an I/O instruction in bytes that the scanner did not reach. It can be data. Make it a `site` line only if it is code.
+- Go through every `CHECK` comment. A `CHECK high`, `CHECK medium` or `CHECK low` site is a byte pattern that looks like an I/O instruction in bytes that the scanner did not reach, rated by how much the bytes around it look like code; the comment gives the evidence. It can be data. Make it a `site` line only if it is code.
 - Check the mapper stores from the byte scan. `sitescan.py` also looks for mapper store byte patterns in code that no path reached, because an unpatched mapper store does not switch the bank and the game then reads the wrong bank. `mkspec.py` writes a spec line for each one with high confidence; the comment after it gives the evidence. Read the code around each one. A `CHECK byte scan` comment is a medium or low confidence hit: make it a spec line only if it is code. [sitescan.md](sitescan.md) describes the ratings.
 - Read `game.unproven.tsv`. It lists stores that the scanner could not prove to stay off the mapper registers.
 
@@ -82,6 +82,9 @@ The jump table entries. A patch calls or jumps to one of these addresses:
 | `jt_io` | `$E015` | any I/O instruction, with an operation code as the inline byte |
 | `jt_io0` | `$E018` | the same, entered from RST `$00` |
 | `fw_resume` | `$E01B` | jump to the outer shell's resume entry |
+| `jt_far` | `$E072` | far call into a code page, with the page and entry numbers as the two inline bytes |
+| `jt_peek` | `$E075` | for page code: A = the byte the game sees at HL |
+| `jt_vwrite` | `$E078` | for page code: write a block of bytes into VRAM, in runs with a step between them |
 
 The fixed state variables:
 
@@ -120,6 +123,58 @@ endasm
 ```
 
 The builder assembles `call wait_frame` at `$2F10` as `CD 40 1B`, adds three `NOP` bytes, and writes the six bytes as a PATCH. The CHECK for offsets `02F10` to `02F15` comes from the cart.
+
+## Code pages
+
+A routine that is too slow through the framework's I/O traps can be replaced with code of our own in a code page. A page is an 8K bank that runs at `$2000-$3FFF` while one of its entries runs. [nms-format.md](nms-format.md) describes the far call and the rules that page code follows.
+
+```
+page 0 fill_rows clear_map
+    ; sjasmplus source, assembled at $2000
+fill_rows:
+    ...
+    ret
+clear_map:
+    ...
+    ret
+endpage
+```
+
+`page N NAME...` starts the block. `N` is the page number, from 0 to 7. Each `NAME` is a label in the page's source. It becomes the page's entry 0, 1 and so on, in the order of the line. The lines after it are `sjasmplus` source, up to a line that holds only `endpage`. The page knows the same names as an `asm` block. The build stops if the code is longer than 8192 bytes or an entry is not a label in it.
+
+For each entry, every `asm` block of the spec knows `pg_NAME`, its page number, and `ent_NAME`, its entry number. `far_io` is the far call's inline code, `$80`. A patch reaches an entry in one of two ways:
+
+```
+asm 01234 4          ; 4 bytes, with the io vector at $00
+    rst $00
+    db far_io, pg_fill_rows, ent_fill_rows
+endasm
+asm 01234 5          ; 5 bytes, with no io vector
+    call jt_far
+    db pg_fill_rows, ent_fill_rows
+endasm
+```
+
+The entry runs with the game's registers and interrupt state, and the patch goes on after the two bytes with the registers the entry returns. A spec with a page needs framework ABI 6, and ABI 7 when a block calls `jt_vwrite`. `mknms.py` sets it.
+
+In page code:
+
+- Read the game's memory with `call jt_peek` for any address that can be in `$2000-$3FFF`. A plain read there reads the page itself.
+- Use the game's I/O `RST` and inline codes for I/O, as a patch does. `rst <io vector>` then `db $B3` is an `OTIR` through the framework: it writes B bytes from HL to the port in C.
+- Write VRAM with `call jt_vwrite`. It writes the bytes as the game's writes to the VDP data port would: the framework's copy of VRAM, the Next tilemaps, the priority marks, the tiles to convert again and the sprite table. Each run of bytes needs only one call, and many runs with the same step need only one call too. The arguments and results are in [nms-format.md](nms-format.md).
+- The state variables in the table above (`vdp_addr`, `vdp_code`, `vdp_latch` and the others) can be read and written directly.
+
+`overlays/ecco.spec` has a page that writes a name table column with one `jt_vwrite` call. `overlays/aliensyndrome.spec` has a page that writes rows of name table cells.
+
+## Switches
+
+A switch is a spec line of one word. It turns on an engine feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1` ([nms-format.md](nms-format.md)), and the information screen lists the ones that are on.
+
+| Spec line | `CONF` key | What it does | What it costs | When to turn it on |
+|---|---|---|---|---|
+| `priority` | `priority` | Draws the tiles that have the priority bit again in Layer 2, above the sprites, in 192-line and 224-line mode. | Layer 2 pages are cleared at game start (RAM pages 102-107, and 192-201 for 224-line mode). Each name table write marks its cell when the cell gets the priority bit or Layer 2 holds it, and the vertical blank work draws the marked cells again. A game that shows many priority cells pays for them every frame. In 224-line mode each H scroll change that moves the first map column shown into another 8-pixel cell draws the priority cells of the cell columns that move (Micro Machines' bath race: about 6,000 cycles a frame on average). A new tile under many priority cells has them all drawn again in one vertical blank, about 6,500 cycles a cell in 224-line mode: Micro Machines' intro screen of about 700 priority cells takes 8 frames once. | Tiles with the priority bit must cover sprites, as in the game on the Master System. |
+| `toppal` | `toppal` | Shows the palette the frame handler leaves from line 0 of the picture. CRAM writes also go to the second tilemap, sprite and Layer 2 palettes, which are shown from the frame event to the first line event. | Each CRAM write does more work, and the frame and line events switch the palettes. | The frame handler writes the palette late, and the top lines of the picture show the wrong colours. |
+| `tilecache` | `tilecache` | Tiles that a block write (`OTIR`, `OUTI` runs) copies whole from cart ROM, with the source and the VRAM address aligned alike, are copied from a converted copy of the cart and are not converted again. | The engine converts the whole cart at game start: about 1.1 seconds more of loading for each 256K of cart, and RAM pages 125 and 128-191. Each block write costs more: about 45 cycles for a block read from RAM, and about 250 for a block from ROM that holds no whole aligned tile. | The game copies many tiles from ROM while it plays. Measure the frame loads with and without it (`tools/mame/run.py --measure`), and turn it on only where the loads go down. |
 
 ## 4. Build the overlay file and the index
 

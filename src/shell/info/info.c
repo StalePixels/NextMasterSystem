@@ -11,6 +11,7 @@
  * mapped at $0000 while the shell runs. This module keeps no data of its
  * own: everything is on the stack.
  */
+#include <arch/zxn.h>
 #include <string.h>
 #include <z80.h>
 
@@ -18,6 +19,7 @@
 
 #define FLAG_PRIORITY  0x01
 #define FLAG_TOPPAL    0x02
+#define FLAG_TILECACHE 0x04
 
 #define COLS        32
 #define ROWS        24
@@ -47,6 +49,7 @@ static const char s_kb[]      = " KB";
 static const char s_none[]    = "none";
 static const char s_prio[]    = "priority tiles";
 static const char s_top[]     = "line-0 palette";
+static const char s_tc[]      = "tile cache";
 static const char s_sep[]     = ", ";
 static const char s_prompt[]  = "Press any key or fire to start.";
 
@@ -120,6 +123,28 @@ static char *put_str(char *p, const char *s)
     return p;
 }
 
+/* Nothing but the ULA screen shows: every hardware sprite hidden and the
+ * sprite layer, Layer 2, the tilemap and the copper off. A game that ended
+ * with BREAK leaves its sprites in the attribute table, and NextZXOS's own
+ * NextReg $15, which the runtime puts back, may show the sprite layer. The
+ * runtime sets every layer again when the game starts. */
+static void layers_off(void)
+{
+    uint8_t i;
+
+    ZXN_NEXTREGA(0x15, ZXN_READ_REG(0x15) & 0xFE);  /* sprites off */
+    ZXN_NEXTREGA(0x6B, ZXN_READ_REG(0x6B) & 0x7F);  /* tilemap off */
+    ZXN_NEXTREG(0x62, 0);                           /* copper stopped */
+    z80_outp(0x123B, 0);                            /* Layer 2 off */
+    z80_outp(0x303B, 0);                            /* sprite attribute slot 0 */
+    for (i = 0; i < 128; i++) {
+        z80_outp(0x57, 0);                          /* 4-byte attributes, */
+        z80_outp(0x57, 0);                          /* the visible bit clear */
+        z80_outp(0x57, 0);
+        z80_outp(0x57, 0);
+    }
+}
+
 static void wait_key(void)
 {
     uint16_t n;
@@ -143,7 +168,8 @@ void *info_show(void *unused)
 
     (void)unused;
 
-    /* a plain ULA screen, whatever mode the browser left */
+    /* a plain ULA screen, whatever mode the browser or the last game left */
+    layers_off();
     z80_outp(0xFF, 0);
     memset(ULA_PIXELS, 0, 0x1800);
     memset(ULA_ATTRS, ATTR_TEXT, 0x300);
@@ -189,6 +215,10 @@ void *info_show(void *unused)
     if (fl & FLAG_TOPPAL) {
         if (q != buf) q = put_str(q, s_sep);
         q = put_str(q, s_top);
+    }
+    if (fl & FLAG_TILECACHE) {
+        if (q != buf) q = put_str(q, s_sep);
+        q = put_str(q, s_tc);
     }
     if (q == buf) q = put_str(q, s_none);
     *q = 0;

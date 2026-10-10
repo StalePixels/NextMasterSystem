@@ -15,8 +15,8 @@ see the meta repo's docs/compatibility.md). With them, the META chunk gets
 the game's title, release details and status, found by the cart's CRC32.
 Without a row for the cart, META holds the spec's name only.
 
---sjasmplus is the assembler for rastercode files and asm blocks (default: sjasmplus on
-the PATH).
+--sjasmplus is the assembler for rastercode files, asm blocks and page blocks
+(default: sjasmplus on the PATH).
 
 SPEC lines. # or ; starts a comment. ADDR is a cart offset in hex; in the
 first 32K it is also the Z80 address.
@@ -65,6 +65,17 @@ first 32K it is also the Z80 address.
   label NAME ADDR    NAME is the game address that cart offset ADDR runs at,
                      for use in asm blocks (any asm block in the spec, before
                      or after this line)
+  page N NAME...     a code page of our own: the lines up to a line
+  ...                "endpage" are assembled with sjasmplus at $2000 into
+  endpage            PAGE chunk N (0-7), at most 8192 bytes. Each NAME is a
+                     label in the page's source, and becomes the page's entry
+                     0, 1, ... in that order. Every asm block knows pg_NAME
+                     (the page number) and ent_NAME (the entry number) for
+                     each entry, and far_io ($80), the inline code of a far
+                     call. A patch reaches an entry with either
+                         rst <io vector> : db far_io, pg_NAME, ent_NAME
+                         call jt_far : db pg_NAME, ent_NAME
+                     The page source knows the same names as an asm block.
   start ADDR [SP]    the game starts at ADDR instead of $0000, with SP
                      (default $DFF0)
   ramsite ADDR BB    an I/O instruction (bytes BB) that the game builds in
@@ -82,11 +93,15 @@ first 32K it is also the Z80 address.
                      Layer 2, above the sprites
   toppal             CONF toppal=1: the palette the frame handler leaves is
                      shown from line 0
+  tilecache          CONF tilecache=1: tiles the game copies whole from cart
+                     ROM to VRAM are copied from a converted copy of the
+                     cart, not converted again
 
 Names that every asm block knows (the framework's jump table and the fixed
-state at $E000-$E071, from src/runtime/fw.asm). Jump table entries:
+state at $E000-$E07A, from src/runtime/fw.asm). Jump table entries:
 jt_out_n $E000, jt_in_n $E003, jt_ed $E006, jt_ld_de_a $E009, jt_start $E00C,
-jt_fatal $E00F, jt_outi_run $E012, jt_io $E015, jt_io0 $E018, fw_resume $E01B.
+jt_fatal $E00F, jt_outi_run $E012, jt_io $E015, jt_io0 $E018, fw_resume $E01B,
+jt_far $E072, jt_peek $E075, jt_vwrite $E078.
 State: fw_status $E020, fw_crc $E021, fw_size $E025, fw_npages $E029,
 fw_lastop $E02A, fw_frames $E02B, cur_mmu $E02D, vdp_latch $E035, vdp_code
 $E036, vdp_addr $E037, vdp_rbuf $E039, vdp_status $E03A, vdp_regs $E03B,
@@ -97,14 +112,16 @@ Site lines may also name LD I,A and LD A,I (ED 47, ED 57): the framework
 keeps the game's I register, because it needs I for IM 2.
 
 Trace forms (tools/tracedef.py): an output site (OUT (n),A, OUTI, OUTD,
-OUT (C),r) that another patched output follows at once, or that a loop
-jumps back over, gets the trace form of its inline code ($18 + class, $C3,
-$CB, $81 + 8r), and the framework runs the whole run or loop in one call.
+OUT (C),r) gets the trace form of its inline code ($18 + class, $C3, $CB,
+$81 + 8r) when the framework can do more with it than the single output
+and that pays (tracedef.choose): a run of patched outputs in a row from
+its RUN_BREAK_EVEN length on, a loop over the site, or straight code with
+three or more outputs, which the framework copies and runs in one call.
 
 The framework ABI the file needs is worked out from what it uses: 1 without
 an io vector, 2 with one, 3 with trace forms, fw_io0 or mapsthl, 4 with
 RAMSITES, RASTER or the ABI 4 mapper lines, 5 with LD I,A, LD A,I or a CONF
-switch.
+switch, 6 with a page, 7 with a block that calls jt_vwrite.
 """
 import argparse
 import csv
@@ -121,6 +138,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tracedef  # noqa: E402
 
 RASTER_ORG, RASTER_MAX = 0x3C00, 0x400   # rast_code in src/runtime/fw2.asm
+PAGE_ORG, PAGE_MAX = 0x2000, 0x2000      # a code page runs at $2000-$3FFF
+PAGE_COUNT, PAGE_ENTS = 8, 64            # CODE_MAX, CODE_ENTS in src/runtime/memplan.inc
+FAR_IO = 0x80                            # the far call's inline code
 ENTRY = {'out_n': 0xE000, 'in_n': 0xE003, 'ed': 0xE006, 'ld_de_a': 0xE009, 'outi_run': 0xE012, 'io': 0xE015}
 # Names every asm block can use. The addresses are fixed by src/runtime/fw.asm
 # (the jump table, then "state that tools read from outside"). The jt_ names
@@ -134,7 +154,9 @@ ASM_NAMES = {
     'vdp_latch': 0xE035, 'vdp_code': 0xE036, 'vdp_addr': 0xE037, 'vdp_rbuf': 0xE039,
     'vdp_status': 0xE03A, 'vdp_regs': 0xE03B, 'nt_base': 0xE04B, 'cram': 0xE04D,
     'fw_start_addr': 0xE06D, 'fw_start_sp': 0xE06F, 'isr_n': 0xE071,
+    'jt_far': 0xE072, 'jt_peek': 0xE075, 'jt_vwrite': 0xE078,
 }
+ABI7_NAMES = ('jt_vwrite',)   # entries that need framework ABI 7
 CHECK_GAP = 32       # patched ranges closer than this share one CHECK
 CHECK_MAX = 0x1000   # longest CHECK range
 
@@ -155,48 +177,83 @@ def strip_comment(line):
     return re.split('[#;]', line, 1)[0].strip()
 
 
-def read_asm_block(it, spec, n):
-    """The lines of an asm block that starts on spec line N, up to endasm."""
+def read_asm_block(it, spec, n, end='endasm'):
+    """The lines of an asm or page block that starts on spec line N, up to END."""
     body = []
     for _, raw in it:
-        if strip_comment(raw) == 'endasm':
+        if strip_comment(raw) == end:
             return body
         body.append(raw.rstrip('\n'))
-    raise SystemExit(f'{spec}:{n}: asm block has no endasm')
+    raise SystemExit(f'{spec}:{n}: block has no {end}')
+
+
+def page_line(spec, n, w):
+    """The page number and entry names of a page line (words W)."""
+    if len(w) < 3 or not re.fullmatch(r'[0-9]+', w[1]) or int(w[1]) >= PAGE_COUNT:
+        raise SystemExit(f'{spec}:{n}: page N NAME... with N from 0 to {PAGE_COUNT - 1}')
+    for x in w[2:]:
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', x):
+            raise SystemExit(f'{spec}:{n}: page entry {x} is not a label name')
+    return int(w[1]), w[2:]
 
 
 def spec_labels(spec):
-    """The label lines of a spec: name -> Z80 address."""
+    """The names a spec gives its asm blocks: label lines (name -> Z80
+    address), and pg_NAME and ent_NAME for each page entry."""
     labels = {}
+
+    def add(n, name, v):
+        if name in ASM_NAMES or name in labels or name == 'far_io':
+            raise SystemExit(f'{spec}:{n}: {name} is already defined')
+        labels[name] = v
     it = enumerate(open(spec), 1)
     for n, raw in it:
         line = strip_comment(raw)
         w = line.split()
         if w[:1] == ['asm']:
             read_asm_block(it, spec, n)
+        elif w[:1] == ['page']:
+            read_asm_block(it, spec, n, 'endpage')
+            num, names = page_line(spec, n, w)
+            for e, x in enumerate(names):
+                add(n, f'pg_{x}', num)
+                add(n, f'ent_{x}', e)
         elif w[:1] == ['label']:
             if len(w) != 3 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', w[1]):
                 raise SystemExit(f'{spec}:{n}: label NAME ADDR')
-            if w[1] in ASM_NAMES or w[1] in labels:
-                raise SystemExit(f'{spec}:{n}: label {w[1]} is already defined')
-            labels[w[1]] = cpu(int(w[2], 16))
+            add(n, w[1], cpu(int(w[2], 16)))
     return labels
 
 
-def assemble_block(sjasmplus, spec, n, body, org, labels):
-    """Assemble the asm block that starts on spec line N at Z80 address ORG."""
-    names = dict(ASM_NAMES, **labels)
+def assemble_block(sjasmplus, spec, n, body, org, labels, sym=False):
+    """Assemble the asm or page block that starts on spec line N at Z80
+    address ORG. Returns the code, and with SYM also its labels."""
+    names = dict(ASM_NAMES, far_io=FAR_IO, **labels)
     with tempfile.TemporaryDirectory() as td:
         with open(os.path.join(td, 'names.i'), 'w') as f:
             f.write(''.join(f'{k} equ 0x{v:04X}\n' for k, v in names.items()))
         with open(os.path.join(td, 'blk.asm'), 'w') as f:
             f.write(f' INCLUDE "names.i" : ORG 0x{org:04X}\n' + '\n'.join(body) + '\n')
-        p = subprocess.run([sjasmplus, '--nologo', '--msg=war', '--raw=blk.bin', 'blk.asm'],
+        p = subprocess.run([sjasmplus, '--nologo', '--msg=war', '--raw=blk.bin', '--sym=blk.sym', 'blk.asm'],
                            capture_output=True, text=True, cwd=td)
         if p.returncode or not os.path.exists(os.path.join(td, 'blk.bin')):
             text = re.sub(r'blk\.asm\((\d+)\)', lambda m: f'{spec}:{n + int(m.group(1)) - 1}', p.stdout + p.stderr)
-            raise SystemExit(f'{spec}:{n}: asm block failed\n{text.strip()}')
-        return open(os.path.join(td, 'blk.bin'), 'rb').read()
+            raise SystemExit(f'{spec}:{n}: block failed\n{text.strip()}')
+        code = open(os.path.join(td, 'blk.bin'), 'rb').read()
+        if not sym:
+            return code
+        syms = {}
+        for line in open(os.path.join(td, 'blk.sym')):
+            k, _, v = line.partition(': EQU ')
+            if v:
+                syms[k.strip()] = int(v, 16)
+        return code, syms
+
+
+def uses_names(body, names):
+    """Whether the asm or page block BODY names one of NAMES outside its comments."""
+    words = set(re.findall(r'[A-Za-z_][A-Za-z0-9_]*', '\n'.join(l.split(';', 1)[0] for l in body)))
+    return any(x in words for x in names)
 
 
 def pclass(p):
@@ -228,10 +285,10 @@ def chunk(tag, data):
 def parse(spec, cart, sjasmplus):
     """Run the spec over the cart. Returns a dict of what the file needs."""
     r = dict(name='', crc=None, ops=[], start=None, rcode=None, ramsites=[], ramcont=None,
-             priority=False, toppal=False, abi=1)
+             priority=False, toppal=False, tilecache=False, abi=1, pages={})
     rst = {}
     outs = {}
-    notrace, plain, io0, abi4, abi5 = False, set(), False, False, False
+    notrace, plain, io0, abi4, abi5, abi7 = False, set(), False, False, False, False
     ops = r['ops']
 
     def patch(addr, new):
@@ -257,10 +314,26 @@ def parse(spec, cart, sjasmplus):
             if a % 8192 + n > 8192:
                 raise SystemExit(f'{spec}:{lineno}: asm {a:05X} {n}: crosses an 8K page of the cart')
             code = assemble_block(sjasmplus, spec, lineno, body, cpu(a), labels)
+            abi7 = abi7 or uses_names(body, ABI7_NAMES)
             if len(code) > n:
                 raise SystemExit(f'{spec}:{lineno}: asm {a:05X}: the code is {len(code)} bytes, '
                                  f'more than the {n} it replaces')
             patch(a, code + b'\0' * (n - len(code)))
+        elif word == 'page':
+            body = read_asm_block(it, spec, lineno, 'endpage')
+            num, names = page_line(spec, lineno, line.split())
+            if num in r['pages']:
+                raise SystemExit(f'{spec}:{lineno}: page {num} is already defined')
+            code, syms = assemble_block(sjasmplus, spec, lineno, body, PAGE_ORG, labels, sym=True)
+            abi7 = abi7 or uses_names(body, ABI7_NAMES)
+            if len(code) > PAGE_MAX:
+                raise SystemExit(f'{spec}:{lineno}: page {num} is {len(code)} bytes, more than {PAGE_MAX}')
+            ents = []
+            for x in names:
+                if x not in syms or not PAGE_ORG <= syms[x] < PAGE_ORG + len(code):
+                    raise SystemExit(f'{spec}:{lineno}: page {num}: entry {x} is not a label in its code')
+                ents.append(syms[x])
+            r['pages'][num] = (ents, code)
         elif word == 'name':
             r['name'] = rest
         elif word == 'cart':
@@ -315,6 +388,8 @@ def parse(spec, cart, sjasmplus):
             r['priority'] = True
         elif word == 'toppal':
             r['toppal'] = True
+        elif word == 'tilecache':
+            r['tilecache'] = True
         elif word == 'plain':
             plain.add(int(rest, 16))
         elif word == 'start':
@@ -445,13 +520,26 @@ def parse(spec, cart, sjasmplus):
         r['abi'] = 4 if abi4 or r['rcode'] is not None else 3 if ntrace or io0 else 2
     if abi5 or r['priority'] or r['toppal']:
         r['abi'] = max(r['abi'], 5)
+    if r['pages']:
+        if sum(len(e) for e, _ in r['pages'].values()) > PAGE_ENTS:
+            raise SystemExit(f'more than {PAGE_ENTS} page entries in all')
+        r['abi'] = max(r['abi'], 6)
+    if abi7:
+        r['abi'] = max(r['abi'], 7)
     r['ntrace'] = ntrace
     return r
 
 
-def patch_runs(cart, ops):
+def patch_runs(cart, ops, checks=None):
     """PATCH operations: only the bytes that differ from the cart, each run
-    inside one 8K page. Later operations win where two touch one byte."""
+    inside one 8K page and, when checks is given, inside one CHECK range
+    (a run that crosses the border of two ranges is split there). Later
+    operations win where two touch one byte."""
+    def home(a):
+        for i, (s, e) in enumerate(checks or ()):
+            if s <= a < e:
+                return i
+        return None
     want = {}
     for addr, new in ops:
         for k, b in enumerate(new):
@@ -460,7 +548,8 @@ def patch_runs(cart, ops):
     for a in sorted(want):
         if want[a] == cart[a]:
             continue
-        if runs and runs[-1][0] + len(runs[-1][1]) == a and a % 8192 and len(runs[-1][1]) < 255:
+        if runs and runs[-1][0] + len(runs[-1][1]) == a and a % 8192 and len(runs[-1][1]) < 255 \
+                and home(a - 1) == home(a):
             runs[-1][1].append(want[a])
         else:
             runs.append((a, bytearray([want[a]])))
@@ -521,7 +610,7 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     checks = check_ranges(r['ops'])
     for s, e in checks:
         ptch += bytes([1]) + s.to_bytes(3, 'little') + struct.pack('<HI', e - s, crc32(cart[s:e]))
-    runs = patch_runs(cart, r['ops'])
+    runs = patch_runs(cart, r['ops'], checks)
     for a, b in runs:
         if not any(s <= a and a + len(b) <= e for s, e in checks):
             raise SystemExit(f'PATCH at {a:05X} is outside every CHECK')
@@ -540,7 +629,8 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
         ptch += bytes([5]) + struct.pack('<H', len(r['rcode'])) + r['rcode']
     ptch += b'\0'
 
-    conf = f'priority={int(r["priority"])}\ntoppal={int(r["toppal"])}\n'.encode('ascii')
+    conf = (f'priority={int(r["priority"])}\ntoppal={int(r["toppal"])}\n'
+            f'tilecache={int(r["tilecache"])}\n').encode('ascii')
     meta = load_meta(crc, r['name'], compat, titles)
     metab = ''.join(f'{k}={v}\n' for k, v in meta.items()).encode('ascii')
 
@@ -549,11 +639,14 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     body += chunk('PTCH', ptch)
     body += chunk('CONF', conf)
     body += chunk('META', metab)
+    for num, (ents, code) in sorted(r['pages'].items()):
+        body += chunk('PAGE', struct.pack('<BB', num, len(ents)) + b''.join(struct.pack('<H', a) for a in ents) + code)
     body += chunk('END ', struct.pack('<I', crc32(body)))
     out = os.path.join(outdir, f'{crc:08X}.nms')
     open(out, 'wb').write(body)
     print(f'{out}: {meta.get("title", "")}, CRC32 {crc:08X}, {len(cart)} bytes, ABI {r["abi"]}, '
-          f'{len(checks)} checks, {len(runs)} patches ({r["ntrace"]} trace sites), {len(body)} bytes')
+          f'{len(checks)} checks, {len(runs)} patches ({r["ntrace"]} trace sites), '
+          f'{len(r["pages"])} pages, {len(body)} bytes')
     return out
 
 

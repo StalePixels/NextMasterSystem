@@ -1,6 +1,9 @@
 # Alien Syndrome, 5CBFE997, drafted by tools/mkspec.py from sitescan output (with the detector log).
 name Alien Syndrome
 cart 5CBFE997
+# tilecache: whole tiles copied from cart ROM are not converted again (MAME,
+# game frames 300-2300: framework cycles -1.8%, frames over 100% 14 -> 4)
+tilecache
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and the start of its stack setup) becomes the vector,
 # the game starts at $0004 with the SP its LD SP,nn set.
 vector 00 io
@@ -8,6 +11,83 @@ start 0004 CFB0
 asm 00004 2   ; IM 1 -> IM 2
     im 2
 endasm
+# The row writer at $08AD writes C rows of B name table cells: the low byte
+# of each cell from DE, the high byte in A, each row at HL, the next row
+# $40 bytes on. The game calls it with interrupts on. Through the I/O trap
+# each cell costs two framework calls, so a row of the title logo takes a
+# fifth of a frame; the frame handler then comes in the middle of a row and
+# moves the VDP address (it writes the sprite table), and the rest of the
+# row goes to the wrong place. Code page 0 does the same work in bulk: it
+# builds each row in a buffer and writes it with one call to the
+# framework's jt_vwrite. It leaves the registers, the flags and the VDP
+# state as the game's routine does.
+asm 008AD 5   ; the routine's first instructions -> far call to page 0, then return
+    rst $00
+    db far_io, pg_rows, ent_rows
+    ret
+endasm
+page 0 rows
+; rows: HL = name table address, DE = the cells' low bytes, A = their high
+; byte, B = cells per row (0 = 256), C = rows (0 = 256). Returns as the
+; game's routine does: HL and DE past the last row, A kept, B kept, C = 0,
+; F from its last steps (an ADD HL,BC, then a DEC C). The game sets the
+; VDP address from HL with bit 6 of H set, a VRAM write; it calls this with
+; name table addresses ($3800-$3EFF), and jt_vwrite writes VRAM only.
+rows:   push ix
+        push iy
+.row:   push bc                 ; B cells, C rows
+        push af                 ; A = the high byte
+        push hl                 ; the row's address
+        ex de,hl                ; HL = the low bytes
+        ld de,buf
+        ld c,a
+        push bc
+.cell:  call jt_peek            ; the low byte, as the game sees it
+        ld (de),a
+        inc de
+        ld a,c
+        ld (de),a
+        inc de
+        inc hl
+        djnz .cell
+        pop bc                  ; B = cells
+        ex (sp),hl              ; the source end under the row's address
+        push hl
+        ex de,hl                ; DE = the row's VRAM address
+        ld a,b
+        dec a
+        cp 128
+        jr nc,.two
+        ld a,b                  ; up to 128 cells: one run of 2 * B bytes
+        add a,a
+        ld b,a
+        ld c,1
+        jr .go
+.two:   ld c,2                  ; more: two runs of B bytes, one after the other
+.go:    ld ix,0
+        ld a,b
+        ld ixl,a
+        or a
+        jr nz,.step
+        inc ixh                 ; 256
+.step:  push ix
+        pop iy                  ; both steps = the run's length
+        ld hl,buf
+        ld a,1                  ; the source as mapped: buf in this page
+        call jt_vwrite
+        pop hl                  ; the row's address
+        pop de                  ; the source end
+        pop af
+        ld bc,$0040             ; the next row
+        add hl,bc
+        pop bc
+        dec c
+        jr nz,.row
+        pop iy
+        pop ix
+        ret
+buf:    ds 512
+endpage
 site 00048   ; IN A,($BF)
 site 00079   ; IN A,($DD)
 site 00093   ; OUT ($BF),A

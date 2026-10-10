@@ -5,6 +5,10 @@ cart 5718762C
 # the game starts at $0003 (the framework does DI and IM 2).
 vector 00 io
 start 0003
+# priority tiles: the text boxes after the yes/no prompt set the priority bit
+# on every name table entry; they hide the cursor ship's sprites, which the
+# game leaves in the sprite table.
+priority
 site 00009   ; OUT ($BF),A
 site 0000C   ; OUT ($BF),A
 otir 00033   ; OUTI

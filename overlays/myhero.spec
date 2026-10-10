@@ -8,7 +8,22 @@ start 0085
 asm 0089 2   ; IM 1 -> IM 2
     im 2
 endasm
-site 009A   ; OUT ($DF),A
+# HUD redraw flags at $C50C, read and cleared by the frame handler ($241B).
+# At a game start $03B1 stores $81 (bit 7: the HUD template, "1UP" and
+# "RD."; bit 0: the score), and later $07B4 stores $0C (round, lives). On
+# the SMS the code between the two takes more than a frame, so the handler
+# always sees $81 first. On the Next it ends inside one frame, $0C replaced
+# $81 and the template was never drawn. $07B4 now sets bits 3 and 2 on top
+# of what is there (on the SMS the byte is 0 there).
+asm 07AF 11
+    ld hl,$c50b
+    ld (hl),$c0
+    inc hl
+    set 3,(hl)
+    set 2,(hl)
+    ret
+endasm
+site 009A  ; OUT ($DF),A
 site 009E   ; OUT ($DE),A
 site 00A0   ; IN A,($DE)
 site 00AC   ; OUT ($DE),A

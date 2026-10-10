@@ -8,9 +8,11 @@
 - `RST` instructions and the vectors they use;
 - `LDIR`/`LDDR` copies from ROM into RAM, and any I/O in copied code that runs;
 - jump tables it read, indirect jumps it could not resolve, and calls into a banked slot with a bank it could not work out;
-- `IN`/`OUT` byte patterns in bytes that no path reached, as a low-confidence list;
+- `IN`/`OUT` byte patterns in bytes that no path reached, each rated by how much the bytes around it look like code;
 - mapper store byte patterns in bytes that no path reached, each rated by how much the bytes around it look like code;
-- how many bytes it classified as code.
+- how many bytes it classified as code;
+- a frame cost model: how many Next cycles each routine takes on the engine, which foreground routines can be cut by the interrupt handler while they write the VDP, and which interrupt routines take longer than a frame;
+- pattern rules: code shapes that broke or slowed particular games on the Next (inline jump tables, mailbox races, column and rectangle streamers, the Sega planar RLE decoder).
 
 It uses only the Python 3 standard library. Run it with `python3 -I`.
 
@@ -32,6 +34,10 @@ Options:
 | `--name NAME` | Prefix for the output files. Default: the cart file name. |
 | `--no-harvest` | Do not use code addresses found in stores to RAM as entry points (see below). |
 | `--unroll N` | Distinct register states kept per instruction before they are merged. Default 8. |
+| `--no-tracedef` | Run without `tracedef.py`. By default the scanner imports `tracedef.py` from the folder that holds `sitescan.py` and stops with an error when it is missing. With this flag the trace and run forms are not costed, so the costs differ from the overlay builder's; the summary says so. |
+| `--handler ADDR` or `--handler BANK:ADDR` | The game's own interrupt handler entry, hex, for the frame cost model, when $0038 reaches it only through RAM or a table. It is also scanned as an `--entry`. Repeatable. |
+
+The output does not depend on the Python hash seed: the same cart and options give the same files on every run. Keep `tracedef.py` next to `sitescan.py` if you copy the script.
 
 A 512-byte copier header is skipped when the file size is 512 more than a multiple of 16 KB, as `mknms.py` does.
 
@@ -89,8 +95,12 @@ Kinds:
 | `indirect_resolved`, `indirect_unresolved` | `JP (HL)`, `JP (IX)`, `JP (IY)`, or a `RET` to a pushed address, resolved or not. |
 | `bank_unresolved` | A jump or call into slot 2 (or a banked slot 1) with an unknown bank. The target was not followed. |
 | `target_unresolved`, `inline_unresolved` | Other transfers not followed; calls to a routine that skips a variable amount of inline data after the call. |
-| `io_unreached` | `D3 n`, `DB n` or an `ED` I/O opcode in bytes no path reached. |
+| `io_unreached` | `D3 n`, `DB n` or an `ED` I/O opcode in bytes no path reached, found by the byte scan (see below). `note` lists the evidence. |
 | `mapper_unreached` | A mapper store byte pattern in bytes no path reached, found by the byte scan (see below). `target` is the spec line form that patches it: `mapst`, `mapsthl`, `mapstbc`, `mapstde`, `mapld`, `mapldk` or `codem`. `note` lists the evidence. |
+| `inline_table` | Pattern rule 1: a call of an inline table dispatcher. `target` is the table start, `class` the dispatcher, `note` the entries and why the table ends. |
+| `mailbox_race` | Pattern rule 2: the second of two foreground stores to a mailbox byte. `target` is the mailbox address. |
+| `streamer` | Pattern rule 3: the head of a loop that streams a column or rectangle to the VDP. `target` is the routine. |
+| `rle_decoder` | Pattern rule 4: a copy of the Sega planar RLE decoder core. `target` is `core`, `variant` or `variant-de`. |
 
 Port classes follow the SMS decoding of address lines A7, A6 and A0: `memory_control`, `io_control`, `unmapped_read`, `psg`, `v_counter`, `h_counter`, `vdp_data`, `vdp_control`, `vdp_status`, `joypad_a`, `joypad_b_misc`, `no_effect` (a write to $C0-$FF), `fm_address`, `fm_data` and `fm_control` for writes to $F0-$F2, and `fm_detect` for a read of $F2.
 
@@ -100,8 +110,7 @@ Confidence and `how`:
 
 - `high`: reached by proven control flow from the vectors or a `--entry` (`how` is `static`), or from a dynamic log or CDL entry point (`log-seed`, `cdl-seed`).
 - `medium`: reached only through something the scanner inferred: a jump table whose length it guessed (`+table`), or an address harvested from a store to RAM (`pointer-harvest`).
-- `low`, `very-low`: `io_unreached` rows. `low` when the port is one SMS games use ($BE, $BF, $BD, $7E, $7F, $DC, $DD, $C0, $C1, $3E, $3F, $F0-$F2) or the opcode is an `ED` I/O form; `very-low` otherwise.
-- `mapper_unreached` rows have their own scale, described under "Byte scan for mapper stores". Their `how` is `byte scan, no path reached it`.
+- `io_unreached` and `mapper_unreached` rows have their own scale, described under "Byte scans". The `how` of an `io_unreached` row is `byte pattern in bytes no path reached`; of a `mapper_unreached` row, `byte scan, no path reached it`.
 - `+seen-in-log` is added when a dynamic log also has that PC.
 
 ### `NAME.unproven.tsv`
@@ -110,7 +119,24 @@ Stores through HL, DE, BC, IX or IY, and block copies, whose address the scanner
 
 ### `NAME.summary.txt`
 
-The same results, readable: the constant banks the code writes to $FFFE and $FFFF, I/O sites by port function, mapper and Codemasters stores, unproven-store counts by reason and register, RST vectors, RAM copies, tables, unresolved transfers, harvested entry points (with the instruction that stored each one), harvested addresses that were rejected, paths that stopped on bytes that do not look like code, overlapping decodes, unreached I/O patterns, mapper stores found by the byte scan, coverage per bank, and a comparison with the dynamic logs when logs were given.
+The same results, readable: the constant banks the code writes to $FFFE and $FFFF, I/O sites by port function, mapper and Codemasters stores, unproven-store counts by reason and register, RST vectors, RAM copies, tables, unresolved transfers, harvested entry points (with the instruction that stored each one), harvested addresses that were rejected, paths that stopped on bytes that do not look like code, overlapping decodes, unreached I/O patterns, mapper stores found by the byte scan, coverage per bank, a comparison with the dynamic logs when logs were given, and the frame cost findings (below).
+
+### `NAME.cost.tsv`
+
+One row per routine from the frame cost model (see "Frame cost model" below), costliest first.
+
+| Column | Content |
+|---|---|
+| `entry`, `bank`, `offset` | The routine's entry. |
+| `context` | `irq`: the interrupt vectors and the routines they call on paths that return; `fg`: foreground; `both`: called from both. |
+| `iff` | Interrupt enable state at entry: `on`, `off`, `mixed` or `unknown`. |
+| `vdp` | `data` and/or `control` when the routine's own instructions write those VDP ports. |
+| `returns` | `no` when no path returns; the cost then follows every path to where the flow ends. |
+| `cost_lo`, `cost_hi` | Next cycles of one call on its costliest path. The range comes from VDP data writes to an unknown VRAM region. |
+| `frames` | `cost_hi` divided by the Next frame. |
+| `count` | `known`: every loop count on the path is known; `partial`: known for the callers the scanner found, but some callers pass values it does not know; `unknown`: some loop count is unknown and that loop counts as one pass. |
+| `args` | The entry values from a caller that give the cost, when loop counts come from the caller. |
+| `loops` | The routine's outer loops: head address, `x` count (`?` unknown), cost of one pass. |
 
 ### `NAME.dis.txt`
 
@@ -144,13 +170,19 @@ Banks: slot 0 is always bank 0. Slot 2 starts unknown at the vectors and takes t
 
 Code copied to RAM: an `LDIR`/`LDDR` with a proven ROM source, RAM destination and length is recorded. A jump or call into that RAM range is decoded from the copy's source bytes, at the RAM address.
 
-Pointer harvest: a constant code-like address that the code stores into RAM ($C000-$FFFF), with `LD (nn),HL` and similar, or as two byte stores into a structure field that some `JP (HL)` in the cart jumps through, becomes an entry point. It is refused when the store writes several different values, when both bytes are equal ($0909 and the like), when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a harvested entry is dropped again if the code reached from it hits an invalid opcode, a jump into RAM or slot 2 that cannot be resolved, or an I/O port SMS games do not use. Harvested code is `medium` confidence.
+Task switches: a `RET` that runs after `LD SP,HL`, `LD SP,IX`, `LD SP,IY` or `LD SP,(nn)` loaded SP with a value the scanner does not know goes to an address on another stack. Task schedulers switch tasks this way. The scanner does not follow such a `RET`; it lists it with the unresolved indirect jumps, with the `LD SP` instructions of its routine.
+
+Pointer harvest: a constant code-like address that the code stores into RAM ($C000-$FFFF), with `LD (nn),HL` and similar, or as two byte stores into a structure field that some `JP (HL)` in the cart jumps through, becomes an entry point. In a cart with a task switch, the entries of a word table in ROM also become entry points when the code stores a word read from that table into RAM: a task scheduler starts a task by putting its start address, from a table of task entry points, on the task's stack. The table is read as a jump table is. Outside carts with a task switch, a table word stored to RAM is usually a data pointer, so it is not harvested. A harvested address is refused when the store writes several different values, when both bytes are equal ($0909 and the like), when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a harvested entry is dropped again if the code reached from it hits an invalid opcode, a jump into RAM or slot 2 that cannot be resolved, or an I/O port SMS games do not use. A task entry from a table is not dropped for a jump or call into RAM, because games call code they copied to RAM. Harvested code is `medium` confidence.
 
 Bytes that are not code: a path stops at an invalid opcode, at `RST $38` followed by $FF (erased fill), at a literal store into $0000-$7FFF other than $0000 and $4000, and at `LD SP,nn` with nn in ROM. The summary lists each place a path stopped and why.
 
-### Byte scan for mapper stores
+### Byte scans
 
-A mapper store that no path reaches is not patched, and on the Next it then writes RAM: the bank does not change, and the game reads the wrong bank later, often minutes into play. Code the flow scan misses is common in commercial games. So after the flow scan, the scanner looks at every byte of the cart, in every bank, for these patterns:
+After the flow scan, the scanner looks at every byte of the cart, in every bank, for I/O instructions and mapper stores that no path reached, and rates each one by how much the bytes around it look like code.
+
+#### Mapper stores
+
+A mapper store that no path reaches is not patched, and on the Next it then writes RAM: the bank does not change, and the game reads the wrong bank later, often minutes into play. Code the flow scan misses is common in commercial games. The scanner looks for these patterns:
 
 | Bytes | Instruction | Spec line |
 |---|---|---|
@@ -162,7 +194,7 @@ A mapper store that no path reaches is not patched, and on the Next it then writ
 
 A pattern whose first byte a path reached as an instruction is skipped: the flow scan has classified it. Every other hit becomes a `mapper_unreached` row, rated by this evidence:
 
-- a setter: the instruction just before the store loads the register it stores, in a way games do before a bank switch. For A that is `LD A,n`, `LD A,(HL)`, `LD A,(DE)`, `LD A,(BC)`, `LD A,(IX+d)`, `LD A,(IY+d)`, `LD A,(nn)` from RAM, `POP AF`, or `LD (nn),A` to RAM (a copy of the bank number). For HL, BC and DE it is `LD rr,nn`, `LD rr,(nn)` or `POP rr`. `NOP` and `LD A,A` between the two are skipped. Another mapper store pattern that ends within three bytes before the store also counts. The `LD HL,$FFnn; LD (HL),n` pattern carries its own setter;
+- a setter: the instruction just before the store loads the register it stores, in a way games do before a bank switch. For A that is `LD A,n`, `LD A,(HL)`, `LD A,(DE)`, `LD A,(BC)`, `LD A,(IX+d)`, `LD A,(IY+d)`, `LD A,(nn)` from RAM, `POP AF`, or `LD (nn),A` to RAM (a copy of the bank number). For HL, BC and DE it is `LD rr,nn`, `LD rr,(nn)` or `POP rr`. Up to two `NOP`, `LD A,A` or `EX (SP),HL` (not for HL) between the two are skipped. Another mapper store pattern that ends within three bytes before the store also counts. The `LD HL,$FFnn; LD (HL),n` pattern carries its own setter;
 - a jump target: a `JP nn` or `CALL nn` (plain or conditional) somewhere in the cart has the store's address as its target. For a store in bank 2 or above, only references from the same bank count;
 - code before it: the 32 bytes before the store decode as a chain of valid instructions that ends exactly at the store;
 - code after it: the store and up to five more instructions decode as valid instructions, up to the first unconditional jump or return. An invalid opcode, an instruction `implausible` to be code (a store into ROM, `LD SP` into ROM) or `RST $38` followed by $FF fails this test.
@@ -177,8 +209,113 @@ The rating:
 
 `mkspec.py` makes a spec line from each `high` row and a `CHECK` comment from each other row. A `high` row is still a byte pattern: before an overlay ships, read the code around it in the cart. A `medium` row is usually code with a setter the list above does not know, such as `LD A,C`.
 
+#### I/O instructions
+
+The I/O byte scan looks for `D3 n` (`OUT (n),A`), `DB n` (`IN A,(n)`) and the `ED` I/O opcodes. A pattern is skipped when either of its bytes was reached as code, or when it lies in a jump table that was read. Every other hit becomes an `io_unreached` row, rated with the same evidence and the same scale as a mapper store, with these differences:
+
+- the setter is checked only for `OUT (n),A`: the instruction before it loads A, as in the mapper store list;
+- a jump target also counts a `JR`, `JR cc` or `DJNZ` that targets the instruction, and any branch that targets a one-byte instruction just before it, which then runs on into it. Games branch into the operand of an instruction this way: the operand byte runs as a one-byte instruction and falls into the `OUT`. Branches are decoded at every byte, so data can supply one;
+- a hit that would be `high` only because it is a jump target, with no setter and fewer than 8 bytes of valid code before it, is `medium`;
+- a port SMS games do not use is always `very-low`. The ports SMS games use are $BE, $BF, $BD, $7E, $7F, $DC, $DD, $C0, $C1, $3E, $3F and $F0-$F2.
+
+The summary lists every `io_unreached` row except the `very-low` ones, with its evidence.
+
+## Frame cost model
+
+On the Next every SMS I/O instruction runs through the engine's io trap. A name table `OUTI` takes about 2,100 Next cycles against 16 T-states on an SMS. A game that streams VDP data in the foreground with interrupts on, or that does much I/O in its interrupt handler, can overrun the Next frame although it fits on the SMS. The model finds those routines from the code alone.
+
+### Costs
+
+All costs are Next CPU cycles at 28 MHz. A Next frame is 567,264 cycles. The cost table is `COST_VDATA` and `COST_PORT` in `sitescan.py`, with a comment that says where it was measured.
+
+- A native instruction costs its Z80 T-states plus one cycle for every memory read: the instruction's own bytes and the data it reads. Writes add nothing. This matches the measured cycles exactly.
+- An I/O instruction costs the measured trap time, by form and port class: `OUT (n),A`, `OUT (C),r`, single `OUTI`/`OUTD`, `OTIR` (and `OUTI; JR NZ,-2`, which the overlay turns into an `OTIR`), runs of `OUTI`, traces, and the `IN` forms. Block forms have a fixed part and a part per byte.
+- Which output sites become traces or runs is decided as the overlay builder decides it, with `tracedef.choose` on the cart with the I/O sites patched, and whether each becomes a run or a copied trace with `tracedef.verdict`. A trace costs its fixed part once per loop and a smaller part per output, on top of the native code of the loop.
+- A VDP data write costs more or less by the VRAM region it lands in: tile data, sprite table or name table. The scanner does not know the region, so the cost is a range from the cheapest to the dearest of the three. Name table writes are the high end. CRAM writes cost more again and are not in the range.
+
+### Routines and loops
+
+The model works on each routine's flow graph, using only proven flow: a jump through a table whose length the scanner guessed is not followed. A routine's cost is its costliest path from the entry to a return. A path that jumps into the reset code at $0000 does not return and is not counted. When no path returns, the cost follows every path to where the flow ends.
+
+A loop costs its count times its costliest pass. The count is known when the loop counts a register down to zero and the register's value at the loop head is known:
+
+- `DJNZ`, or `JR NZ`/`JP NZ` after `OUTI`, `OUTD`, `INI`, `IND` or `DEC r` (with only flag-neutral instructions, or a `PUSH AF`/`POP AF` pair, in between): the count is in B or r;
+- `DEC rr; LD A,hi; OR lo; JR NZ`: the count is in the pair.
+
+The value comes from the routine's own constants or, when the routine receives it, from each caller (`args`). The cost is the worst over the callers' values. A loop inside another loop that counts the same register uses up the count, so the outer loop counts as one pass. When a count is not known, the loop counts as one pass and the routine's `count` is `unknown`.
+
+A call adds the callee's cost with the values the caller passes.
+
+### Context and interrupts
+
+Routines called from $0038, $0066 or a `--handler` entry, on paths that return, are the interrupt context (`irq`). The rest are foreground. The interrupt enable state is followed through `DI`, `EI` and calls, from off at the vectors, into each routine through its callers.
+
+### Findings
+
+The summary's "Frame cost" section lists:
+
+- the interrupt handler's cost (the costliest of $0038 and the `--handler` entries) and whether the interrupt context writes the VDP control port;
+- race: foreground routines whose own instructions write the VDP with interrupts on and whose cost is more than the frame minus the handler's cost (the frame alone when the handler's worst case is a frame or more), while the interrupt context writes the VDP control port. The handler can then run in the middle of the routine's writes and move the VDP address. A routine is listed only when none of its callees is over the limit on its own;
+- overrun: interrupt routines that cost more than a frame, with the same rule for callees;
+- the costliest foreground routines that write the VDP with interrupts on and return.
+
+The costs are upper bounds: the costliest path through every branch, with loop counts at their largest known value. A game often guards its VDP work with a flag that the handler checks, which the model does not see. Each finding is a place to look at, not a proven fault.
+
+## Pattern rules
+
+Each rule adds rows of its own kind to `NAME.sites.tsv` and a part of the "Pattern rules" section at the end of the summary. The rules run after the main scan and the frame cost model and never change their rows: a site that only rule 1 reaches is a new row, and an `io_unreached` row for the same bytes stays.
+
+### Rule 1: inline jump tables
+
+A dispatcher is an RST vector or a routine called from two or more places that takes its return address (`POP HL` or `EX (SP),HL`, after any pushes of other pairs), adds twice A to it (`ADD A,A`, `SLA A`, `RLCA`, `ADD HL,HL` or two `ADD HL,DE`/`ADD HL,BC`), reads a word through HL, and jumps to it (`JP (HL)`, or `RET` after `EX (SP),HL` or a push). The scanner reads the code from the entry on, following `JP nn` and expanding calls to short helpers that end in `RET`, so a dispatcher built from other RSTs is found. Wonder Boy III's `RST $20` is one. Dispatchers that the main scan already resolves are left out.
+
+After each call of a dispatcher the scanner reads a table of words. The table ends at the first of:
+
+- the entry count that an `AND n` (n one less than a power of two) just before the call allows, with an optional `DEC A` between them;
+- a word that is not a code address for the call's slot: $0100-$7FFF from slots 0 and 1, $0100-$BFFF from slot 2;
+- an entry that is a known code start: the start of a run of code in the listing or, in a second pass, a target of any table;
+- the lowest target of the table that lies after it;
+- a word more than $800 away from the range of the table's earlier words;
+- 128 entries.
+
+The targets become entry points (`table` kind, so entry registers are unknown) of a fresh scan. Its new tables add more entry points until none are new, at most eight rescans. `inline_table` rows list every table. Each I/O, mapper, Codemasters, cart area or RAM copy site of the last rescan that the main scan did not have becomes a row of its own kind, with `how` `inline-table` and confidence `medium`.
+
+### Rule 2: mailbox races
+
+A mailbox is a RAM byte that the interrupt context reads and stores 0 to. When two foreground plain stores (`LD`, not `SET`, `INC` or a load-modify-store) can write it with different values before the handler runs, the first value is lost. A store in a routine that also reads the byte is taken as a load-modify-store. Stores of 0 are clears and are left out.
+
+A byte is not a mailbox when:
+
+- the only 0 stores the interrupt context makes to it are `LD (HL),x` at the head of a RAM clear (`LDIR` follows): that store clears one byte of a range;
+- the interrupt context also does `INC` or `DEC` on it: it is a counter;
+- a foreground routine that does not write it reads it outside a wait loop: it is a state the foreground dispatches on.
+
+For each pair of stores the rule finds the shortest path from the first to the second over every edge the scanner found, through calls and returns. A call the path does not enter costs its shortest time, with loops of known count counted in full; loops on the path itself count once. The time is in Next cycles (each I/O at its cheapest trap) and in SMS T-states (an SMS frame is 59,736).
+
+The handler runs, and the path ends, at:
+
+- a `HALT`;
+- a wait loop: a loop with no stores and no calls that reads the VDP status, the V counter, or one fixed RAM byte in $C000-$FFFB (the interrupt's store to that byte need not have been seen);
+- a call of a routine that always waits: every path from its entry to a return meets a `HALT`, a wait loop or a call of another always-waiting routine. Such a call is not costed at the routine's shortest run.
+
+The search first uses only paths where each return matches a call on the path. Only when a pair has no such path does it allow a return with no known stack, to any caller of the routine. That pair is marked `needs a return with no known stack` in the summary.
+
+One row per mailbox with a pair under a Next frame. A pair has `medium` confidence when its SMS time is at least 0.1 SMS frames and under one frame, and `low` otherwise: with a shorter window the interrupt rarely lands between the stores, and with a longer one it lands between them on the SMS as well, so only the Next can lose the store. The row is the pair of highest confidence; among equals one with a known stack, then the one with the longest SMS time. `class` is `under a frame, SMS over` when that SMS time is a frame or more, else `under a frame, caller unknown` when the pair needs a return with no known stack, else `under a frame`. Both times are lower bounds. The summary lists up to six pairs per mailbox.
+
+Most rows are not races that lose a value; a row marks a place to check. Checked in MAME on the overlay carts, My Hero $C50C (0.51 SMS frames) is the known case, and it is `medium`.
+
+### Rule 3: column and rectangle streamers
+
+A streamer is a loop that, in one pass, writes the VDP control port at least twice and the data port at least once, directly or through calls, and moves an address by $40 or -$40 (one name table row). The step is an `ADD A,$40`, `SUB $40` or `ADD A,$C0`, an `ADD rr` with $40 or $FFC0, or the net change of a register pair over a path through the body: `INC`, `DEC`, `ADD rr` with a known value, the block instructions and `EX DE,HL` move it, a call keeps only the pairs its summary keeps. The innermost such loop is reported, with its pass count (rows), the data writes in one pass (inner loops and called loops multiplied by their counts), the cost of a pass and of the loop from the frame cost model, the routine's context (`irq`, `fg`, `both`), the outer loop if any, and the VDP write instructions it runs (address and ROM offset).
+
+### Rule 4: Sega planar RLE decoder
+
+The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; OR A; RET Z; LD C,A; AND $7F; LD B,A`) anywhere in the cart, and for two variants with `AND $7F` in the four bytes after them: `7E 23 B7 C8` (`variant`), and `1A 13 B7 C8` (`variant-de`: the same core reading the stream through DE, as in Hang On). For each copy a path reached it reports the routines that hold it, whether it is frame work (`irq`: a routine reached from the interrupt handler) or foreground, the control and data writes of its loop with their addresses, the routine's cost, and the calls of the routine. A copy no path reached is `unreached` with the count of `OUT ($BE),A` and control writes in the 64 bytes from the core.
+
 ## Known limits
 
+- The frame cost model costs every run of outputs in a row as a run of `OUTI`. A run of other outputs, or of `OUTI` mixed with them, costs more in the runtime.
+- A task switch (`RET` after `LD SP`) is not followed. The task entries are found only when the code stores them into RAM from a word table in ROM; otherwise add them with `--entry`.
 - A routine reached only through a pointer the scanner cannot trace back to a constant (a handler address kept in RAM or computed at run time, a table it did not recognise) is missed. The summary lists unresolved indirect jumps; add their targets with `--entry`, or give a dynamic log or CDL.
 - Table lengths are guesses. A table can be read too short (missed handlers) or too long (data decoded as code). Rows reached that way are `medium`.
 - Pointer harvest can take a data value for a code address. The checks above catch the cases seen so far; the summary lists every harvested entry and the instruction that stored it, so a person can check them.
@@ -190,4 +327,9 @@ The rating:
 - `$FFFC` writes (cart RAM paging) are reported but not modelled: reads of $8000-$BFFF are taken from ROM.
 - BizHawk CDL files are not read; only Mesen2's `CDLv2` layout is.
 - The byte scan finds only the patterns in its table. A store through a register set elsewhere, such as `LD (HL),A` with HL loaded earlier or `LD (IX+d),A`, is found only when a path reaches it.
+- Rule 1 finds a dispatcher by its instruction shape; a dispatcher that branches before the jump is missed. Its table end rules are guesses like the main scan's, and a table read too long adds data as code (rows with `how` `inline-table` from such tables are noise).
+- Rule 2 sees only stores whose address the scanner proves. Its times are shortest paths, so a pair it reports may never run that close, and its SMS times are too low.
+- Rule 3 misses a loop whose address step comes from a table or from RAM.
 - Interrupt mode 2 vectors are not followed. Only $0000, $0038 and $0066 are vector entry points.
+- The frame cost model does not follow jumps through tables whose length is a guess, so a handler that dispatches its frame work through a table is undercounted. It does not count the engine's own frame work (tile conversion, sprites, copper list), the trace builds (about 13,800 cycles the first time a trace site runs, and again for a copy after the code area fills), or the VRAM region of a write. A routine that drops its return address and jumps back into its caller's code is counted as returning to the caller as well.
+

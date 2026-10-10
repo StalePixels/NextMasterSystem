@@ -18,8 +18,9 @@
  * 108 and 109, and its high half, page 109, is linked at $E000.
  * Keep these in step with the MODULES list in the Makefile. */
 #define PAGE_SESSION   109   /* BANK_54_H: the browse loop and its messages */
-#define PAGE_LOADER    111   /* BANK_55_H: cart, CRC32 and overlay work */
+#define PAGE_LOADER    111   /* BANK_55_H: cart, CRC32 and the overlay file's walk */
 #define PAGE_INFO      113   /* BANK_56_H: the cart information screen */
+#define PAGE_OVERLAY   115   /* BANK_57_H: the overlay file's index and chunks */
 
 /* ---- resident memory ---------------------------------------------------- */
 #define NM_STACK_TOP   0xBFE0u   /* must equal REGISTER_SP in zpragma.inc */
@@ -127,6 +128,10 @@ void *session_init(void *unused);   /* once, at start */
 void *session_pass(void *unused);   /* one browser pass */
 void *loader_load(void *unused);    /* load nm_name; returns a failure code */
 void *info_show(void *unused);      /* show the cart information, wait for a key */
+void *loader_check_range(void *a);  /* struct crc_range *: 1 when the CRC32 matches */
+void *loader_ramsite_old(void *a);  /* struct ramsite *: a RAMSITES entry's original */
+void *overlay_find(void *unused);   /* nm.ovl_name from the index; returns a failure code */
+void *overlay_apply(void *f);       /* struct nms *: CRCS, META, CONF, PTCH; failure code */
 
 /* ---- resident entry points ------------------------------------------------- */
 void nm_run(void);                  /* the main loop; also where a game's BREAK returns */

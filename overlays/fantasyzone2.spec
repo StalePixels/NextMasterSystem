@@ -516,8 +516,8 @@ mapst 002C7   ; LD ($FFFF),A
 # CHECK low: site 00483  OUT ($BE),A  (vdp_data)
 # CHECK low: site 0049A  OUT ($BE),A  (vdp_data)
 # CHECK low: site 01026  IN A,($C1)  (joypad_b_misc)
-# CHECK low: site 04466  OUT ($BE),A  (vdp_data)
-# CHECK low: site 0446B  OUT ($BE),A  (vdp_data)
+site 04466   ; OUT ($BE),A
+site 0446B   ; OUT ($BE),A
 # CHECK low: site 0545D  OUT ($BE),A  (vdp_data)
 # CHECK low: site 05463  OUT ($BE),A  (vdp_data)
 # CHECK low: site 05875  OUT ($BE),A  (vdp_data)
@@ -837,3 +837,696 @@ poke 1B971 D3 C7
 poke 1B973 BF 1D
 poke 1B976 ED C7
 poke 1B978 ED C7
+# Sprite table upload, every frame from the frame handler ($0295) and once at $21D3,
+# as native code in page 0. The game's routine is the RAM code at $CC00 (unpacked
+# from the stream above): 360 OUTI and OUTD to the sprite table, 65-80% of a frame
+# through the traps. Both CALL $CC00 go to a far call at $0011-$0015 (filler
+# bytes between RST $08's routine and RST $18).
+label sat_far 00011
+asm 00011 5          ; filler bytes
+    rst $00
+    db far_io, pg_sat, ent_sat
+    ret
+endasm
+asm 00295 3          ; CALL $CC00 in the frame handler
+    call sat_far
+endasm
+asm 021D3 3          ; CALL $CC00
+    call sat_far
+endasm
+# Run-length unpacker ($07A4/$07A9/$07AE set the step, then $07B1), as native code
+# in page 0. With A = 0 it writes VRAM through RST $08 (two control writes and one
+# data write for every byte: about 2,300 Next cycles a byte through the traps, 55%
+# of every frame for half a second at a stage start). $07B1-$07C1 becomes the far
+# call; the page leaves interrupts off and returns A' = 1 where the game's code
+# leaves them on (RST $08 does EI). $07C2 stays the RET it was.
+asm 007B1 17         ; LD ($C10D),BC, LD B,C, the phase loop and EX AF,AF'
+    rst $00
+    db far_io, pg_unpk, ent_unpk
+    ex af,af'
+    or a
+    jr z,$+3
+    ei
+    xor a
+    ex af,af'
+    ret
+endasm
+# Name table column writer ($0318-$034D, called from the frame handler through
+# $0312 and at a stage start): 22 rows, each a control write and two data writes
+# (the cell's bytes from two buffers 64 bytes a row apart), about 4,000 Next
+# cycles a row through the traps. $031B-$034C becomes the far call; the patch
+# turns interrupts off around it and restores them (the game's code leaves them
+# alone), then sets A = 0 and the Z flag as the game's loop end does.
+asm 0031B 50         ; the column loop, up to the RET at $034D
+    ld a,i
+    di
+    push af
+    rst $00
+    db far_io, pg_ntcol, ent_ntcol
+    pop af
+    jp po,$+4
+    ei
+    ld a,1
+    dec a
+endasm
+# Name table clear ($0525-$0537): 1,792 zero bytes to VRAM $3800, two OUT ($BE),A
+# a pass, about 2,400 Next cycles a byte through the traps, at every stage start.
+# $0528-$0537 becomes the far call; EI as the game's RST $08 leaves interrupts.
+asm 00528 16         ; RST $08 and the clear loop
+    di
+    rst $00
+    db far_io, pg_clr, ent_clr
+    ei
+endasm
+# Tile animation uploads in the frame handler: $035A-$0376 writes 3 x 64 bytes to
+# VRAM $2B40, $03B0-$03C3 writes 288 bytes to VRAM $0800, both through calls into
+# the OUTI chain of the RAM code at $CC00. Each becomes a far call and a RET.
+asm 0035A 29         ; LD DE,$6B40 to JP $CEFB
+    rst $00
+    db far_io, pg_anim1, ent_anim1
+    ret
+endasm
+asm 003B0 20         ; LD DE,$4800 to JP $CEBB
+    rst $00
+    db far_io, pg_anim2, ent_anim2
+    ret
+endasm
+page 0 sat unpk ntcol clr anim1 anim2
+    OPT --zxnext
+; ---------------------------------------------------------------------------
+; sat: does what the RAM code at $CC00 does. ($C011) bit 0 = 0: sprite Y
+; bytes 8-63 from $DB3F down to $DB08 into VRAM $3F08-$3F3F, then X and tile
+; pairs 8-63 from $DC7E,$DC7F / $DC7C,$DC7D / ... / $DC10,$DC11 into VRAM
+; $3F90-$3FFF. Bit 0 = 1: $DB00-$DB3F into $3F00-$3F3F and $DC00-$DC7F into
+; $3F80-$3FFF. Returns the registers that code leaves: A = $7F, BC = $00BE,
+; HL = $DC0E or $DC80, DE kept.
+; ---------------------------------------------------------------------------
+sat:    ld a,i                  ; P/V = IFF2
+        push af
+        di
+        push ix
+        push iy
+        push de
+        ld ix,0
+        ld iy,0
+        ld a,($C011)
+        rrca
+        jr c,sat_b
+        ld hl,$DB3F             ; Y bytes, last entry first
+        ld de,satbuf
+        ld b,56
+sat_a1: ld a,(hl)
+        ld (de),a
+        dec hl
+        inc de
+        djnz sat_a1
+        ld hl,$DC7E             ; X and tile pairs, last entry first
+        ld b,56
+sat_a2: ld a,(hl)
+        ld (de),a
+        inc de
+        inc l
+        ld a,(hl)
+        ld (de),a
+        inc de
+        dec l
+        dec l
+        dec l
+        djnz sat_a2
+        ld hl,satbuf
+        ld de,$3F08
+        ld bc,$3801             ; one run of 56 bytes
+        ld a,1                  ; the source as mapped: this page
+        call jt_vwrite
+        ld hl,satbuf+56
+        ld de,$3F90
+        ld bc,$7001             ; one run of 112 bytes
+        ld a,1
+        call jt_vwrite
+        ld hl,$DC0E
+        jr sat_end
+sat_b:  ld hl,$DB00
+        ld de,$3F00
+        ld bc,$4001             ; one run of 64 bytes
+        xor a
+        call jt_vwrite
+        ld hl,$DC00
+        ld de,$3F80
+        ld bc,$8001             ; one run of 128 bytes
+        xor a
+        call jt_vwrite
+        ld hl,$DC80
+sat_end:
+        pop de
+        pop iy
+        pop ix
+        ld bc,$00BE
+        pop af
+        jp po,sat_di
+        ei
+sat_di: ld a,$7F
+        ret
+
+; ---------------------------------------------------------------------------
+; unpk: does what $07B1-$07C2 and $07C3 do. In: HL = the stream, DE = the
+; destination, BC = the step (1, 2 or 4), A = 0 for VRAM, else RAM. The stream
+; holds one part per step; part p goes to DE + p, DE + p + step, and so on.
+; A part is records up to a 0 byte: n (1-127, 0 = 256) and one byte to repeat
+; n times, or $80 + n and n bytes. Sets ($C10D) = BC. Returns HL after the
+; stream, DE + step, B = 0, C = the step, A as it came with the flags of OR A,
+; and AF' = 0 with the flags of OR A (as the game's last OR A on a 0 byte)
+; once the far call's patch has used it: here A' = 1 if interrupts are to be
+; on after the call. Interrupts stay off while it runs.
+; VRAM: the parts are unpacked into ubuf, interleaved as they lie in VRAM,
+; then written with jt_vwrite: as one block for the bytes every part has, then
+; the rest of each part in runs of 1 byte with the step between them. A stream
+; that does not fit in ubuf is written a byte at a time.
+; ---------------------------------------------------------------------------
+UB_LIMH equ $3C                 ; ubuf ends at $3C00; one record adds at most 1024
+unpk:   ld ($C10D),bc
+        ld (u_flag),a
+        ld (u_dst),de
+        ld (u_src0),hl
+        ld b,a
+        ld a,i                  ; P/V = IFF2
+        ld a,0
+        jp po,unpk_1
+        inc a
+unpk_1: ld (u_ei),a             ; 1: interrupts were on
+        di
+        ld a,c
+        ld (u_step),a
+        push ix
+        push iy
+        ld ixl,a                ; IXL = the step, IXH = parts left
+        ld ixh,a
+        ld a,b
+        or a
+        jp nz,unpk_ram
+; VRAM: unpack every part into ubuf, interleaved as in VRAM
+        ld de,ubuf
+        ld iy,u_cnt
+        ld a,h
+        cp $40
+        jr c,uv_ph              ; a stream below $4000 can be in $2000-$3FFF
+; the fast form: the stream is not in $2000-$3FFF, so plain reads
+uf_ph:  push de                 ; the part's first byte in ubuf
+uf_rec: ld a,(hl)
+        inc hl
+        or a
+        jr z,uf_phend
+        ld c,a
+        and $7F
+        ld b,a                  ; n (0 = 256)
+        bit 7,c
+        jr nz,uf_lit
+        ld c,(hl)               ; n times the next byte
+        inc hl
+        ld a,ixl
+        ex de,hl
+uf_rep: ld (hl),c
+        add hl,a
+        djnz uf_rep
+        ex de,hl
+        jr uf_chk
+uf_lit: ld c,b                  ; n bytes: BC = n for LDI
+        ld b,0
+        ld a,c
+        or a
+        jr nz,uf_l0
+        inc b                   ; 256
+uf_l0:  ld a,ixl
+        dec a                   ; the step - 1
+uf_l1:  ldi
+        add de,a
+        jp pe,uf_l1
+uf_chk: ld a,d
+        cp UB_LIMH
+        jr c,uf_rec
+        pop de
+        jp uv_over              ; too big for ubuf
+uf_phend:
+        pop bc
+        call ph_count
+        dec ixh
+        jr nz,uf_ph
+        jr uv_dec_end
+; the general form: every stream byte through rdb
+uv_ph:  push de
+uv_rec: call rdb
+        or a
+        jr z,uv_phend
+        ld c,a
+        and $7F
+        ld b,a
+        bit 7,c
+        jr nz,uv_lit
+        call rdb
+        ld c,a
+uv_rep: ld a,c
+        ld (de),a
+        ld a,ixl
+        add de,a
+        djnz uv_rep
+        jr uv_chk
+uv_lit: call rdb
+        ld (de),a
+        ld a,ixl
+        add de,a
+        djnz uv_lit
+uv_chk: ld a,d
+        cp UB_LIMH
+        jr c,uv_rec
+        pop de
+        jp uv_over
+uv_phend:
+        pop bc
+        call ph_count
+        dec ixh
+        jr nz,uv_ph
+uv_dec_end:
+        ld (u_src),hl
+; m = the fewest bytes in a part
+        ld a,(u_step)
+        ld b,a
+        ld iy,u_cnt
+        ld hl,$FFFF
+uv_min: ld e,(iy+0)
+        ld d,(iy+1)
+        push hl
+        or a
+        sbc hl,de
+        pop hl
+        jr c,uv_min1            ; HL < DE
+        ex de,hl
+uv_min1:
+        inc iy
+        inc iy
+        djnz uv_min
+        ld (u_min),hl
+        ld a,(u_step)
+uv_mul: rra
+        jr c,uv_muld
+        add hl,hl
+        jr uv_mul
+uv_muld:
+        ld (u_tot),hl           ; m * step: the bytes every part has, as one block
+        ld a,h
+        or a
+        jr z,uv_c2
+        ld c,a                  ; runs of 256 bytes
+        ld b,0
+        ld hl,ubuf
+        ld de,(u_dst)
+        ld ix,256
+        ld iy,256
+        ld a,1
+        call jt_vwrite
+uv_c2:  ld a,(u_tot)
+        or a
+        jr z,uv_tails
+        ld b,a                  ; the last run, under 256 bytes
+        ld a,(u_tot+1)
+        ld d,a
+        ld e,0
+        ld hl,ubuf
+        add hl,de
+        push hl
+        ld hl,(u_dst)
+        add hl,de
+        ex de,hl
+        pop hl
+        ld c,1
+        ld a,1
+        call jt_vwrite
+; the bytes past m in each part
+uv_tails:
+        ld iy,u_cnt
+        xor a
+        ld (u_p),a
+uv_t1:  ld l,(iy+0)
+        ld h,(iy+1)
+        ld de,(u_min)
+        or a
+        sbc hl,de
+        jr z,uv_t2
+        push iy
+        ld (u_t),hl
+        ld hl,(u_tot)
+        ld a,(u_p)
+        add hl,a
+        ex de,hl                ; m * step + p
+        ld hl,ubuf
+        add hl,de
+        push hl
+        ld hl,(u_dst)
+        add hl,de
+        ex de,hl
+        pop hl
+        ld a,(u_step)
+        ld ixl,a
+        ld ixh,0
+        push ix
+        pop iy                  ; IX = IY = the step
+uv_t3:  ld bc,(u_t)
+        ld a,b
+        or a
+        ld b,1
+        jr z,uv_t4
+        ld c,0                  ; 256 runs
+uv_t4:  ld a,1
+        call jt_vwrite
+        ld bc,(u_t)
+        ld a,b
+        or a
+        jr z,uv_t5
+        dec b
+        ld (u_t),bc
+        ld a,b
+        or c
+        jr z,uv_t5
+        ld a,(u_step)           ; 256 runs on
+        add a,h
+        ld h,a
+        ld a,(u_step)
+        add a,d
+        ld d,a
+        jr uv_t3
+uv_t5:  pop iy
+uv_t2:  inc iy
+        inc iy
+        ld a,(u_p)
+        inc a
+        ld (u_p),a
+        ld hl,u_step
+        cp (hl)
+        jr c,uv_t1
+; the VDP state after the game's last write: the last part with bytes
+        ld a,(u_step)
+        ld b,a                  ; B = p + 1
+uv_f1:  dec iy
+        dec iy
+        ld l,(iy+0)
+        ld h,(iy+1)
+        ld a,h
+        or l
+        jr nz,uv_f2
+        djnz uv_f1
+        jr unpk_exit            ; no bytes: nothing written
+uv_f2:  dec hl
+        ld a,(u_step)
+uv_f3:  rra
+        jr c,uv_f4
+        add hl,hl
+        jr uv_f3
+uv_f4:  ld a,b
+        dec a
+        add hl,a                ; the last byte: (n - 1) * step + p
+        ld de,ubuf
+        add hl,de
+        ld a,(hl)
+        ld (vdp_rbuf),a
+        or a
+        sbc hl,de
+        inc hl
+        ld de,(u_dst)
+        add hl,de
+        ld a,h
+        and $3F
+        ld h,a
+        ld (vdp_addr),hl
+        ld a,1
+        ld (u_ei),a             ; RST $08 leaves interrupts on
+unpk_exit:
+        ld hl,(u_dst)
+        ld a,(u_step)
+        ld c,a
+        ld b,0
+        add hl,bc
+        ex de,hl
+        ld hl,(u_src)
+        pop iy
+        pop ix
+        ld a,(u_ei)
+        ex af,af'
+        ld a,(u_flag)
+        or a
+        ret
+; too big for ubuf: from the start again, a byte at a time
+uv_over:
+        ld hl,(u_src0)
+        ld de,(u_dst)
+        ld a,(u_step)
+        ld ixl,a
+        ld ixh,a
+uo_ph:  push de
+uo_rec: call rdb
+        or a
+        jr z,uo_phend
+        ld c,a
+        and $7F
+        ld b,a
+        bit 7,c
+        jr nz,uo_lit
+        call rdb
+        ld c,a
+uo_rep: ld a,c
+        call uo_put
+        djnz uo_rep
+        jr uo_rec
+uo_lit: call rdb
+        call uo_put
+        djnz uo_lit
+        jr uo_rec
+uo_phend:
+        pop de
+        inc de
+        dec ixh
+        jr nz,uo_ph
+        ld (u_src),hl
+        ld a,1
+        ld (u_ei),a
+        jp unpk_exit
+; uo_put: A into VRAM at DE, DE += the step. Keeps BC, HL, IX, IY.
+uo_put: push hl
+        push bc
+        ld (u_byte),a
+        ld hl,u_byte
+        ld bc,$0101
+        ld a,1
+        call jt_vwrite
+        ld a,ixl
+        add de,a
+        pop bc
+        pop hl
+        ret
+; RAM: the game's loop, natively
+unpk_ram:
+ur_ph:  push de
+ur_rec: call rdb
+        or a
+        jr z,ur_phend
+        ld c,a
+        and $7F
+        ld b,a
+        bit 7,c
+        jr nz,ur_lit
+        call rdb
+        ld c,a
+ur_rep: ld a,c
+        ld (de),a
+        ld a,ixl
+        add de,a
+        djnz ur_rep
+        jr ur_rec
+ur_lit: call rdb
+        ld (de),a
+        ld a,ixl
+        add de,a
+        djnz ur_lit
+        jr ur_rec
+ur_phend:
+        pop de
+        inc de
+        dec ixh
+        jr nz,ur_ph
+        ld (u_src),hl
+        jp unpk_exit
+; ---------------------------------------------------------------------------
+; ntcol: does what $031B-$034C does. Name table column: 22 rows from VRAM
+; ($C1D2), 64 bytes a row; each row's two bytes are (($C1D4) + 64 * row) and
+; (($C1D6) + 64 * row). Copies the 44 bytes into ncbuf, then one jt_vwrite
+; (22 runs of 2 bytes, 2 apart in ncbuf and 64 apart in VRAM). Returns HL, BC
+; and DE past the last row (+ 22 * 64) and AF' as the game's last row leaves
+; it (A' = D); the patch sets A and F.
+; ---------------------------------------------------------------------------
+ntcol:  push ix
+        push iy
+        ld de,($C1D2)
+        push de
+        ld hl,($C1D4)
+        ld bc,($C1D6)
+        ld de,ncbuf
+        ld ixl,22
+nc_row: call rdb
+        dec hl
+        ld (de),a
+        inc de
+        push hl
+        ld h,b
+        ld l,c
+        call rdb
+        pop hl
+        ld (de),a
+        inc de
+        add hl,64
+        add bc,64
+        dec ixl
+        jr nz,nc_row
+        pop de
+        push hl
+        push bc
+        ld hl,ncbuf
+        ld bc,$0216             ; 22 runs of 2 bytes
+        ld ix,2
+        ld iy,64
+        ld a,1                  ; the source as mapped: this page
+        call jt_vwrite
+        ex de,hl
+        add hl,22*64
+        ex de,hl
+        ld a,e                  ; AF' as after the game's last row:
+        sub $40                 ; A' = D, F' from ADC A,0 with the carry
+        ld l,a                  ; of E + $40
+        add a,$40
+        ld a,d
+        sbc a,0
+        ld h,a
+        ld a,l
+        add a,$40
+        ld a,h
+        adc a,0
+        ex af,af'
+        pop bc
+        pop hl
+        pop iy
+        pop ix
+        ret
+
+; ---------------------------------------------------------------------------
+; clr: does what $0528-$0537 does: 1,792 zero bytes to VRAM DE ($7800 from
+; $0525), with one jt_vwrite (7 runs of 256 bytes, all from zero256). Returns
+; A = 0, HL = 0, the flags of OR on 0, DE kept.
+; ---------------------------------------------------------------------------
+clr:    push ix
+        push iy
+        push de
+        ld hl,zero256
+        ld bc,$0007             ; 7 runs of 256 bytes
+        ld ix,0
+        ld iy,256
+        ld a,1
+        call jt_vwrite
+        pop de
+        pop iy
+        pop ix
+        ld hl,0
+        xor a
+        ret
+
+; ---------------------------------------------------------------------------
+; anim1: does what $035A-$0376 does: 64 bytes from each of ($C1CB), ($C1CD)
+; and ($C1CF), in that order, to VRAM $2B40-$2BFF. Returns A = $6B, BC = $00BE,
+; DE = $6B40, HL = ($C1CF) + 64, Z set (as the last OUTI leaves B = 0).
+; anim2: does what $03B0-$03C3 does: 288 bytes from HL to VRAM $0800-$091F.
+; Returns A = $48, BC = $00BE, DE = $4800, HL + 288, Z set.
+; ---------------------------------------------------------------------------
+anim1:  push ix
+        push iy
+        ld de,$2B40
+        ld hl,($C1CB)
+        call an_64
+        ld de,$2B80
+        ld hl,($C1CD)
+        call an_64
+        ld de,$2BC0
+        ld hl,($C1CF)
+        call an_64
+        ld bc,64
+        add hl,bc
+        ld de,$6B40
+        ld a,$6B
+        jr an_end
+an_64:  ld bc,$4001             ; one run of 64 bytes
+        xor a                   ; the source as the game sees it
+        jp jt_vwrite
+anim2:  push ix
+        push iy
+        ld de,$0800
+        ld bc,$9002             ; 2 runs of 144 bytes
+        ld ix,144
+        ld iy,144
+        xor a
+        call jt_vwrite
+        ld bc,288
+        add hl,bc
+        ld de,$4800
+        ld a,$48
+an_end: ld bc,$00BE
+        pop iy
+        pop ix
+        cp a                    ; Z
+        ret
+; ph_count: the end of a part. BC = its first byte in ubuf, DE = past its
+; last. Stores its bytes at (IY), IY + 2, DE = the next part's first byte.
+; Keeps HL.
+ph_count:
+        push hl
+        ex de,hl
+        or a
+        sbc hl,bc               ; bytes in the part * step
+        ld a,ixl
+pc_div: rra
+        jr c,pc_divd
+        srl h
+        rr l
+        jr pc_div
+pc_divd:
+        ld (iy+0),l
+        ld (iy+1),h
+        inc iy
+        inc iy
+        ld d,b
+        ld e,c
+        inc de
+        pop hl
+        ret
+; rdb: A = the stream byte the game sees at HL, HL + 1. Keeps BC, DE.
+rdb:    ld a,h
+        sub $20
+        cp $20
+        jr c,rdb_pk             ; $2000-$3FFF: the game's page, not this one
+        ld a,(hl)
+        inc hl
+        ret
+rdb_pk: call jt_peek
+        inc hl
+        ret
+
+u_flag: db 0
+u_ei:   db 0
+u_step: db 0
+u_p:    db 0
+u_byte: db 0
+u_dst:  dw 0
+u_src0: dw 0
+u_src:  dw 0
+u_min:  dw 0
+u_tot:  dw 0
+u_t:    dw 0
+u_cnt:  ds 16                   ; bytes in each part
+satbuf: ds 168
+ncbuf:  ds 44
+zero256: ds 256                 ; never written
+ubuf:
+endpage

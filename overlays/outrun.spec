@@ -1,6 +1,9 @@
 # OutRun, drafted by tools/mkspec.py from sitescan output.
 name OutRun
 cart 5589D8D2
+# tilecache: whole tiles copied from cart ROM are not converted again (MAME,
+# game frames 300-2300: framework cycles -1.4%, vertical blank tile work -8%)
+tilecache
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and interrupt mode 1 setup) becomes the vector,
 # the game starts at $0003 (the framework does DI and IM 2).
 vector 00 io
@@ -36,37 +39,31 @@ site 00346   ; OUT ($BF),A
 site 0034A   ; OUT ($BF),A
 site 0034F   ; OUT ($BF),A
 site 00353   ; OUT ($BF),A
-site 0035B   ; IN A,($7E)
 site 00363   ; OUT ($BF),A
 site 00367   ; OUT ($BF),A
 site 0036F   ; OUT ($BF),A
 site 00373   ; OUT ($BF),A
 site 00378   ; OUT ($BF),A
 site 0037C   ; OUT ($BF),A
-site 0039A   ; IN A,($7E)
 site 003A2   ; OUT ($BF),A
 site 003A6   ; OUT ($BF),A
 site 003B5   ; OUT ($BF),A
 site 003B9   ; OUT ($BF),A
 site 003BE   ; OUT ($BF),A
 site 003C2   ; OUT ($BF),A
-site 003D2   ; IN A,($7E)
 site 003DA   ; OUT ($BF),A
 site 003DE   ; OUT ($BF),A
 site 003F0   ; OUT ($BF),A
 site 003F4   ; OUT ($BF),A
 site 003F9   ; OUT ($BF),A
 site 003FD   ; OUT ($BF),A
-site 0041C   ; IN A,($7E)
 site 00424   ; OUT ($BF),A
 site 00428   ; OUT ($BF),A
-site 0043C   ; OUT ($BF),A
 site 00440   ; OUT ($BF),A
 site 00450   ; OUT ($BF),A
 site 00454   ; OUT ($BF),A
 site 00465   ; OUT ($BF),A
 site 00469   ; OUT ($BF),A
-site 00475   ; OUT ($BF),A
 site 00479   ; OUT ($BF),A
 otir 00494   ; OUTI
 otir 00499   ; OUTI
@@ -114,7 +111,6 @@ site 0098C   ; OUT ($BE),A
 site 009C0   ; OUT (C),D
 site 009D3   ; OTIR
 site 00A10   ; OUT ($BE),A
-site 00A98   ; OUT ($BE),A
 site 00F0A   ; OUT ($BE),A
 site 01108   ; OUT ($BF),A
 site 0110B   ; OUT ($BF),A
@@ -538,7 +534,7 @@ mapld 05104   # loads HL with $FFFF, then stores $05 through it
 # CHECK bank_unresolved at 06086 ($6086 bank 1): JP P,$A280 $A280
 # CHECK low: site 002C6  OUT ($BF),A  (vdp_control)
 # CHECK low: site 002CA  OUT ($BF),A  (vdp_control)
-# CHECK low: site 00A3E  OUT ($BE),A  (vdp_data)
+site 00A3E   ; OUT ($BE),A
 # CHECK low: site 01E51  OUT ($BE),A  (vdp_data)
 # CHECK low: site 1B080  IN L,(C)  (port in C)
 # CHECK low: site 1B25C  IN A,($BF)  (vdp_status)
@@ -573,6 +569,475 @@ plain 007F0
 plain 007F9
 plain 007FD
 rastercode outrun-raster.asm
+# Code page 0. In the race the frame handler works through a cycle of five
+# tasks. Task 9 ($044A) writes name table rows 8-27, $3A00-$3EFF, from the
+# buffer at $D500: seven calls into the unrolled OUTI block at $3DB6 (896
+# bytes), then two OUTI loops, the first of 128 bytes and the second, which
+# starts with B = 0, of 256: 1,280 bytes. Through the I/O trap that takes
+# most of a frame, so the handler runs past the next frame event. nt_up9
+# writes the same 1,280 bytes with two jt_vwrite calls, columns 0-7 and then
+# columns 8-31 of each row, with interrupts off across both, so the game's
+# interrupt handler never sees a half-written region. The other way into the
+# same writes, $0434 (when ($C24E) is not 0), writes rows 15-27 from $D6C0
+# at $3BC0: nt_up9b.
+# sat_up replaces the sprite table writer at $3DA3 (64 Y bytes from $C600 to
+# $3F00, then 128 X and tile bytes from $C680 to $3F80, through the OUTI
+# block) with two OTIR calls.
+# The entries leave the registers, the VDP address and code as the game's
+# code does (HL, B, C and A as after the last OUTI, F only with Z from B),
+# and keep interrupts as they were.
+asm 00471 7   ; task 9: name table rows from $D500 -> page 0, then the code after the writes
+    rst $00
+    db far_io, pg_nt_up9, ent_nt_up9
+    jp $049E
+endasm
+asm 00437 7   ; task 9 with ($C24E) not 0: rows from $D6C0 at $3BC0 -> page 0
+    rst $00
+    db far_io, pg_nt_up9b, ent_nt_up9b
+    jp $049E
+endasm
+asm 03DA3 5   ; sprite table writer -> page 0, then return
+    rst $00
+    db far_io, pg_sat_up, ent_sat_up
+    ret
+endasm
+# Four of the race tasks end with a wait for the next picture: IN A,($7E),
+# CP $B7, JP NC back, with interrupts off. Through the framework that loop
+# runs the vblank work once in the vertical blank, then again when it reads
+# a picture line: the framework's frame interrupt, held since line 248 by
+# the game's DI, comes at the EI after the loop and finds the work not done.
+# vwait waits for the same line by reading the Next's line number itself. It
+# reads the V counter through the framework once, when the line is in the
+# vertical blank, so that the vblank work is done there, and never sees a
+# picture line through the framework. It changes only A and F, as the loop
+# does, and the game sets A after it.
+asm 0035B 7   ; task 0: wait for the picture -> page 0
+    rst $00
+    db far_io, pg_vwait, ent_vwait
+    nop
+    nop
+    nop
+endasm
+asm 0039A 7   ; task 6: wait for the picture -> page 0
+    rst $00
+    db far_io, pg_vwait, ent_vwait
+    nop
+    nop
+    nop
+endasm
+asm 003D2 7   ; task 7: wait for the picture -> page 0
+    rst $00
+    db far_io, pg_vwait, ent_vwait
+    nop
+    nop
+    nop
+endasm
+asm 0041C 7   ; task 8: wait for the picture -> page 0
+    rst $00
+    db far_io, pg_vwait, ent_vwait
+    nop
+    nop
+    nop
+endasm
+# $0A52 (which tasks 0, 7 and 8 call) unpacks up to 128 bytes of run-length
+# coded tile data a call, from ($C144) to VRAM 4 bytes apart from ($C146)
+# (one bit plane): runs of literal or repeated bytes, each byte through
+# RST $08 (the address from DE) and OUT ($BE),A. Most runs are 2 to 4
+# bytes, so a far call for each run costs more than its writes. rle runs
+# the routine from $0A64 to its RET as the game's code, but collects the
+# bytes, which go to consecutive addresses 4 apart, and writes them with one
+# jt_vwrite call (runs of one byte, VRAM step 4) before the routine leaves
+# the unpacking loop. With a DE that is not a VRAM write command, or whose
+# command would change on the way, it writes them through the ports as the
+# game does. It runs with interrupts off and reads the source as the game
+# sees it.
+asm 00A64 5   ; $0A52 from LD C,0 to its RET -> page 0
+    rst $00
+    db far_io, pg_rle, ent_rle
+    ret
+endasm
+site 00A98   ; OUT ($BE),A (no longer reached: rle replaces its loop)
+page 0 nt_up9 nt_up9b sat_up vwait rle
+; Both ways in end at name table address $3F00 and source $DA00.
+nt_up9: ld (n_gde),de            ; the game's DE, kept
+        ld hl,$D500
+        ld de,$3A00
+        ld c,20                 ; rows
+        ld a,$7A                ; A as the game's code leaves it
+        jr ntw
+nt_up9b:
+        ld (n_gde),de
+        ld hl,$D6C0
+        ld de,$3BC0
+        ld c,13
+        ld a,$7B
+; HL = source, DE = name table address of column 0, C = rows, A = A on return
+ntw:    ld (n_a),a
+        ld a,i                  ; P/V = IFF
+        di
+        push af
+        push ix
+        push iy
+        ld ix,64
+        ld iy,64
+        ld b,16                 ; columns 0-7 of each row
+        xor a
+        call jt_vwrite
+        ld a,l                  ; HL += 16 (no carry: a row starts at $xx00, $xx40, $xx80 or $xxC0)
+        add a,16
+        ld l,a
+        ld a,e
+        add a,16
+        ld e,a
+        ld b,48                 ; columns 8-31: the VDP address ends at $3F00
+        xor a
+        call jt_vwrite
+        pop iy
+        pop ix
+        pop af
+        jp po,.di
+        ei
+.di:    ld de,(n_gde)
+        ld hl,$DA00
+        ld bc,$00BE
+        xor a                   ; Z, as after the last OUTI
+        ld a,(n_a)
+        ret
+sat_up: ld a,b                  ; B as after 192 OUTIs
+        add a,64
+        ld (s_b),a
+        ld a,i
+        di
+        push af
+        ld hl,$3F00
+        ld (vdp_addr),hl
+        ld a,1
+        ld (vdp_code),a
+        xor a
+        ld (vdp_latch),a
+        ld hl,$C600
+        ld bc,$40BE
+        rst $00
+        db $B3
+        ld hl,$3F80
+        ld (vdp_addr),hl
+        ld hl,$C680
+        ld bc,$80BE
+        rst $00
+        db $B3
+        pop af
+        jp po,.d
+        ei
+.d:     ld hl,$C700
+        ld de,$7F80
+        ld a,(s_b)
+        ld b,a
+        or a                    ; Z from B
+        ld a,$7F
+        ld c,$BE
+        ret
+; vwait: until the Next line is a picture line below 183 (V below $B7)
+vwait:  push bc
+        push de
+        ld e,0                  ; 1: the framework has read V this time
+.l:     ld bc,$243B
+        ld a,$1E
+        out (c),a
+        inc b
+        in d,(c)                ; line, bit 8
+        dec b
+        ld a,$1F
+        out (c),a
+        inc b
+        in a,(c)                ; line, bits 0-7
+        bit 0,d
+        jr nz,.vb
+        cp 183
+        jr c,.done
+        cp 194                  ; the framework's vertical blank starts at 194
+        jr c,.l
+.vb:    ld a,e
+        or a
+        jr nz,.l
+        inc e
+        rst $00
+        db $0A                  ; IN A,($7E) through the framework
+        jr .l
+.done:  pop de
+        pop bc
+        ret
+;
+;
+; rle: $0A64-$0B16 as the game's code, with the VRAM writes collected in
+; r_buf and written by flush. While it unpacks, DE points into r_buf; the
+; game's DE is r_de + 4 * the bytes collected, worked out (vde) where the
+; code leaves the loop. Z through the loop at $0A96 says whether the run
+; repeats one byte, so the loop is in two copies, one for each; F is not
+; read after either copy before code that sets it. rd reads (HL) as the
+; game sees it; the count byte that $0A73, $0A85 and $0A8F read is read once.
+rle:    ld a,i                  ; P/V = IFF (B and C are not live here)
+        push af
+        pop bc
+        ld a,c
+        ld (r_iff),a
+        di
+        ld (r_de),de            ; the VRAM address of the first byte
+        ld de,r_buf
+        ld c,0                  ; $0A64
+        ld a,($C124)
+        or a
+        jp nz,.ab2
+.a6d:   ld a,c
+        cp $80
+        jp nc,.ae5
+        call rd
+        ld (r_cb),a
+        or a
+        jp z,.aed
+        and $7F
+        ld b,a
+        add a,c
+        cp $81
+        jp c,.a8e
+        ld a,$80
+        sub c
+        ld b,a
+        ld a,(r_cb)
+        and $7F
+        sub b
+        ld ($C124),a
+        ld a,$80
+.a8e:   ld c,a
+        ld a,(r_cb)
+        inc hl
+        and $80
+        ld ($C123),a            ; Z: one byte repeated
+.a96:   jr z,.rep
+        inc b                   ; literal: RST $08, LD A,(HL), OUT ($BE),A, INC HL
+        dec b
+        jr z,.b0l               ; B = 0: 256 bytes
+        ld a,h
+        cp $40
+        jr nc,.lf               ; the source is above $3FFF
+        and $E0
+        cp $20
+        jr z,.lsl               ; the source starts in $2000-$3FFF
+        ld a,b
+        dec a
+        add a,l
+        ld a,h
+        adc a,0
+        and $E0
+        cp $20
+        jr z,.lsl               ; or ends there
+.lf:    ld a,c
+        ld c,b
+        ld b,0
+        ldir
+        ld c,a
+        jp .a6d                 ; Z clear: back to $0A6D
+.lsl:   call rd
+        ld (de),a
+        inc e
+        inc hl
+        djnz .lsl
+        jp .a6d
+.rep:   inc b                   ; the same byte B times
+        dec b
+        jr z,.b0r
+        call rd
+.rl:    ld (de),a
+        inc e
+        djnz .rl
+.aa7:   ld a,($C124)            ; $0AA7: Z set
+        or a
+        jp nz,.a6d
+        inc hl
+        jp .a6d
+; a run of 256 bytes (count byte $80: B = 0, and C does not grow) goes
+; through the ports as the game's code does, after the bytes before it
+.b0l:   call vde
+        call flush
+.sl:    call sbyte
+        inc hl
+        inc de
+        inc de
+        inc de
+        inc de
+        djnz .sl
+        ld (r_de),de
+        ld de,r_buf
+        jp .a6d
+.b0r:   call vde
+        call flush
+.sr:    call sbyte
+        inc de
+        inc de
+        inc de
+        inc de
+        djnz .sr
+        ld (r_de),de
+        ld de,r_buf
+        jp .aa7
+.ab2:   cp $80
+        jp c,.ac2
+        sub $80
+        ld ($C124),a
+        ld b,$80
+        ld c,b
+        jp .ac8
+.ac2:   ld b,a
+        ld c,a
+        xor a
+        ld ($C124),a
+.ac8:   ld a,($C123)
+        or a
+        jp .a96
+.acf:   ld hl,($C128)
+        ld ($C144),hl
+        ld hl,($C126)
+        ld ($C146),hl
+        ld a,$04
+        ld ($C122),a
+        xor a
+        ld ($C124),a
+        jp .ret
+.ae5:   call vde
+        call flush
+        ld ($C144),hl
+        ld ($C146),de
+        jp .ret
+.aed:   call vde
+        call flush
+        inc hl
+        ld ($C144),hl
+        ld hl,($C126)
+        inc hl
+        ld ($C126),hl
+        ld ($C146),hl
+        ld a,($C122)
+        dec a
+        ld ($C122),a
+        jp nz,.ret
+        ld hl,$C12A
+        ld de,$C125
+        ld bc,$001A
+        ldir
+        ld a,($C125)
+        cp $FF
+        jp nz,.acf
+.ret:   push af                 ; interrupts as they were; A and F kept
+        ld a,(r_iff)
+        bit 2,a
+        jr z,.di
+        pop af
+        ei
+        ret
+.di:    pop af
+        ret
+; E = the bytes in r_buf: r_ptr = E, DE = r_de + 4 * E (the game's DE); F kept
+vde:    push hl
+        push af
+        ld a,e
+        ld (r_ptr),a
+        ld l,e
+        ld h,0
+        add hl,hl
+        add hl,hl
+        ld de,(r_de)
+        add hl,de
+        ex de,hl
+        pop af
+        pop hl
+        ret
+; A = (HL) as the game sees it; F changes
+rd:     ld a,h
+        and $E0
+        cp $20
+        jp z,jt_peek            ; the game's page under this one
+        ld a,(hl)
+        ret
+; RST $08, LD A,(HL), OUT ($BE),A through the framework; F kept
+sbyte:  push af
+        ld a,e
+        rst $00
+        db $05                  ; OUT ($BF),A
+        ld a,d
+        rst $00
+        db $05
+        call rd
+        rst $00
+        db $04                  ; OUT ($BE),A
+        pop af
+        ret
+; the r_ptr bytes in r_buf to VRAM at r_de, r_de + 4, ...; keeps every
+; register and F
+flush:  push af
+        ld a,(r_ptr)            ; bytes, 0-128
+        or a
+        jr z,.f0
+        push bc
+        push de
+        push hl
+        push ix
+        push iy
+        ld b,a
+        ld de,(r_de)
+        ld l,b                  ; the last control word + 3 = DE + 4 * bytes - 1
+        ld h,0
+        add hl,hl
+        add hl,hl
+        dec hl
+        add hl,de
+        ld a,h
+        xor d
+        and $C0
+        jr nz,.port             ; the command changes on the way
+        ld a,d
+        and $C0
+        cp $40
+        jr nz,.port             ; not a VRAM write command
+        ld c,b                  ; runs = bytes
+        ld b,1
+        ld hl,r_buf
+        ld ix,1
+        ld iy,4
+        ld a,1                  ; the source as mapped: r_buf in this page
+        call jt_vwrite
+        jr .fd
+.port:  ld hl,r_buf
+.pl:    ld a,e
+        rst $00
+        db $05                  ; OUT ($BF),A
+        ld a,d
+        rst $00
+        db $05
+        ld a,(hl)
+        rst $00
+        db $04                  ; OUT ($BE),A
+        inc hl
+        inc de
+        inc de
+        inc de
+        inc de
+        djnz .pl
+.fd:    pop iy
+        pop ix
+        pop hl
+        pop de
+        pop bc
+.f0:    pop af
+        ret
+r_iff:  db 0
+r_ptr:  db 0
+r_cb:   db 0
+r_de:   dw 0
+n_a:    db 0
+s_b:    db 0
+n_gde:  dw 0
+        align 256
+r_buf:  ds 256
+endpage
 # Mapper stores the draft missed: LD (HL),n with HL set to $FFFF, in banks 0-1, found
 # by sitescan's byte scan, in routines that load graphics.
 # "ran in the reference run": the SMS reference MAME saw it write the mapper.

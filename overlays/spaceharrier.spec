@@ -64,7 +64,7 @@ site 00676   ; OTIR
 site 006B3   ; OUT ($BE),A
 site 0070C   ; OUT ($BE),A
 site 00A7E   ; OUT ($BE),A
-otir 00FA8   ; OUTI
+# 00FA8 OUTI loop: replaced by the asm block at 00F99 (page 0, sh_nt)
 otir 012A4   ; OUTI
 otir 012CD   ; OUTI
 otir 016BB   ; OUTI
@@ -337,3 +337,354 @@ mapld 07E93   # loads HL with $FFFF, then stores $06 through it
 # CHECK low: site 3C4E5  IN A,($BD)  (vdp_status)
 # CHECK low: site 3EB09  IN A,($BF)  (vdp_status)
 # CHECK low: site 3F504  OUTD  (port in C)
+# Name table rewrite at $0F98: rows 1-23 (VRAM $3840-$3FBF) from the RAM copy at $CD20,
+# 128 bytes a row in the copy, with an OUTI loop: about 19,000 Next cycles a row through
+# the traps, 436,000 for the screen. The page writes it with two jt_vwrite calls.
+asm 00F99 25         ; LD DE,$7840 up to the JP NZ at $0FAF; the game's DI before, EI : RET after
+    rst $10
+    db far_io, pg_sh_nt, ent_sh_nt
+    jr $0FB2
+endasm
+# Sprite table upload at $4AD3: $C500-$C53F to VRAM $3F00 and $C580-$C5FF to $3F80,
+# through 192 OUTI.
+asm 04AD3 6          ; LD HL,$C500 : LD DE,$7F00, then the RET of the block's end
+    rst $10
+    db far_io, pg_sh_sat, ent_sh_sat
+    ret
+endasm
+# Tile upload at $4E53: E tiles of 3 bitplanes (24 bytes each, in bank 2) to VRAM from
+# $2000, the fourth plane 0, through 3 OUTI and an OUT ($BE),A per row: about 21,000
+# Next cycles a tile through the traps.
+asm 04E53 10         ; LD C,$BE : XOR A : the CALL $4E5E loop, up to its RET at $4E5D
+    rst $10
+    db far_io, pg_sh_tiles, ent_sh_tiles
+endasm
+# Tile loader in the frame handler at $06C6: decodes run-length data into one bitplane
+# of the tiles, every fourth VRAM byte, up to 128 bytes a frame, with a control write
+# and an OUT ($BE),A for each byte: about 2,300 Next cycles a byte through the traps.
+# State: $C131 planes left, $C132 run kind, $C133 run bytes left, $C134 bank (the code
+# before $06D1 maps it), $C135 plane address, $C153 source, $C155 VRAM address, and a
+# queue of jobs from $C139.
+asm 006D1 7          ; LD DE,($C155) : LD HL,($C153): the rest of the routine is sh_rle
+    rst $10
+    db far_io, pg_sh_rle, ent_sh_rle
+    ret
+endasm
+page 0 sh_nt sh_sat sh_tiles sh_rle
+; sh_nt: does what $0F99-$0FB1 does with interrupts off: name table rows 1-23,
+; 32 cells each, from $CD20 + 128 * row to VRAM $3840 + 64 * row. Columns 0-7
+; and columns 8-31 are two calls, so that each takes jt_vwrite's fast form for
+; name table runs. Returns with the registers the game's loop leaves: A = 0,
+; B = 0, C = $BE, DE = $0040, HL = $CD20 + 23 * 128, Z set.
+sh_nt:  push ix
+        push iy
+        ld hl,$CD20
+        ld de,$3840
+        ld bc,$1017             ; 23 runs of 16 bytes: columns 0-7
+        ld ix,128               ; the source step
+        ld iy,64                ; the VRAM step
+        xor a                   ; the source as the game sees it
+        call jt_vwrite
+        ld l,$30                ; HL = $CD30, DE = $3850: columns 8-31
+        ld e,$50
+        ld b,48
+        xor a
+        call jt_vwrite
+        pop iy
+        pop ix
+        ld hl,$CD20+23*128
+        ld de,$0040
+        ld bc,$00BE
+        xor a
+        ret
+
+; sh_sat: does what $4AD3-$4BE6 does: $C500-$C53F to VRAM $3F00, then
+; $C580-$C5FF to VRAM $3F80. Returns as that code does: A = $7F, B = B - 192,
+; C = $BE, DE = $7F80, HL = $C600.
+sh_sat: ld a,i                  ; P/V = the interrupt state
+        di
+        push af
+        push ix
+        push iy
+        ld a,b
+        add a,64                ; B - 192, as the 192 OUTI leave it
+        ld (sat_b),a
+        ld hl,$C500
+        ld de,$3F00
+        ld bc,$4001             ; 1 run of 64 bytes
+        ld ix,0
+        ld iy,0
+        xor a
+        call jt_vwrite
+        ld l,$80                ; HL = $C580, DE = $3F80
+        ld e,l
+        ld b,l                  ; 1 run of 128 bytes
+        xor a
+        call jt_vwrite
+        pop iy
+        pop ix
+        ld hl,$C600
+        ld de,$7F80
+        ld a,(sat_b)
+        ld b,a
+        ld c,$BE
+        pop af
+        ld a,$7F
+        jp po,.di
+        ei
+.di:    ret
+
+; sh_tiles: does what $4E53-$4E5D does: E tiles (0 = 256) from HL, 3 bytes a
+; row, 8 rows a tile, to VRAM from $2000, 4 bytes a row, the fourth byte 0. The
+; game reads HL in bank 2 in slot 2, so the page reads it directly. The tiles
+; go through buf, 32 at a time, with one jt_vwrite call for each 32. Returns as
+; that code does: A = 0, E = 0, B = B - 24 * E, C = $BE, HL past the last
+; tile, Z set.
+sh_tiles:
+        ld a,i
+        di
+        push af
+        push ix
+        push iy
+        push de
+        ld a,e
+        add a,a
+        add a,a
+        add a,a
+        ld c,a
+        add a,a
+        add a,c                 ; 24 * E, modulo 256
+        neg
+        add a,b
+        ld (tl_b),a             ; B as the OUTI leave it
+        ld d,0
+        dec e
+        inc de                  ; DE = tiles, 1-256
+        ld (tl_n),de
+        ld de,$2000
+        ld (tl_v),de
+        ld ix,32
+        ld iy,32
+.chunk: ld de,(tl_n)
+        ld a,d
+        or a
+        jr nz,.full
+        ld a,e
+        cp 33
+        jr c,.some
+.full:  ld a,32
+.some:  ld (tl_c),a             ; tiles in this call, 1-32
+        ld b,a
+        ld de,buf
+.tile:
+        dup 8
+        ld a,(hl)
+        ld (de),a
+        inc hl
+        inc de
+        ld a,(hl)
+        ld (de),a
+        inc hl
+        inc de
+        ld a,(hl)
+        ld (de),a
+        inc hl
+        inc de
+        xor a
+        ld (de),a
+        inc de
+        edup
+        dec b
+        jp nz,.tile
+        push hl
+        ld a,(tl_c)
+        ld c,a                  ; runs: one tile each
+        ld b,32
+        ld hl,buf
+        ld de,(tl_v)
+        ld a,1                  ; the source as mapped: buf in this page
+        call jt_vwrite
+        ld h,0
+        ld l,c
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ld (tl_v),hl            ; VRAM after these tiles
+        ld hl,(tl_n)
+        ld b,0
+        or a
+        sbc hl,bc
+        ld (tl_n),hl
+        ld a,h
+        or l
+        pop hl
+        jp nz,.chunk
+        pop de
+        ld e,0
+        pop iy
+        pop ix
+        ld a,(tl_b)
+        ld b,a
+        ld c,$BE
+        pop af
+        jp po,.di
+        ei
+.di:    xor a
+        ret
+
+; sh_rle: does what $06D1-$078A does, with the bytes collected in buf and
+; written with one jt_vwrite call (one byte a run, 4 bytes apart in VRAM).
+; The callers go on to the frame handler's exit, which uses no register.
+sh_rle: ld a,i
+        di
+        push af
+        push ix
+        push iy
+        ld hl,($C155)
+        ld (rl_v),hl            ; the VRAM address of the first byte
+        ld hl,($C153)
+        ld ix,buf
+        ld c,0                  ; bytes this call, up to $80
+        ld a,($C133)
+        or a
+        jr nz,.cont
+.next:  ld a,c                  ; $06E1
+        cp $80
+        jr nc,.save
+        call rl_rd
+        or a
+        jr z,.eop
+        and $7F
+        ld b,a
+        add a,c
+        cp $81
+        jr c,.fits
+        ld a,$80                ; past this call's 128 bytes: the rest next time
+        sub c
+        ld b,a
+        call rl_rd
+        and $7F
+        sub b
+        ld ($C133),a
+        ld a,$80
+.fits:  ld c,a
+        call rl_rd
+        inc hl
+        and $80
+        ld ($C132),a
+.run:   jr z,.rep               ; $070A: bit 7 clear, B copies of one byte
+.lit:   call rl_rd              ; bit 7 set, B bytes
+        ld (ix+0),a
+        inc ix
+        inc hl
+        djnz .lit
+        jr .next
+.rep:   call rl_rd
+.rp:    ld (ix+0),a
+        inc ix
+        djnz .rp
+        ld a,($C133)
+        or a
+        jr nz,.next             ; the run goes on next time: HL stays on its byte
+        inc hl
+        jr .next
+.cont:  cp $80                  ; $0726: the rest of a run from the last call
+        jr c,.c1
+        sub $80
+        ld ($C133),a
+        ld b,$80
+        ld c,b
+        jr .c2
+.c1:    ld b,a
+        ld c,a
+        xor a
+        ld ($C133),a
+.c2:    ld a,($C132)
+        or a
+        jr .run
+.save:  ld ($C153),hl           ; $0759
+        call rl_flush
+        ld ($C155),de
+        jr .ret
+.eop:   inc hl                  ; $0761: the plane ends
+        ld ($C153),hl
+        call rl_flush
+        ld hl,($C135)
+        inc hl
+        ld ($C135),hl
+        ld ($C155),hl
+        ld hl,$C131
+        dec (hl)
+        jr nz,.ret
+        ld hl,$C139             ; the tile set ends: the next job
+        ld de,$C134
+        ld bc,$001A
+        ldir
+        ld a,($C134)
+        inc a
+        jr z,.ret
+        ld hl,($C137)           ; $0743
+        ld ($C153),hl
+        ld hl,($C135)
+        ld ($C155),hl
+        ld a,4
+        ld ($C131),a
+        xor a
+        ld ($C133),a
+.ret:   pop iy
+        pop ix
+        pop af
+        jp po,.di
+        ei
+.di:    ret
+
+; rl_rd: A = the byte the game sees at HL.
+rl_rd:  ld a,h
+        and $E0
+        cp $20
+        jp z,jt_peek
+        ld a,(hl)
+        ret
+
+; rl_flush: writes the bytes from buf to IX - 1 to VRAM from (rl_v), 4 bytes
+; apart. Returns DE = (rl_v) + 4 * bytes, the game's DE after them.
+rl_flush:
+        push hl
+        push ix
+        pop hl
+        ld bc,buf
+        or a
+        sbc hl,bc               ; L = bytes, 0-128
+        ld c,l
+        ld de,(rl_v)
+        ld a,c
+        or a
+        jr z,.none
+        push de
+        ld hl,buf
+        ld b,1
+        ld ix,1
+        ld iy,4
+        ld a,1                  ; the source as mapped: buf in this page
+        call jt_vwrite
+        pop de
+.none:  ld h,0
+        ld l,c
+        add hl,hl
+        add hl,hl
+        add hl,de
+        ex de,hl
+        pop hl
+        ret
+
+rl_v:   dw 0
+sat_b:  db 0
+tl_b:   db 0
+tl_c:   db 0
+tl_n:   dw 0
+tl_v:   dw 0
+buf:    ds 32*32
+endpage
