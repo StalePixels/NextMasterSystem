@@ -1,6 +1,7 @@
 # Super Tennis, drafted by tools/mkspec.py from sitescan output.
 name Super Tennis
 cart 914514E3
+hz any		; No-Intro regions USA, Europe
 vector 30 io
 asm 0089 2   ; IM 1 -> IM 2
     im 2

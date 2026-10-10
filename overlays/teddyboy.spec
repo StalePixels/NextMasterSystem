@@ -9,6 +9,7 @@
 # are real code. $003F is an OUTI loop that jumps back to itself, patched as OTIR.
 name Teddy Boy
 cart 2728FAA3
+hz any		; No-Intro regions USA, Europe, Brazil
 vector 00 io
 start 0003
 otir 003F   ; OUTI

@@ -1,6 +1,7 @@
 # TransBot, drafted by tools/mkspec.py from sitescan output.
 name TransBot
 cart 4BC42857
+hz any		; No-Intro regions USA, Europe, Brazil
 vector 28 io
 asm 008E 2   ; IM 1 -> IM 2
     im 2

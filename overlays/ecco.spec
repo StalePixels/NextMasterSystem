@@ -1,6 +1,7 @@
 # Ecco the Dolphin, drafted by tools/mkspec.py from sitescan output.
 name Ecco the Dolphin
 cart 6687FAB9
+hz 50		; No-Intro regions Europe, Brazil
 # tilecache: whole tiles copied from cart ROM are not converted again (MAME,
 # game frames 300-2300: framework cycles -1.7%, frames over 100% 4 -> 1)
 tilecache

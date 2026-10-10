@@ -1,6 +1,7 @@
 # Fantasy Zone (World) (Rev 1), 65D7E4E0, drafted by tools/mkspec.py from sitescan output.
 name Fantasy Zone
 cart 65D7E4E0
+hz any		; No-Intro regions World
 vector 08 io
 asm 00001 2   ; IM 1 -> IM 2
     im 2

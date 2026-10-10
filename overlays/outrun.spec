@@ -1,6 +1,7 @@
 # OutRun, drafted by tools/mkspec.py from sitescan output.
 name OutRun
 cart 5589D8D2
+hz any		; No-Intro regions World
 # tilecache: whole tiles copied from cart ROM are not converted again (MAME,
 # game frames 300-2300: framework cycles -1.4%, vertical blank tile work -8%)
 tilecache

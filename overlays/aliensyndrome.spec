@@ -1,6 +1,7 @@
 # Alien Syndrome, 5CBFE997, drafted by tools/mkspec.py from sitescan output (with the detector log).
 name Alien Syndrome
 cart 5CBFE997
+hz any		; No-Intro regions USA, Europe, Brazil
 # tilecache: whole tiles copied from cart ROM are not converted again (MAME,
 # game frames 300-2300: framework cycles -1.8%, frames over 100% 14 -> 4)
 tilecache

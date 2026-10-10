@@ -1,6 +1,7 @@
 # Astro Warrior (Japan, USA, Brazil), 299CBB74, drafted by tools/mkspec.py from sitescan output.
 name Astro Warrior
 cart 299CBB74
+hz 60		; No-Intro regions Japan, USA, Brazil
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and interrupt mode 1 setup) becomes the vector,
 # the game starts at $0003 (the framework does DI and IM 2).
 vector 00 io

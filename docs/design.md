@@ -87,13 +87,13 @@ Every instruction that leaves runtime code for game code (a `RET`, `RETI` or `JP
 
 `vbl_work` in `fw.asm` does the once-a-frame work: the copper list, the keyboard, the map rebuild, tile conversion, the transparent value scans, the priority tiles and the sprites (`fw2_vbl` in `fw2.asm`, with part 3 at `$0000`). It runs once in each frame, from one of three places:
 
-- the ULA interrupt, at line 248;
+- the ULA interrupt, at line 248 (line 224 at 60 Hz, see "The video rate" below);
 - a V counter read (`rd_vcount`) in the vertical blank, for a game that waits for the picture with interrupts off. It sets `vbl_poll`, and the next ULA interrupt then does not run the work again. That interrupt may arrive late, at the game's `EI` in the picture.
-- a handler's exit (`vbl_chk`) or the end of `jt_vwrite` (`vbl_chkv`) once the beam is past line 248, for a game whose frame handler keeps interrupts off into the next picture. The ULA interrupt waits for the game's `EI` then, and the copper update's direct X scroll write would tear the picture at that line. It also sets `vbl_poll`.
+- a handler's exit (`vbl_chk`) or the end of `jt_vwrite` (`vbl_chkv`) once the beam is past the ULA interrupt's line, for a game whose frame handler keeps interrupts off into the next picture. The ULA interrupt waits for the game's `EI` then, and the copper update's direct X scroll write would tear the picture at that line. It also sets `vbl_poll`.
 
-The third place adds nothing to a handler until a game needs it. When the ULA interrupt comes in the picture, `fw_ula_irq` sets `vbl_arm` to 250. Each frame event on time (`fw_line_irq`) while `vbl_arm` is not 0 counts it down and writes a `JP vbl_chk` over the first 3 bytes of `fw_exit` and `vbl_chkv` into the call at `vw_tw`; `fw2_vbl` writes the original bytes back. So only the handlers between the frame event and the vertical blank work pay for the check, about 140 cycles each, and only in the 5 seconds after the last ULA interrupt that came in the picture. Armed at the frame event, the check needs only the line's low byte: 248 to 255, or below `pic_end` for lines 256 and later and for the next picture. Every game pays the check in the ULA interrupt (a line read) and the patch and its undo, about 270 cycles a frame.
+The third place adds nothing to a handler until a game needs it. When the ULA interrupt comes in the picture, `fw_ula_irq` sets `vbl_arm` to 250. Each frame event on time (`fw_line_irq`) while `vbl_arm` is not 0 counts it down and writes a `JP vbl_chk` over the first 3 bytes of `fw_exit` and `vbl_chkv` into the call at `vw_tw`; `fw2_vbl` writes the original bytes back. So only the handlers between the frame event and the vertical blank work pay for the check, about 140 cycles each, and only in the 5 seconds after the last ULA interrupt that came in the picture. Armed at the frame event, the check needs only the line's low byte: the ULA interrupt's line to 255, or below `pic_end` for lines 256 and later and for the next picture. Every game pays the check in the ULA interrupt (a line read) and the patch and its undo, about 270 cycles a frame.
 
-Work that a handler does after a trap that crossed line 248 still delays the vertical blank work: in Sonic, when the display goes on just before line 248, `tflush2` converts up to 50 lines of tiles before the work starts. The copper update after it must still end before line 0, where the copper starts the list again: a scroll that moves the map switch column rewrites one byte of each line (about 10 lines in all, see the copper list below).
+Work that a handler does after a trap that crossed the ULA interrupt's line still delays the vertical blank work: in Sonic, when the display goes on just before line 248, `tflush2` converts up to 50 lines of tiles before the work starts. The copper update after it must still end before line 0, where the copper starts the list again: a scroll that moves the map switch column rewrites one byte of each line (about 10 lines in all, see the copper list below).
 
 `vbl_done` stops a second V counter read in the same blank from running the work again. A V counter read in the picture clears it. The frame event and SMS line events clear it only when they come on time, because one held by the game's `DI` can come after a V counter read that already did the work.
 
@@ -104,6 +104,30 @@ The parts of the work that cost the most:
 - **The transparent value scan** (`pal_scan` in `fw3.asm`, every 8 frames). It collects the pixel values of the tiles that the name table shows with the sprite palette. Each tile is taken once a pass (`ps_seen`). `tm_mask` keeps the value set of each tile, 0 when not known; tile conversion clears the entries of the tiles it converts.
 - **The copper list** (`cop_update` in `fw3.asm`). The Next map is 320 pixels wide and the SMS map 256, so for most H scroll values the list switches each line from map M0 to map A8 at a copper column, between SMS x 256 - K and 320 - K (K = -H), where both maps show the same pixels. `hscroll_set` in `fw2.asm` puts that column (`h_sw`, (291 - K) / 8) near the middle of the range. With K up to 64 no switch is needed, but the list has one all the same, at column 39 (SMS x 312, past the picture's right edge). So from one column to the next only the first byte of each line's WAIT changes, and `cop_switches` writes only that byte (about 10 lines in all). Both instructions of each line are written only at the game's first H write, when the list has no switch yet (`h_sw` 0). The list is rewritten while the copper waits at its end, in the vertical blank; the copper reads the list from the top again at line 0.
 - **The per-line H scroll copper list** of a `RASTER` overlay (`cop_raster` in `fw3.asm`). The list has a fixed place for each line: a head of four instructions, then five instructions for each line, then `HALT`. The instructions of line y depend only on the H scroll of lines y and y+1. So from one frame to the next, only the lines next to an H scroll that changed are written again (`hl_prev` holds the H scroll of every line in the list). The list is written in full when the overlay's table becomes valid.
+
+### The video rate
+
+The overlay's `hz` switch (`CONF` `hz=50` or `hz=60`) is `fw_flags` bit 3, with bit 4 set for 60 Hz. `hz_setup` in `fw3.asm`, the last step of `fw2_switches` at game start, writes the rate into NextReg `$05` bit 2. Without the switch (`hz=any`) it leaves the register as the Next booted. The Next takes a new rate at its next frame and reads back the old one until then, so `hz_setup` works from the rate it wrote, not from a read.
+
+`hz_setup` then sets the line numbers that depend on the rate:
+
+| | 50 Hz | 60 Hz |
+|---|---|---|
+| lines in the Next's frame (128K timing) | 311, 567,264 cycles | 264, 481,536 cycles |
+| ULA interrupt line (`vbl_due`'s compare) | 248 | 224 |
+| V counter (`vc50` or `vc60` in `fw3.asm`, copied to `rd_vcount__ret`) | PAL: `$00-$F2`, then `$BC-$FF` | NTSC: `$00-$DA`, then `$D5-$FF` |
+| V counter in 224-line mode | PAL: `$00-$FF`, `$00-$02`, then `$CC-$FF` | NTSC: `$00-$EA`, then `$E5-$FF` |
+| the 224-line copper list's lines above line 0 (`cop_top`) | 296-311 | 248-263 |
+
+The count reaches `$FF` on the Next's last line at both rates, for games that wait for it (Micro Machines). The 60 Hz frame has two lines more than the NTSC SMS, so the count stays at its first value after the jump back for three lines. The V counter's code is copied, not called, because a game that polls the counter twice and compares the reads needs each read to be short: at about half a Next line a read, a longer one would miss the line it waits for in some frames.
+
+At 50 Hz the frame has 311 lines (0-310), so the 224-line copper list's instructions for line 311 never run.
+
+The frame event (line 192, or 208 in 224-line mode) and the line events are at the same Next lines at both rates. Only the time after the picture changes: 72 lines at 60 Hz against 119 at 50 Hz.
+
+The browser and the information screen always run at the rate the Next booted at. BREAK out of the game puts NextReg `$05` back, with the other NextRegs the shell saved at start, before the shell draws anything (see "Coming back").
+
+The F3 key changes the rate while a game runs when NextReg `$06` bit 5 allows it. The runtime then keeps the line numbers of the rate it started with.
 
 ### Display off and on
 
@@ -185,6 +209,8 @@ After `loader_load` has read the cart, found the overlay and applied it without 
 - the file name. It is `nm_lname`, the long name that the browser gives in DE. `glue.asm` copies it next to the short name, cut to 127 characters. If the browser gave no long name, it is `nm_name`.
 - the CRC32 and size, from `nm.launch`.
 - from the overlay file, as the loader read it into `nm`: the `title` from its `META` chunk (`nm.title`), cut to 48 characters and broken over lines at spaces; the format version from the header, as major.minor; and the framework ABI the file needs (both in `nm.nms_ver`).
+- the game's status from the `META` chunk (`nm.status`): `working`, `imperfect`, `not working` or `untested`. A file with no `status` shows `untested`.
+- the video rate the game will use: `50 Hz` or `60 Hz` for an overlay with `hz=50` or `hz=60`, else `boot rate (50 Hz)` or `boot rate (60 Hz)`, from NextReg `$05` bit 2.
 - the flags, in words: `priority tiles`, `line-0 palette`, `tile cache`, or `none`. They are the `CONF` switches as the loader read them, from `nm.launch.flags`.
 
 It then waits. First it waits, for at most a short time, until no key and no joystick fire is held. This stops the key that picked the cart in the browser from counting. Then it polls every keyboard row, from port `$00FE`, and the Kempston joystick 1 fire bit, from port `$1F`, bit 4. It returns when one is pressed. Interrupts are off, so this is a polling loop. The game then starts as before.
@@ -199,7 +225,7 @@ The loader never holds a whole file in memory. It reads the index and the overla
 2. It finds the overlay file in `/nm/ovl/index`, if the file is there. It searches the index in place with a binary search: for each entry it probes, it seeks to the entry and reads its 8 bytes. The entry gives the primary CRC32, which names the overlay file. A cart that is not in the index has no overlay. Without an index, the overlay file is the one named after the cart's own CRC32.
 3. The walk. It reads `/nm/ovl/<CRC32>.nms` once from the start to the end, and every byte up to the `END ` chunk goes through the running CRC32. It checks the header: the magic, format major version 1, and a framework ABI not higher than `FW_ABI`. It reads each chunk header, checks that the chunk fits in the file, and notes where `CRCS`, `PTCH`, `CONF` and `META` start. It loads each `PAGE` chunk, as described below. It reads every other chunk only for the CRC32. `END ` must be last, with the right CRC32, and nothing may follow it. `CRCS` and `PTCH` must be there, and each of the four chunks may appear only once.
 4. It seeks back to `CRCS` and checks that it lists the cart's CRC32. A list of any length works.
-5. It seeks to `META` and keeps the `title` in `nm.title`, and seeks to `CONF` and keeps the switches `priority=1`, `toppal=1` and `tilecache=1` in the runtime's flags.
+5. It seeks to `META` and keeps the `title` in `nm.title` and the `status` in `nm.status`, and seeks to `CONF` and keeps the switches `priority=1`, `toppal=1`, `tilecache=1`, `hz=50` and `hz=60` in the runtime's flags (`NM_FL_x` in `nm.h`).
 6. `PTCH`, first pass. It runs every `CHECK` operation against the cart pages, checks the bounds of every other operation, and works out the original instruction of every `RAMSITES` entry. Nothing is written yet, so a dump that fails a `CHECK` is left as it was read.
 7. `PTCH`, second pass. It seeks back to the start of `PTCH` and applies the operations: `PATCH` into the cart pages, `START` into the start address and stack pointer, and `RAMSITES` or `RASTER` into the framework's second page from `$3C00`, through MMU6. For `RAMSITES` it writes the table the framework reads: the continuation, the count, and for each entry the address, the two original bytes and the two new bytes. It sets the hook addresses that the runtime reads, `rast_hook` and `ramp_hook`.
 
@@ -223,7 +249,7 @@ The code goes into its page once, during the walk, and is never read twice. If t
 
 ### Coming back
 
-BREAK in a game makes the runtime restore NextZXOS (`fw_quit` in `fw.asm`, `fw_quit4` in `fw4.asm`): it stops the copper, turns off the tilemap, the sprites and Layer 2, hides all 128 hardware sprites, sets every clip window back to the whole screen, silences the AY chips, copies NextZXOS's banks 5 and 7 back and restores the NextRegs the shell saved at start. It then jumps to `fw_resume`, which jumps to `nm_resume` in `glue.asm`. `nm_resume` sets the stack to `$BFE0`, maps pages 0 and 1 at `$C000` and `$E000`, and jumps to `nm_run`. The stack frames of the first pass are abandoned. The state in `nm` is kept, so a failure message from a rejected game is still shown.
+BREAK in a game makes the runtime restore NextZXOS (`fw_quit` in `fw.asm`, `fw_quit4` in `fw4.asm`): it stops the copper, turns off the tilemap, the sprites and Layer 2, hides all 128 hardware sprites, sets every clip window back to the whole screen, silences the AY chips, copies NextZXOS's banks 5 and 7 back and restores the NextRegs the shell saved at start, among them `$05` with the video rate. It then jumps to `fw_resume`, which jumps to `nm_resume` in `glue.asm`. `nm_resume` sets the stack to `$BFE0`, maps pages 0 and 1 at `$C000` and `$E000`, and jumps to `nm_run`. The stack frames of the first pass are abandoned. The state in `nm` is kept, so a failure message from a rejected game is still shown.
 
 BREAK or SPACE in the browser ends the program (`IDE_BROWSER` returns carry set and zero clear; carry clear is an error, which shows its message in the help line and opens the browser again). `session_pass` has already put the user's browser filter and flags back. `leave` in `session.c` then writes back the NextRegs saved at start (`nm.launch.nr`) and the CPU speed (`nm.speed`, NextReg `$07`, read before the shell sets full speed). It calls `nm_basic` in `glue.asm`, which disables interrupts, sets the stack to RAMTOP, clears `ERR_NR`, maps pages 0 and 1 at `$C000` and `$E000` and runs the BASIC command `NEW` through `IDE_BASIC`. NextZXOS starts its BASIC again and shows its menu, with the browser's filter and flags as the user left them. `NEW` does not return. Loading the NEX overwrote bank 2, which holds the BASIC stack, so the shell cannot return to the program that started it and `NEW` rebuilds BASIC. A card whose `autoexec.bas` starts NextMasterSystem starts it again after `NEW`. If `IDE_BASIC` does return, `nm_basic` soft-resets the machine with NextReg `$02`.
 

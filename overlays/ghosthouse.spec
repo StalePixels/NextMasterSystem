@@ -1,6 +1,7 @@
 # Ghost House, drafted by tools/mkspec.py from sitescan output.
 name Ghost House
 cart F1F8FF2D
+hz any		; No-Intro regions USA, Europe, Brazil
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and the start of its stack setup) becomes the vector,
 # the game starts at $0004 with the SP its LD SP,nn set.
 vector 00 io

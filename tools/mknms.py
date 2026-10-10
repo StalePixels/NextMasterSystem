@@ -96,6 +96,8 @@ first 32K it is also the Z80 address.
   tilecache          CONF tilecache=1: tiles the game copies whole from cart
                      ROM to VRAM are copied from a converted copy of the
                      cart, not converted again
+  hz RATE            CONF hz=RATE: the video rate the game runs at, 50, 60
+                     or any (the default: the rate the Next booted at)
 
 Names that every asm block knows (the framework's jump table and the fixed
 state at $E000-$E07A, from src/runtime/fw.asm). Jump table entries:
@@ -285,7 +287,7 @@ def chunk(tag, data):
 def parse(spec, cart, sjasmplus):
     """Run the spec over the cart. Returns a dict of what the file needs."""
     r = dict(name='', crc=None, ops=[], start=None, rcode=None, ramsites=[], ramcont=None,
-             priority=False, toppal=False, tilecache=False, abi=1, pages={})
+             priority=False, toppal=False, tilecache=False, hz='any', abi=1, pages={})
     rst = {}
     outs = {}
     notrace, plain, io0, abi4, abi5, abi7 = False, set(), False, False, False, False
@@ -391,6 +393,11 @@ def parse(spec, cart, sjasmplus):
             r['toppal'] = True
         elif word == 'tilecache':
             r['tilecache'] = True
+        elif word == 'hz':
+            rest = rest.strip()
+            if rest not in ('50', '60', 'any'):
+                raise SystemExit(f'hz {rest}: not 50, 60 or any')
+            r['hz'] = rest
         elif word == 'plain':
             plain.add(int(rest, 16))
         elif word == 'start':
@@ -637,7 +644,7 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     ptch += b'\0'
 
     conf = (f'priority={int(r["priority"])}\ntoppal={int(r["toppal"])}\n'
-            f'tilecache={int(r["tilecache"])}\n').encode('ascii')
+            f'tilecache={int(r["tilecache"])}\nhz={r["hz"]}\n').encode('ascii')
     meta = load_meta(crc, r['name'], compat, titles)
     metab = ''.join(f'{k}={v}\n' for k, v in meta.items()).encode('ascii')
 

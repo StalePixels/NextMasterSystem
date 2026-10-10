@@ -1,6 +1,7 @@
 # Micro Machines, drafted by tools/mkspec.py from sitescan output.
 name Micro Machines
 cart A577CE46
+hz 50		; No-Intro regions Europe
 # line-0 palette and display: the race turns the display off for part of each
 # frame's work; on the Next that ran into the picture as a black band (batch 5)
 toppal

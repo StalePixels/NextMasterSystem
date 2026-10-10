@@ -23,6 +23,7 @@
 #   the detector saw priority tiles on screen in 124 frames.
 name Pit Pot
 cart E6795C53
+hz 60		; No-Intro regions Japan
 vector 00 io
 start 0003
 priority

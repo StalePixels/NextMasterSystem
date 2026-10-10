@@ -153,24 +153,35 @@ static uint8_t accepts(const struct nms *f)
     return NM_E_OTHER;
 }
 
-/* The META title into nm.title, cut to NM_TITLE_MAX characters; empty if
- * the file has none. Returns 0 or a failure code. */
-static uint8_t read_title(const struct nms *f)
+/* The value of the META line in line, of length n, when its key is key
+ * (with its "="), into out, cut to max characters. */
+static void meta_take(const char *line, int16_t n, const char *key, char *out, uint8_t max)
+{
+    int16_t k = (int16_t)strlen(key);
+
+    if (n < k || memcmp(line, key, k)) return;
+    n -= k;
+    if (n > LINE_MAX - k) n = LINE_MAX - k;
+    if (n > max) n = max;
+    memcpy(out, line + k, n);
+    out[n] = 0;
+}
+
+/* The META title into nm.title and status into nm.status, cut to fit; each
+ * empty if the file has none. Returns 0 or a failure code. */
+static uint8_t read_meta(const struct nms *f)
 {
     struct rd r;
     char line[LINE_MAX];
     int16_t n;
 
     nm.title[0] = 0;
+    nm.status[0] = 0;
     if (!(f->seen & (1 << C_META))) return 0;
     if (open_chunk(&r, f, C_META)) return NM_E_BADOVL;
     while ((n = rd_line(&r, line)) >= 0) {
-        if (n < 6 || memcmp(line, "title=", 6)) continue;
-        n -= 6;
-        if (n > NM_TITLE_MAX) n = NM_TITLE_MAX;
-        memcpy(nm.title, line + 6, n);
-        nm.title[n] = 0;
-        break;
+        meta_take(line, n, "title=", nm.title, NM_TITLE_MAX);
+        meta_take(line, n, "status=", nm.status, NM_STATUS_MAX);
     }
     return 0;
 }
@@ -183,8 +194,8 @@ static uint8_t conf_is(const char *line, int16_t n, const char *s)
     return n == l && !memcmp(line, s, l);
 }
 
-/* CONF switches: priority=1, toppal=1 and tilecache=1. Unknown keys are
- * skipped.
+/* CONF switches: priority=1, toppal=1, tilecache=1, and hz=50 or hz=60.
+ * Unknown keys, and hz=any, are skipped.
  * Returns 0 or a failure code. */
 static uint8_t read_conf(const struct nms *f)
 {
@@ -196,9 +207,11 @@ static uint8_t read_conf(const struct nms *f)
     if (!(f->seen & (1 << C_CONF))) return 0;
     if (open_chunk(&r, f, C_CONF)) return NM_E_BADOVL;
     while ((n = rd_line(&r, line)) >= 0) {
-        if (conf_is(line, n, "priority=1")) nm.launch.flags |= 1;
-        if (conf_is(line, n, "toppal=1")) nm.launch.flags |= 2;
-        if (conf_is(line, n, "tilecache=1")) nm.launch.flags |= 4;
+        if (conf_is(line, n, "priority=1")) nm.launch.flags |= NM_FL_PRIORITY;
+        if (conf_is(line, n, "toppal=1")) nm.launch.flags |= NM_FL_TOPPAL;
+        if (conf_is(line, n, "tilecache=1")) nm.launch.flags |= NM_FL_TILECACHE;
+        if (conf_is(line, n, "hz=50")) nm.launch.flags |= NM_FL_HZ;
+        if (conf_is(line, n, "hz=60")) nm.launch.flags |= NM_FL_HZ | NM_FL_HZ60;
     }
     return 0;
 }
@@ -358,7 +371,7 @@ void *overlay_apply(void *arg)
     uint8_t code;
 
     code = accepts(f);
-    if (!code) code = read_title(f);
+    if (!code) code = read_meta(f);
     if (!code) code = read_conf(f);
     if (!code) code = check_ops(f);
     if (!code) code = apply_ops(f);

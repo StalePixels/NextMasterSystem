@@ -1,6 +1,7 @@
 # Wonder Boy in Monster Land (USA, Europe), 8CBEF0C1, drafted by tools/mkspec.py from sitescan output (with the detector log).
 name Wonder Boy in Monster Land
 cart 8CBEF0C1
+hz any		; No-Intro regions USA, Europe
 # tilecache: whole tiles copied from cart ROM are not converted again (MAME,
 # game frames 300-2300: framework cycles -0.7%, vertical blank tile work -11%)
 tilecache

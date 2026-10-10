@@ -1,6 +1,7 @@
 # Wonder Boy (USA, Europe, Brazil) (Rev 1), 73705C02, drafted by tools/mkspec.py from sitescan output.
 name Wonder Boy
 cart 73705C02
+hz any		; No-Intro regions USA, Europe, Brazil
 # tilecache: whole tiles copied from cart ROM are not converted again (MAME,
 # game frames 300-2300: framework cycles -1.5%, vertical blank tile work halved)
 tilecache

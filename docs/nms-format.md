@@ -123,18 +123,18 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 
 | Key | Values | Meaning |
 |---|---|---|
-| `hz` | `50`, `60`, `any` | the frame rate the game was made for. NextMasterSystem can only warn, because the Next sets its rate at boot. |
+| `hz` | `50`, `60`, `any` | the video rate the game runs at. With `50` or `60`, NextMasterSystem sets the Next to that rate when the game starts. With `any`, or without the key, the game runs at the rate the Next booted at. |
 | `cpu` | `28`, `3.5` | the CPU speed for the game's own code |
 | `priority` | `0`, `1` | draw priority tiles again in Layer 2, above the sprites |
 | `toppal` | `0`, `1` | show the palette the frame handler leaves from line 0 of the picture |
 | `tilecache` | `0`, `1` | copy the tiles that block writes take whole from cart ROM from a converted copy of the cart, made at game start, and do not convert them again |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
 
-NextMasterSystem acts on `priority`, `toppal` and `tilecache`. It does not act on the other keys yet. An engine that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`.
+NextMasterSystem acts on `priority`, `toppal`, `tilecache` and `hz`. It does not act on the other keys yet. An engine that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. An engine that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
 
 ## `META`: the game's details
 
-The section is text, with one `key=value` per line. The browser shows these values. Unknown keys are ignored. For now, the information screen before a game starts shows the `title`.
+The section is text, with one `key=value` per line. The browser shows these values. Unknown keys are ignored. For now, the information screen before a game starts shows the `title` and the `status`.
 
 | Key | Meaning |
 |---|---|

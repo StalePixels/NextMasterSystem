@@ -78,9 +78,15 @@ struct nm_launch {
     uint16_t sp;
     uint16_t hook;
     uint16_t hook2;
-    uint8_t  flags;
+    uint8_t  flags;      /* the CONF switches, NM_FL_x */
     uint8_t  nr[43];     /* NextReg number and value pairs, then $FF */
 };
+/* nm_launch.flags, the runtime's fw_flags */
+#define NM_FL_PRIORITY  0x01   /* priority=1 */
+#define NM_FL_TOPPAL    0x02   /* toppal=1 */
+#define NM_FL_TILECACHE 0x04   /* tilecache=1 */
+#define NM_FL_HZ        0x08   /* hz=50 or hz=60: the game sets the video rate */
+#define NM_FL_HZ60      0x10   /* with NM_FL_HZ: 60 Hz */
 void nm_launch(struct nm_launch *p) __z88dk_fastcall;
 
 /* Leave for NextZXOS (glue.asm). Never returns. */
@@ -94,6 +100,7 @@ int8_t  nm_seek(uint8_t handle, uint32_t pos);   /* from the start of the file *
 void    nm_close(uint8_t handle);
 
 #define NM_TITLE_MAX  48
+#define NM_STATUS_MAX 11      /* "not working" */
 
 /* ---- shared state --------------------------------------------------------
  * Mutable state that more than one module reads lives here, in the resident
@@ -107,6 +114,7 @@ struct nm_state {
     uint8_t  help[120];       /* the browser's two help lines */
     uint8_t  nms_ver[3];      /* the .nms header: format major, minor, framework ABI */
     char     title[NM_TITLE_MAX + 1];   /* the META title, cut to fit; empty if none */
+    char     status[NM_STATUS_MAX + 1]; /* the META status, cut to fit; empty if none */
     struct nm_launch launch;
     uint8_t  speed;           /* NextReg $07 at start, put back on exit */
 };

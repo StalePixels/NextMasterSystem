@@ -10,6 +10,7 @@
 # every mapper store in that code is in the list below.
 name Wonder Boy III - The Dragon's Trap
 cart 679E1676
+hz any		; No-Intro regions USA, Europe
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and interrupt mode 1 setup) becomes the vector,
 # the game starts at $0003 (the framework does DI and IM 2).
 vector 00 io

@@ -1,6 +1,7 @@
 # Space Harrier, CA1D3752, drafted by tools/mkspec.py from sitescan output (with the detector log).
 name Space Harrier
 cart CA1D3752
+hz 50		; No-Intro regions Europe
 vector 10 io
 asm 00001 2   ; IM 1 -> IM 2
     im 2

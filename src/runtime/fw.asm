@@ -145,7 +145,9 @@ quit_req:	db 0			; BREAK pressed: back to the browser
 tr_free:	dw $FFFF		; pixel values no sprite-palette tile on screen uses
 ; overlay switches (header flags): bit 0 priority tiles in Layer 2 (fw2
 ; pri_frame), bit 1 line-0 palette (toppal: cram_x in fw2, pal_vbl here),
-; bit 2 tiles from cart ROM (tilecache: kn_entry here, kn_block in fw2)
+; bit 2 tiles from cart ROM (tilecache: kn_entry here, kn_block in fw2),
+; bit 3 the game sets the video rate (hz=50 or hz=60), bit 4 60 Hz (hz_setup
+; in fw3)
 fw_flags:	db 0
 pal43:		db %00000010		; NextReg $43 display bits: ULA second; bits 3 and 2
 					; (second sprite and Layer 2 palettes) while toppal shows them
@@ -317,7 +319,8 @@ mx_ret:		ret
 ; picture) the work runs there, and the held interrupt skips it (vbl_poll).
 ; Unarmed, they cost nothing extra.
 VBL_ARM_N	equ 250			; frames (5 s)
-VBL_LINE	equ 248			; the ULA interrupt's line
+VBL_LINE	equ 248			; the ULA interrupt's line at 50 Hz; 224 at 60 Hz
+					; (hz_setup in fw3 writes it into vbl_due)
 ; fw_exit while a display-off write is held (dis_patch in fw2): every
 ; DIS_N-th trap has dis_tick2 (fw2) count the frames that start while the
 ; game keeps interrupts off, as no frame event or vertical blank work comes
@@ -363,14 +366,14 @@ vbl_chkv:	call tw_check
 		ld sp,hl
 		ret
 ; Carry: the vblank work is due. Armed at the frame event, the line's low
-; byte is enough: 248-255, or below pic_end for lines 256 and later and the
-; next picture. Uses A, BC, HL.
+; byte is enough: from the ULA interrupt's line to 255, or below pic_end for
+; lines 256 and later and the next picture. Uses A, BC, HL.
 vbl_due:	ld bc,$243B
 		ld a,$1F
 		out (c),a
 		inc b
 		in a,(c)		; the line's low byte
-		cp VBL_LINE
+vbl_due__line:	cp VBL_LINE		; the ULA interrupt's line (hz_setup)
 		ccf
 		ret c
 		ld hl,pic_end
@@ -1333,7 +1336,8 @@ cur_line__big:		ld a,255
 		pop bc
 		ret
 
-; ULA frame interrupt, line 248 of the 311-line frame: the framework's
+; ULA frame interrupt, line 248 of the 311-line frame at 50 Hz, line 224 of
+; the 264-line frame at 60 Hz: the framework's
 ; once-a-frame work. The work runs once a frame: here, or earlier in the
 ; blank from a V counter read (rd_vcount) or a trap (vbl_chk), which set
 ; vbl_poll so that this interrupt, held by a game that keeps interrupts off
@@ -1609,12 +1613,11 @@ rd_dc:
 		ret
 
 ; V counter from the Next active line ($1E/$1F). Line 0 is the first line
-; of the 256x192 area, as on the SMS. Lines above $F2 jump back like the
-; PAL SMS counter, to $BC (the last line read here is 310; the PAL SMS has
-; 313 lines; the count reaches $FF on the last line, which games wait
-; for: Micro Machines). A game that
-; polls the counter also gets
-; the once-a-frame work done here when interrupts never deliver it.
+; of the 256x192 area, as on the SMS. The count from the line is the PAL
+; SMS one at 50 Hz and the NTSC one at 60 Hz: vc50 and vc60 in fw3, one of
+; which hz_setup copies to rd_vcount__ret at game start. A game that polls
+; the counter also gets the once-a-frame work done here when interrupts
+; never deliver it.
 rd_vcount:
 		ld bc,$243B
 		ld a,$1E
@@ -1647,39 +1650,9 @@ rd_vcount__vbl:		ld a,(vbl_done)
 rd_vcount__active:	xor a
 		ld (vbl_done),a
 		ld (fdone),a
-rd_vcount__ret:		ld a,(m224)
-		or a
-		jr nz,rd_vcount__v224
-		ld a,e
-		bit 0,d
-		jr nz,rd_vcount__hi
-		cp $F3
-		ret c
-rd_vcount__hi:		sub 55			; $F3 -> $BC ... line 310, the last one read here, -> $FF
-					; (the PAL SMS count has 313 lines: $BA and $BB are left
-					; out so that games waiting for $FF see it)
-		ret
-rd_vcount__v224:		; 224-line mode: SMS line = Next line + 16; the PAL count runs
-		; $00-$FF, $00-$02, then from $CC (not $CA: 311 lines here) to $FF
-		ld a,e
-		bit 0,d
-		jr nz,rd_vcount__h2
-		cp 240
-		jr nc,rd_vcount__m2
-		add a,16
-		ret
-rd_vcount__m2:		cp 243
-		jr nc,rd_vcount__m3
-		sub 240
-		ret
-rd_vcount__m3:		add a,$CC-243
-		ret
-rd_vcount__h2:		cp 295-256
-		jr nc,rd_vcount__top
-		add a,$CC+13
-		ret
-rd_vcount__top:		sub 295-256
-		ret
+VC_LEN		equ 49			; the longer of vc50 and vc60 in fw3
+rd_vcount__ret:	ds VC_LEN		; the count from D and E: vc50 or vc60 (fw3), copied
+					; here by hz_setup
 
 ; Status: bit 7 frame, bit 5 sprite collision; reading clears them and the
 ; line interrupt flag. A game that polls with interrupts off gets bit 7

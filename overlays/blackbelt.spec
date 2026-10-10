@@ -1,6 +1,7 @@
 # Black Belt (USA, Europe, Brazil), DA3A2F57, drafted by tools/mkspec.py from sitescan output.
 name Black Belt
 cart DA3A2F57
+hz any		; No-Intro regions USA, Europe, Brazil
 vector 10 io
 asm 00001 2   ; IM 1 -> IM 2
     im 2

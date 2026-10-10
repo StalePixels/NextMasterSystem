@@ -1819,8 +1819,14 @@ ps_acc:		dw 0
 
 ; The copper list in 224-line mode: one X, one Y (V - 16; the 32-row map
 ; wraps at 256 by itself) and, when K = -H > 64, the map switch pair on
-; each of the 224 lines (Next lines 0-207, then 296-311 for the 16 lines
-; above line 0). Per-line H scroll and the lock bits are not done here.
+; each of the 224 lines (Next lines 0-207, then 16 lines for the 16 lines
+; above line 0, from cop_top: 296-311 at 50 Hz, where the 128K frame's
+; last line is 310 and the line 311 instructions never run; 248-263 at
+; 60 Hz, the last 16 lines of its 264-line frame). Per-line H scroll and the
+; lock bits are not done here.
+COP_TOP50	equ 296
+COP_TOP60	equ 248
+cop_top:	dw COP_TOP50		; hz_setup
 cop_224:
 		xor a
 		ld (cop_dirty),a
@@ -1867,19 +1873,19 @@ cop_224__l1b:		call cop_224__sw
 		cp 208
 		jr nz,cop_224__l1b
 		call cop_224__uon
-		ld bc,296
+		ld bc,(cop_top)
 		call cop_224__uoff
 cop_224__l2:		call cop_224__sw
 		inc bc
 		ld a,c
-		cp 255&(312)
+cop_224__endl:	cp 255&(COP_TOP50+16)	; hz_setup
 		jr nz,cop_224__l2
 		jr cop_224__end
 cop_224__ns:		ld bc,192
 		call cop_224__uoff
 		ld c,208
 		call cop_224__uon
-		ld bc,296
+		ld bc,(cop_top)
 		call cop_224__uoff
 cop_224__end:		nextreg $60,$FF		; HALT
 		nextreg $60,$FF
@@ -2025,7 +2031,122 @@ fw2_switches__zt:		ld (hl),a
 		ld a,%00000010
 		ld (pal43),a
 		ld (tm_ctl),a
+		jp hz_setup
+
+; The video rate. With CONF hz=50 or hz=60 (fw_flags bit 3, bit 4 set for
+; 60) NextReg $05 bit 2 gets that rate; with hz=any the Next keeps the rate
+; it booted at. The Next takes a new rate at its next frame and reads back
+; the old one until then, so the rate here is the one written. The quit
+; puts the shell's NextReg $05 back (nr_keep). Then the line numbers that
+; depend on the rate: 50 Hz, a 311-line frame, the ULA interrupt at line
+; 248 and the PAL V counter (vc50); 60 Hz, a 264-line frame, the ULA
+; interrupt at line 224 and the NTSC V counter (vc60).
+hz_setup:	ld bc,$243B
+		ld a,$05
+		out (c),a
+		inc b
+		in e,(c)		; NextReg $05
+		ld a,(fw_flags)
+		bit 3,a
+		jr z,hz_setup__r	; hz=any
+		res 2,e
+		and $10
+		jr z,hz_setup__w
+		set 2,e
+hz_setup__w:	ld a,e
+		nextreg $05,a
+hz_setup__r:	bit 2,e
+		ld a,VBL_LINE
+		ld hl,vc50
+		ld de,COP_TOP50
+		jr z,hz_setup__set
+		ld a,224
+		ld hl,vc60
+		ld de,COP_TOP60
+hz_setup__set:	ld (vbl_due__line+1),a
+		ld (cop_top),de
+		ld a,e
+		add a,16
+		ld (cop_224__endl+1),a
+		ld de,rd_vcount__ret
+		ld bc,VC_LEN
+		ldir
 		ret
+
+; The V counter from the Next's line, D = bit 8 and E = bits 0-7, for
+; rd_vcount (fw.asm), which runs the copy at rd_vcount__ret. Only relative
+; jumps inside a block, so that the copy runs where it is. Each block is
+; padded to VC_LEN (a longer one is an assembler error).
+;
+; 50 Hz, the PAL count. Lines above $F2 jump back like the PAL SMS counter,
+; to $BC: the last line read here is 310; the PAL SMS has 313 lines; the
+; count reaches $FF on the last line, which games wait for (Micro Machines).
+vc50:		ld a,(m224)
+		or a
+		jr nz,vc50__v224
+		ld a,e
+		bit 0,d
+		jr nz,vc50__hi
+		cp $F3
+		ret c
+vc50__hi:	sub 55			; $F3 -> $BC ... line 310, the last one read here, -> $FF
+					; (the PAL SMS count has 313 lines: $BA and $BB are left
+					; out so that games waiting for $FF see it)
+		ret
+vc50__v224:	; 224-line mode: SMS line = Next line + 16; the PAL count runs
+		; $00-$FF, $00-$02, then from $CC (not $CA: 311 lines here) to $FF
+		ld a,e
+		bit 0,d
+		jr nz,vc50__h2
+		cp 240
+		jr nc,vc50__m2
+		add a,16
+		ret
+vc50__m2:	cp 243
+		jr nc,vc50__m3
+		sub 240
+		ret
+vc50__m3:	add a,$CC-243
+		ret
+vc50__h2:	cp 295-256
+		jr nc,vc50__top
+		add a,$CC+13
+		ret
+vc50__top:	sub 295-256
+		ret
+		defs VC_LEN-($-vc50)	; vc50 padded to VC_LEN
+
+; 60 Hz, the NTSC count. The Next's frame has 264 lines, the NTSC SMS 262:
+; the count stays at its first value after the jump back for three lines,
+; so it still reaches $FF on the last line.
+;   192 lines: $00-$DA, then $D5-$FF (Next lines 0-218, then 219-263)
+;   224 lines: $00-$EA, then $E5-$FF; SMS line = Next line + 16, so SMS
+;   lines 0-15 are Next lines 248-263
+vc60:		ld a,(m224)
+		or a
+		ld a,e
+		jr nz,vc60__v224
+		bit 0,d
+		jr nz,vc60__8		; lines 256-263: $F8-$FF
+		cp $DB
+		ret c			; lines 0-218: $00-$DA
+		cp 221
+		jr nc,vc60__8		; lines 221-255: $D5-$F7
+		ld a,221		; lines 219-220: $D5
+vc60__8:	sub 8
+		ret
+vc60__v224:	bit 0,d
+		jr nz,vc60__p8		; lines 256-263: $08-$0F
+		cp 219
+		jr c,vc60__p16		; lines 0-218: $10-$EA
+		cp 221
+		jr nc,vc60__p8		; lines 221-247: $E5-$FF; 248-255: $00-$07
+		ld a,221		; lines 219-220: $E5
+vc60__p8:	add a,8
+		ret
+vc60__p16:	add a,16
+		ret
+		defs VC_LEN-($-vc60)	; vc60 padded to VC_LEN
 
 ; HL = hook (3 bytes), DE = routine: Z clear = CALL routine, Z set = NOPs
 hook_set:	jr z,hook_set__off

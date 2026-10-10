@@ -1,6 +1,7 @@
 # My Hero, drafted by tools/mkspec.py from sitescan output.
 name My Hero
 cart 62F0C23D
+hz any		; No-Intro regions USA, Europe, Brazil
 # No free RST vector: the JP at $0000 becomes the vector, the game
 # starts at its target.
 vector 00 io

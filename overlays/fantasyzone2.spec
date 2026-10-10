@@ -1,6 +1,7 @@
 # Fantasy Zone II, B8B141F9, drafted by tools/mkspec.py from sitescan output (with the detector log).
 name Fantasy Zone II
 cart B8B141F9
+hz any		; No-Intro regions USA, Europe, Brazil
 # No free RST vector: $0000-$0002 (the game's interrupt-disable and interrupt mode 1 setup) becomes the vector,
 # the game starts at $0003 (the framework does DI and IM 2).
 vector 00 io

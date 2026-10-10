@@ -5,6 +5,7 @@
 # The game's code uses no RST; $0010-$0012 is z88dk header text.
 name Canyon Racer 0.01alpha
 cart EEAD16C7
+hz 60		; a 60 Hz homebrew game
 vector 10 out_n
 vector 18 in_n
 vector 20 ed

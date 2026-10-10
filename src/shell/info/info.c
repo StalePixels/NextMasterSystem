@@ -17,10 +17,6 @@
 
 #include "nm.h"
 
-#define FLAG_PRIORITY  0x01
-#define FLAG_TOPPAL    0x02
-#define FLAG_TILECACHE 0x04
-
 #define COLS        32
 #define ROWS        24
 #define VALUE_COL   8
@@ -45,6 +41,13 @@ static const char s_game[]    = "Game";
 static const char s_format[]  = "Format";
 static const char s_abi[]     = "ABI";
 static const char s_flags[]   = "Flags";
+static const char s_status[]  = "Status";
+static const char s_rate[]    = "Rate";
+static const char s_untested[] = "untested";
+static const char s_hz50[]    = "50 Hz";
+static const char s_hz60[]    = "60 Hz";
+static const char s_boot[]    = "boot rate (";
+static const char s_close[]   = ")";
 static const char s_kb[]      = " KB";
 static const char s_none[]    = "none";
 static const char s_prio[]    = "priority tiles";
@@ -195,8 +198,20 @@ void *info_show(void *unused)
     row = put_field(row, s_size, buf);
     row++;
 
-    /* the overlay file: its META title and header, as the loader read them */
+    /* the overlay file: its META title and status and its CONF rate, as
+       the loader read them, and its header */
     row = put_field(row, s_game, nm.title);
+    row = put_field(row, s_status, nm.status[0] ? (const char *)nm.status : s_untested);
+
+    /* NextReg $05 bit 2 is the rate the Next shows now: the boot rate,
+       which the browser and this screen keep */
+    fl = nm.launch.flags;
+    q = buf;
+    if (!(fl & NM_FL_HZ)) q = put_str(q, s_boot);
+    q = put_str(q, ((fl & NM_FL_HZ) ? (fl & NM_FL_HZ60) : (ZXN_READ_REG(0x05) & 4)) ? s_hz60 : s_hz50);
+    if (!(fl & NM_FL_HZ)) q = put_str(q, s_close);
+    *q = 0;
+    row = put_field(row, s_rate, buf);
 
     p = put_dec(buf, nm.nms_ver[0]);
     *p++ = '.';
@@ -209,14 +224,13 @@ void *info_show(void *unused)
     row = put_field(row, s_abi, buf);
 
     /* the CONF switches, as the loader read them */
-    fl = nm.launch.flags;
     q = buf;
-    if (fl & FLAG_PRIORITY) q = put_str(q, s_prio);
-    if (fl & FLAG_TOPPAL) {
+    if (fl & NM_FL_PRIORITY) q = put_str(q, s_prio);
+    if (fl & NM_FL_TOPPAL) {
         if (q != buf) q = put_str(q, s_sep);
         q = put_str(q, s_top);
     }
-    if (fl & FLAG_TILECACHE) {
+    if (fl & NM_FL_TILECACHE) {
         if (q != buf) q = put_str(q, s_sep);
         q = put_str(q, s_tc);
     }

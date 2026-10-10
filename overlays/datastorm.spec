@@ -5,6 +5,7 @@
 # The game itself uses RST $08 (at $0202/$0206); $10-$30 are free (zeros).
 name DataStorm 1.00
 cart 37B775D6
+hz any		; no No-Intro name
 # One io vector for every I/O site: only with it can the builder give a loop its trace form,
 # so the loops that copy the sprite table go to the VDP as one block each.
 vector 10 io

@@ -1,6 +1,7 @@
 # R-Type, BB54B6B0, drafted by tools/mkspec.py from sitescan output (with the detector log).
 name R-Type
 cart BB54B6B0
+hz any		; No-Intro regions World
 # tilecache: whole tiles copied from cart ROM are not converted again (MAME,
 # game frames 300-2300: framework cycles -0.3%, vertical blank tile work -12%)
 tilecache

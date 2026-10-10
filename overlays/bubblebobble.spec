@@ -1,6 +1,7 @@
 # Bubble Bobble, drafted by tools/mkspec.py from sitescan output.
 name Bubble Bobble
 cart E843BA7E
+hz 50		; No-Intro regions Europe, Brazil
 # No free RST vector: the JP at $0000 becomes the vector, the game
 # starts at its target.
 vector 00 io

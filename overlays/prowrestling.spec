@@ -1,6 +1,7 @@
 # Pro Wrestling, drafted by tools/mkspec.py from sitescan output.
 name Pro Wrestling
 cart FBDE42D3
+hz any		; No-Intro regions USA, Europe, Brazil
 vector 30 io
 # priority tiles: the ring posts, ropes and move captions cover the wrestlers (batch 5)
 priority
