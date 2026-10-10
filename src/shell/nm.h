@@ -99,6 +99,13 @@ int16_t nm_read(uint8_t handle, void *dst, uint16_t n);
 int8_t  nm_seek(uint8_t handle, uint32_t pos);   /* from the start of the file */
 void    nm_close(uint8_t handle);
 
+/* The folder nms.nex was started from, with a trailing "/", then "ovl/" and
+ * the 8 hex digits, ".nms" and the end byte. The folder comes from F_GETCWD
+ * into a buffer of NM_CWD_MAX bytes. */
+#define NM_CWD_MAX    128
+#define NM_OVL_MAX    (NM_CWD_MAX + 1 + 4 + 12 + 1)
+int8_t  nm_getcwd(char *dst);   /* the current directory; 0, or -1 on failure */
+
 #define NM_TITLE_MAX  48
 #define NM_STATUS_MAX 11      /* "not working" */
 
@@ -108,7 +115,8 @@ void    nm_close(uint8_t handle);
  * its own. */
 struct nm_state {
     uint8_t  err;             /* 0, or the code of the last failure */
-    char     ovl_name[21];    /* "/nm/ovl/XXXXXXXX.nms" */
+    char     ovl_name[NM_OVL_MAX];   /* "<start folder>ovl/XXXXXXXX.nms" */
+    uint8_t  ovl_len;         /* length of "<start folder>ovl/" in ovl_name */
     uint16_t bflags;          /* the user's Browser view (C) and sort (B) flags */
     uint8_t  filter[16];      /* the user's Browser filter, saved */
     uint8_t  help[120];       /* the browser's two help lines */

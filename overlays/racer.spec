@@ -41,3 +41,114 @@ site 1DC1   ; IN A,($7E)
 asm 0122 2   ; IM 1 -> IM 2
     im 2
 endasm
+# Sprite routines as native code in page 0. At 60 Hz the frame's work ran into the next
+# picture: the colour 0 writes at $16DE (black) and $1715 (red, the crash flash) landed in
+# it, and the lines between them showed a black band. The game's own share of that work
+# is mostly sprite table writes through the traps.
+# The loop at $178B-$17C0 hides sprites i to 9 (i at SP+$AD) with the sprite set routine,
+# about 6,800 Next cycles a sprite through the traps: about 68,000 a frame after a crash.
+# Its test at $17B1 now does every pass of the loop in one far call.
+asm 17B1 16
+    call jt_far
+    db pg_sprhide, ent_sprhide
+    jp $17C1
+endasm
+# The sprite set routine ($1D7E, z88dk C, 4 stack arguments: tile, Y, X, sprite n) writes
+# Y to VRAM $3F00 + n and X and the tile to $3F80 + 2n with four control writes and three
+# data writes, about 6,300 Next cycles through the traps.
+asm 1D7E 6
+    call jt_far
+    db pg_sprset, ent_sprset
+    ret
+endasm
+page 0 sprset sprhide
+; sprset: does what the game's code at $1D7E-$1DA6 does, with two jt_vwrite calls. The
+; arguments are above the far call's three words and the game's return address.
+; Returns with the registers and flags that code leaves: A = D = tile, B = Y, C = X,
+; E = n, HL = the address of n's argument.
+sprset: ld hl,8
+        add hl,sp
+        ld d,(hl)               ; tile
+        inc hl
+        inc hl
+        ld b,(hl)               ; Y
+        inc hl
+        inc hl
+        ld c,(hl)               ; X
+        inc hl
+        inc hl
+        ld e,(hl)               ; n
+        push hl
+        push de
+        push bc
+        ld a,b
+        ld (sy),a
+        ld a,c
+        ld (sxt),a
+        ld a,d
+        ld (sxt+1),a
+        ld d,$3F                ; DE = $3F00 + n: Y
+        ld hl,sy
+        ld bc,$0101             ; one run of one byte
+        ld a,1                  ; the source as mapped now (this page)
+        call jt_vwrite
+        ld a,e
+        add a,a
+        or $80
+        ld e,a                  ; DE = $3F80 + 2n: X, tile
+        ld hl,sxt
+        ld b,2
+        ld a,1
+        call jt_vwrite
+        pop bc
+        pop de
+        pop hl
+        ld a,e
+        add a,a
+        or $80                  ; the flags the game's code leaves
+        ld a,d
+        ret
+sy:     db 0
+sxt:    db 0, 0
+; sprhide: does what the loop at $178B-$17C0 does from its test at $17B1: for the
+; game's i (16 bits at SP+$AD in its frame, above the far call's three words) from i
+; to 9, sprite i gets Y = $F0, X = $F0 and tile 0, then i = 10. Two jt_vwrite calls:
+; the Y bytes from $3F00 + i, the X and tile pairs from $3F80 + 2i. A negative i is
+; not handled (the game counts sprites up from 0). With at least one pass, BC = 9 as
+; the loop's last POP leaves it; the code after the loop sets A, DE, HL and the flags.
+sprhide: ld hl,$AD+6
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        or a
+        ld e,a                  ; E = i
+        ld a,(hl)
+        or a
+        ret nz                  ; i >= 256: no pass
+        ld a,e
+        cp 10
+        ret nc                  ; i >= 10: no pass
+        ld (hl),0
+        dec hl
+        ld (hl),10              ; i = 10
+        neg
+        add a,10
+        ld b,a                  ; B = 10 - i sprites
+        ld c,1                  ; one run
+        ld d,$3F                ; DE = $3F00 + i: Y
+        ld hl,hide_y
+        ld a,1                  ; the source as mapped now (this page)
+        call jt_vwrite
+        ld a,e
+        add a,a
+        or $80
+        ld e,a                  ; DE = $3F80 + 2i: X, tile
+        sla b                   ; 2 bytes a sprite
+        ld hl,hide_xt
+        ld a,1
+        call jt_vwrite
+        ld bc,9
+        ret
+hide_y: db $F0,$F0,$F0,$F0,$F0,$F0,$F0,$F0,$F0,$F0
+hide_xt: db $F0,0,$F0,0,$F0,0,$F0,0,$F0,0,$F0,0,$F0,0,$F0,0,$F0,0,$F0,0
+endpage

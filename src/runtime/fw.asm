@@ -17,10 +17,10 @@
 ; Handlers run with interrupts off; the entry patches an EI or NOP into
 ; the exit so the game's IFF comes back as it was.
 
-		MACRO FASTENTRY
+; FE_REST is FASTENTRY after its first two instructions: fw_io and fw_in_n
+; test for a V counter read between them (vc_fast).
+		MACRO FE_REST
 		local fe_ok
-		ex (sp),hl		; HL = inline byte address, game HL in the slot
-		push af
 		ld a,i			; P/V = IFF2
 		di
 		ld a,$00		; NOP
@@ -37,6 +37,12 @@ fe_ok:		ld (exit_ei),a
 		ld a,(hl)		; inline byte
 		inc hl
 		ld (fw_ret),hl
+		ENDM
+
+		MACRO FASTENTRY
+		ex (sp),hl		; HL = inline byte address, game HL in the slot
+		push af
+		FE_REST
 		ENDM
 
 ; one output byte of a tile row: planes in B,C,D,E; H = table page
@@ -212,9 +218,79 @@ fw_quit_t:	nextreg $51,$FF
 		; MMU7 stays the framework until the loader runs (it maps page 1)
 		jp fw_resume
 
-		IFDEF TRACE_BUILD
-		include "vdpcheck.asm"
-		ENDIF
+; ----------------------------------------------------------------------
+; The V counter read's fast path. fw_io (op $0A) and fw_in_n (a port of
+; class 2) call it after the first two instructions of FASTENTRY: HL = the
+; inline byte, then on the stack the caller's return, game AF and game HL.
+; A read on a line below the count's jump back (vc_fast__lim) that does not
+; start the vertical blank work returns the count to the game here, without
+; FASTENTRY, the port decode and fw_exit, so that a game that reads the
+; counter twice and compares the reads (Canyon Racer) gets both reads on one
+; line. It keeps rd_vcount's frame bookkeeping. Any other read returns to
+; the caller, which goes on through FASTENTRY to rd_vcount, as does every
+; read while fw_exit is patched (vbl_chk, dis_chk), which must see each trap.
+; Interrupts are off from the line's NextReg select to the return.
+; ----------------------------------------------------------------------
+vc_fast:	ld a,(fw_exit)
+		cp $C3			; JP: vbl_chk or dis_chk is on
+		ret z
+		push bc
+		ld a,i			; P/V = IFF2
+		di
+		push af
+		ld bc,$243B
+		ld a,$1E
+		out (c),a
+		inc b
+		in a,(c)
+		rra
+		jr c,vc_fast__gen	; lines 256 and later
+		dec b
+		ld a,$1F
+		out (c),a
+		inc b
+		in a,(c)
+vc_fast__lim:	cp $F3			; the first line whose count jumps back (hz_setup)
+		jr nc,vc_fast__gen
+		ld c,a
+		ld a,(pic_end)
+		ld b,a
+		ld a,c
+		sub b
+		jr nc,vc_fast__blank
+		xor a			; in the picture: as rd_vcount__active
+		ld (vbl_done),a
+		ld (fdone),a
+vc_fast__cnt:	ld a,b			; the count: the line, + 16 in 224-line mode
+		sub 192
+		add a,c
+		ld (game_a),a
+		pop af			; P/V = IFF2
+		pop bc
+		inc hl			; the game's return address
+		jp pe,vc_fast__ei
+		pop af			; the caller's return
+		pop af			; game AF
+		ex (sp),hl
+		ld a,(game_a)
+mx_vc:		ret
+vc_fast__ei:	pop af
+		pop af
+		ex (sp),hl
+		ld a,(game_a)
+		ei			; takes effect after the RET
+mx_vcei:	ret
+vc_fast__blank:	cp 2			; the two lines after the picture: no vblank work
+		jr c,vc_fast__cnt
+		ld a,(vbl_done)
+		or a
+		jr nz,vc_fast__cnt
+vc_fast__gen:	pop af			; P/V = IFF2
+		pop bc
+		ret po
+		ei
+		ret
+
 fw_gap_end:
 ; assert fw_gap_end <= mapattr_table, "the code after fw_stack runs into the tables' page" (checked by tools/check-layout)
 
@@ -247,7 +323,12 @@ tm_hi:		db $01,$03,$07,$0F,$1F,$3F,$7F,$FF
 ;   anything else: the second byte of an ED instruction
 ; Port class = A7 A6 A0 of the SMS port (the SMS decodes only those).
 fw_io:
-		FASTENTRY
+		ex (sp),hl		; FASTENTRY, with the V counter's fast path
+		push af			; after its first two instructions
+		ld a,(hl)
+		cp $0A			; IN A,(n) from port class 2: the V counter
+		call z,vc_fast		; returns only if the read takes this path
+		FE_REST
 		cp $10
 		jp nc,ed_dispatch
 io_jump:	add a,a
@@ -268,7 +349,13 @@ fw_out_n:
 
 ; RST target, ABI 1: IN A,(n) with the port as inline byte. Flags unchanged.
 fw_in_n:
-		FASTENTRY
+		ex (sp),hl		; FASTENTRY, with the V counter's fast path
+		push af			; after its first two instructions
+		ld a,(hl)
+		and $C1
+		cp $40			; port class 2: the V counter
+		call z,vc_fast		; returns only if the read takes this path
+		FE_REST
 		call port_class
 		or 8
 		jr io_jump
@@ -1613,11 +1700,9 @@ rd_dc:
 		ret
 
 ; V counter from the Next active line ($1E/$1F). Line 0 is the first line
-; of the 256x192 area, as on the SMS. The count from the line is the PAL
-; SMS one at 50 Hz and the NTSC one at 60 Hz: vc50 and vc60 in fw3, one of
-; which hz_setup copies to rd_vcount__ret at game start. A game that polls
-; the counter also gets the once-a-frame work done here when interrupts
-; never deliver it.
+; of the 256x192 area, as on the SMS. A game that polls the counter also
+; gets the once-a-frame work done here when interrupts never deliver it.
+; vc_fast in the gap after fw_stack does the same for most reads, faster.
 rd_vcount:
 		ld bc,$243B
 		ld a,$1E
@@ -1639,20 +1724,37 @@ rd_vcount:
 		inc c
 		inc c
 		cp c
-		jr c,rd_vcount__ret
+		jr c,vc_count
 rd_vcount__vbl:		ld a,(vbl_done)
 		or a
-		jr nz,rd_vcount__ret
+		jr nz,vc_count
 		push de
 		call vbl_run
 		pop de
-		jr rd_vcount__ret
+		jr vc_count
 rd_vcount__active:	xor a
 		ld (vbl_done),a
 		ld (fdone),a
-VC_LEN		equ 49			; the longer of vc50 and vc60 in fw3
-rd_vcount__ret:	ds VC_LEN		; the count from D and E: vc50 or vc60 (fw3), copied
-					; here by hz_setup
+; The count from the line, D = bit 8 and E = bits 0-7: the PAL SMS count at
+; 50 Hz, the NTSC one at 60 Hz (hz_setup in fw3 writes the three numbers),
+; plus 16 in 224-line mode. In 192-line mode it is the line up to the jump
+; back, then line - 55 at 50 Hz ($BC from line 243; the last line, 310,
+; counts $FF) and line - 8 at 60 Hz, where lines 219 and 220 count as line
+; 221 ($D5; the last line, 263, counts $FF).
+vc_count:	ld a,e
+		bit 0,d
+		jr nz,vc_count__sub
+vc_count__lim:	cp $F3			; the first line past the count's top (hz_setup)
+		jr c,vc_count__add
+vc_count__min:	cp 0			; lines below this one count as it (hz_setup)
+		jr nc,vc_count__sub
+		ld a,(vc_count__min+1)
+vc_count__sub:	sub 55			; the jump back (hz_setup)
+vc_count__add:	ld e,a
+		ld a,(pic_end)
+		sub 192
+		add a,e
+		ret
 
 ; Status: bit 7 frame, bit 5 sprite collision; reading clears them and the
 ; line interrupt flag. A game that polls with interrupts off gets bit 7
@@ -3164,6 +3266,9 @@ vw_pri__n:	ld a,d
 		pop bc
 		ret
 
+		IFDEF TRACE_BUILD
+		include "vdpcheck.asm"
+		ENDIF
 fw_code_end:
 ; assert fw_code_end <= TR_CODE, "framework code overflows into the trace code area" (checked by tools/check-layout)
 

@@ -2,7 +2,7 @@
 
 An `.nms` file tells NextMasterSystem how to run one Master System game. The file holds the changes NextMasterSystem makes to the player's own cart image, the settings for the game, the game's details for the browser, a 32x32 icon, and any code pages of our own that the game needs. The file never holds bytes copied from a game.
 
-Files live in `/nm/ovl/` on the SD card. Each file is named after the CRC32 of the cart it was made for, in upper-case hex: `/nm/ovl/0123ABCD.nms`.
+Files live in the `ovl` folder next to `nms.nex` on the SD card. NextMasterSystem reads the current directory when it starts (esxDOS `F_GETCWD`), and that is the folder holding `nms.nex`. Each file is named after the CRC32 of the cart it was made for, in upper-case hex: `ovl/0123ABCD.nms`.
 
 ## Conventions
 
@@ -61,7 +61,7 @@ Listing a CRC32 here claims that the `CHECK` operations in `PTCH` pass for that 
 
 ### The alias index
 
-NextMasterSystem does not open every file to find a match. A tool builds `/nm/ovl/index` from the `CRCS` chunks of every file in the folder:
+NextMasterSystem does not open every file to find a match. A tool builds `ovl/index` from the `CRCS` chunks of every file in the folder:
 
 | Offset | Size | Field |
 |---|---|---|

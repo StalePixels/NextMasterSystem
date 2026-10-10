@@ -9,7 +9,7 @@
  * touched here. Patches are applied to the cart pages in place.
  *
  * The overlay file format is docs/nms-format.md. The loader finds the file
- * through /nm/ovl/index, or by the cart's own CRC32 when there is no index.
+ * through ovl/index in the start folder, or by the cart's own CRC32 when there is no index.
  * Neither file is ever held whole in memory. Both are read through OVL_BUF,
  * which holds OVL_BUFSIZE bytes, so a file or a chunk may be of any size.
  *

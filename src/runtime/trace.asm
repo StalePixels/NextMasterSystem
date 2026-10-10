@@ -24,7 +24,11 @@
 ; not the SMS RAM mirror. If the copy cannot be made the site runs as a
 ; single output.
 
+		IFDEF TRACE_BUILD
+TR_CODE		equ $FB80		; the trace build's checks (vdpcheck.asm) end the framework code
+		ELSE
 TR_CODE		equ $FB00		; trace code: TR_CODE-$FCFF, below the IM2 table,
+		ENDIF
 TR_HOLE		equ $FD00		; then $FD18-$FEFD, after the two IM2 vectors
 TR_HEND		equ $FD18		; in use (tools/check-layout checks that the
 TR_CEND		equ $FEFE		; framework code ends before TR_CODE)

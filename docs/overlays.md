@@ -208,4 +208,4 @@ Without them, or for a cart with no row, the title is the spec's `name` line.
 
 ## 5. Copy to the SD card
 
-Copy every `.nms` file and the `index` file to `/nm/ovl/` on the SD card. When there is no `index`, NextMasterSystem looks only for the file named after the cart's own CRC32.
+Copy every `.nms` file and the `index` file to an `ovl` folder next to `nms.nex` on the SD card. The folder with `nms.nex` can be anywhere; for example `/nm/nms.nex` with `/nm/ovl/`, or `/games/sms/nms.nex` with `/games/sms/ovl/`. When there is no `index`, NextMasterSystem looks only for the file named after the cart's own CRC32.

@@ -34,7 +34,6 @@
 #define LINE_MAX    (6 + NM_TITLE_MAX)
 
 static const char hex_digits[] = "0123456789ABCDEF";
-static const char index_name[] = "/nm/ovl/index";
 
 /* CRC32 checks, in the loader's page. */
 static uint8_t check_range(uint32_t off, uint16_t len, uint32_t crc)
@@ -82,6 +81,13 @@ static int16_t rd_line(struct rd *r, char *line)
     return n;
 }
 
+/* nm.ovl_name after the folder: the CRC32 in hex and ".nms". */
+static void set_ovl_name(uint32_t crc)
+{
+    put_hex32(nm.ovl_name + nm.ovl_len, crc);
+    memcpy(nm.ovl_name + nm.ovl_len + 8, ".nms", 5);
+}
+
 /* The primary CRC32 of the overlay file for this cart: from the index, or
  * the cart's own CRC32 without one. Sets the name in nm.ovl_name. Returns
  * 0 or a failure code.
@@ -90,16 +96,17 @@ static int16_t rd_line(struct rd *r, char *line)
  * entry and reads its 8 bytes. */
 static uint8_t find_overlay(void)
 {
-    char path[sizeof index_name];
     uint8_t stat[16];
     uint16_t n, lo, hi, mid;
     uint32_t c;
     int16_t h;
     uint8_t code = NM_E_NOOVL;
 
-    put_hex32(nm.ovl_name + 8, nm.launch.crc);
-    memcpy(path, index_name, sizeof index_name);
-    h = nm_open(path);
+    /* the index shares the folder: its name overwrites the file name, which
+     * is set again once the index has been read */
+    memcpy(nm.ovl_name + nm.ovl_len, "index", 6);
+    h = nm_open(nm.ovl_name);
+    set_ovl_name(nm.launch.crc);
     if (h < 0) return 0;          /* no index: the file named after the cart */
     if (nm_fstat((uint8_t)h, stat) || nm_read((uint8_t)h, OVL_BUF, 6) != 6 ||
         memcmp(OVL_BUF, "NMSI", 4) != 0) {
@@ -119,7 +126,7 @@ static uint8_t find_overlay(void)
         }
         c = rd32(OVL_BUF);
         if (c == nm.launch.crc) {
-            put_hex32(nm.ovl_name + 8, rd32(OVL_BUF + 4));
+            set_ovl_name(rd32(OVL_BUF + 4));
             code = 0;
             break;
         }

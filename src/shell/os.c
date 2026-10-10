@@ -6,6 +6,7 @@
 #define F_READ   0x9D
 #define F_SEEK   0x9F
 #define F_FSTAT  0xA1
+#define F_GETCWD 0xA8
 #define MODE_READ 1
 #define SEEK_SET  0
 
@@ -69,5 +70,18 @@ int8_t nm_seek(uint8_t handle, uint32_t pos)
     e.bc = (uint16_t)(pos >> 16);
     e.de = (uint16_t)pos;
     e.ix = SEEK_SET;
+    return nm_esx(&e) ? -1 : 0;
+}
+
+/* The current directory of the default drive, into dst (NM_CWD_MAX bytes). */
+int8_t nm_getcwd(char *dst)
+{
+    struct nm_esx e;
+
+    e.fn = F_GETCWD;
+    e.a = '*';
+    e.bc = 0;
+    e.ix = (uint16_t)dst;
+    e.de = 0;
     return nm_esx(&e) ? -1 : 0;
 }

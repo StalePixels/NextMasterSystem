@@ -32,7 +32,7 @@ static const char msg_pick[]  = "NextMasterSystem: pick a Master System .sms fil
 static const char msg_e1[]    = "That file could not be opened.";
 static const char msg_e2[]    = "That file could not be read.";
 static const char msg_e3[]    = "That file is empty or larger than 512K.";
-static const char msg_e4a[]   = "Unknown game: no /nm/ovl/";
+static const char msg_e4a[]   = "Unknown game: no ovl/";
 static const char msg_e4b[]   = ".nms for it.";
 static const char msg_e5[]    = "Its overlay file is damaged or too new.";
 static const char msg_e6[]    = "Its overlay is for another cart (CRC32 or size).";
@@ -51,9 +51,9 @@ static void make_help(uint8_t code)
     uint8_t n;
 
     if (code == NM_E_NOOVL) {
-        /* the overlay name is the part of nm.ovl_name after "/nm/ovl/" */
+        /* the overlay name is the 8 digits in nm.ovl_name after the folder */
         memcpy(d, msg_e4a, sizeof msg_e4a - 1);
-        memcpy(d + sizeof msg_e4a - 1, nm.ovl_name + 8, 8);
+        memcpy(d + sizeof msg_e4a - 1, nm.ovl_name + nm.ovl_len, 8);
         n = sizeof msg_e4a - 1 + 8;
         memcpy(d + n, msg_e4b, sizeof msg_e4b - 1);
         n += sizeof msg_e4b - 1;
@@ -70,7 +70,7 @@ static void make_help(uint8_t code)
 /* Once, at start: full speed, and the NextRegs to restore on exit. */
 void *session_init(void *unused)
 {
-    uint8_t i, *o = nm.launch.nr;
+    uint8_t i, n, *o = nm.launch.nr;
 
     (void)unused;
     intrinsic_di();
@@ -81,7 +81,15 @@ void *session_init(void *unused)
         *o++ = ZXN_READ_REG(save_regs[i]);
     }
     *o = 0xFF;
-    memcpy(nm.ovl_name, "/nm/ovl/00000000.nms", 21);
+    /* The folder nms.nex was started from is the current directory until the
+     * browser first opens. */
+    nm.ovl_name[0] = 0;
+    nm_getcwd(nm.ovl_name);
+    nm.ovl_name[NM_CWD_MAX - 1] = 0;
+    n = (uint8_t)strlen(nm.ovl_name);
+    if (n == 0 || nm.ovl_name[n - 1] != '/') nm.ovl_name[n++] = '/';
+    memcpy(nm.ovl_name + n, "ovl/00000000.nms", 17);
+    nm.ovl_len = n + 4;
     nm.err = 0;
     return 0;
 }
