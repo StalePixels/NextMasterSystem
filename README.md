@@ -16,12 +16,16 @@ The design notes are in [docs/design.md](docs/design.md).
 
 ### What you need
 
-- A ZX Spectrum Next with 2 MB of RAM. It won't work on a 1 MB machine.
+- A ZX Spectrum Next with 2 MB of RAM.
 - Your own `.sms` cart dumps. No games come with NextMasterSystem, and each dump must match an overlay.
+
+### Download
+
+Install NextMasterSystem with SPUN, the Next's package manager: on the Next, type `.spun get nmsemu`. Or download it from https://spun.nextbestnetwork.com/get/nmsemu. [docs/readme.txt](docs/readme.txt) is the readme in the download: it lists the supported games, the CRC32 of each dump, and the known problems of each game.
 
 ### Playing
 
-Start `nms.nex` (for example `/nm/nms.nex`), pick a `.sms` file in the browser, and press a key on the info screen. The info screen shows the game, its state (working, imperfect, not working, untested) and the video rate it will use.
+Start `nms.nex` (for example `/NMS/nms.nex`), pick a `.sms` file in the browser, and press a key on the info screen. The info screen shows the game, its state (working, imperfect, not working, untested) and the video rate it will use.
 
 Games made for one rate only (50 Hz PAL or 60 Hz NTSC) switch the Next to that rate when the game starts. Games sold for both run at the rate the Next started with. The browser and the info screen always use the rate the Next started with, so BREAK always gets you back to a screen your monitor can show.
 
