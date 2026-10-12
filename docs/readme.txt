@@ -190,8 +190,6 @@ System, apart from the limits above.
       scrolling bands do not join.
   Micro Machines                       A577CE46
       A race takes longer to load than on a Master System.
-      The race display flickers in the same way as on a
-      Master System.
   OutRun                               5589D8D2
       At the start of a race, a few frames take longer than
       a frame to prepare.

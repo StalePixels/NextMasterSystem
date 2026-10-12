@@ -696,15 +696,209 @@ class Summary:
 
 
 DEFAULT_SUMMARY = Summary()
-UNKNOWN_ENTRY_KINDS = {'vector', 'cmdline', 'table', 'log', 'cdl', 'ram', 'harvest'}
+UNKNOWN_ENTRY_KINDS = {'vector', 'cmdline', 'table', 'log', 'cdl', 'ram', 'harvest', 'bankcall', 'bankhead'}
 STRONG_SEEDS = {'vector', 'cmdline'}
 MAX_ROUNDS = 15
 
 
+# ------------------------------------------------------------------ overlay (--overlay)
+#
+# With --overlay the scanner reads the cart image with the spec's patches in place and
+# decodes the framework's call forms in it: an RST to a vector that holds JP <jump table
+# entry> (mknms.py, "vector": patch(a, [0xC3, e & 0xFF, e >> 8])), and a CALL or JP to an
+# address in the jump table area $E000-$E07A. Each form has the instruction(s) it stands
+# for (stepped for the register and bank state), the address where control goes on, and
+# a mode: 'step' (go on there), 'call' (go on there; the code page entry is unknown, so
+# registers are taken as unknown), or 'stop' (the path ends; the form is listed).
+#
+# R below is the return address the call form leaves on the stack: the byte after the
+# RST (1 byte) or after the CALL (3 bytes). FASTENTRY reads the inline byte at R and sets
+# fw_ret = R + 1 (src/runtime/fw.asm:37-39); every handler leaves through fw_exit, which
+# returns to fw_ret (fw.asm:388-395). The handlers that move fw_ret are the only places
+# that write it: fw.asm:810-812, 1541, 2456-2458, fw2.asm:311-445, trace.asm:398-555.
+
+FW_JT = {0xE000: 'out_n', 0xE003: 'in_n', 0xE006: 'ed', 0xE009: 'ld_de_a', 0xE00C: 'start',
+         0xE00F: 'fatal', 0xE012: 'outi_run', 0xE015: 'io', 0xE018: 'io0', 0xE01B: 'resume',
+         0xE072: 'far', 0xE075: 'peek', 0xE078: 'vwrite'}     # fw.asm:81-90, 121-123
+FW_AREA = (0xE000, 0xE07A)      # jump table and the fixed state after it (fw.asm:80-123)
+
+
+def _class_port(c):
+    """A port of port class c (bits A7, A6, A0; fw.asm:321-324)."""
+    return (c >> 2 & 1) << 7 | (c >> 1 & 1) << 6 | (c & 1)
+
+
+class Overlay:
+    """The patched image's framework call forms (see the comment above)."""
+
+    def __init__(self, orig, pr, static_orig):
+        self.orig = orig                          # the cart as dumped
+        self.start = pr['start'][0] if pr.get('start') else None
+        self.ramcont = pr.get('ramcont')
+        self.static_orig = static_orig            # offsets the plain scan reached before log seeds
+
+    def _insns(self, addr, codes):
+        out = []
+        for bs in codes:
+            ins = decode(lambda i, bs=bs: bs[i] if i < len(bs) else None, addr)
+            out.append(ins)
+        return tuple(out)
+
+    def ed_form(self, b, R, x):
+        """ed_dispatch, fw.asm:549-591, for op x with the inline code at R:
+        (name, instruction bytes, resume, mode)."""
+        if x == 0xA3:
+            return 'OUTI', [b'\xed\xa3'], R + 1, 'step'
+        if x & 0xC7 == 0x41:
+            return 'OUT (C),r', [bytes([0xED, x])], R + 1, 'step'
+        if x < 0x18:
+            # op_mapper (fw.asm:1566-1578) then cold_mapper (fw2.asm:305-360); any op
+            # below $14 takes the $10-$13 path with register $FFFC + (op & 3)
+            k = x & 3
+            if x < 0x14:
+                # one byte skipped (fw2.asm:311-313); a LD (nn),A to $C000-$DFFF right
+                # after the 3-byte site is done too and skipped (fw2.asm:318-332; op_nx is
+                # the 3 bytes at R + 2, fw.asm:1570-1574)
+                nx = [b(R + 2 + i) for i in range(3)]
+                if None not in nx and nx[0] == 0x32 and 0xC0 <= nx[2] < 0xE0:
+                    return 'LD ($FFFC+k),A + LD (nn),A', [bytes([0x32, 0xFC + k, 0xFF]), bytes(nx)], R + 5, 'step'
+                return 'LD ($FFFC+k),A', [bytes([0x32, 0xFC + k, 0xFF])], R + 2, 'step'
+            if x == 0x14:
+                n = b(R + 1)              # n, then two bytes skipped (fw2.asm:333-342)
+                if n is None:
+                    return 'mapper $14 past the image', None, None, 'stop'
+                return 'LD HL,$FFFF : LD (HL),n', [b'\x21\xff\xff', bytes([0x36, n])], R + 4, 'step'
+            # $15-$17: one byte skipped (fw2.asm:367-372)
+            return 'LD ($FFFC+k),HL', [bytes([0x22, 0xFC + x - 0x15, 0xFF])], R + 2, 'step'
+        if x < 0x20:
+            # trace OUT (n),A (tr_start, trace.asm:56-120). The trace copies the game's own
+            # code from the site on and leaves at a game PC on its paths (trace.asm:13-19,
+            # m_exit trace.asm:555; runs end after their sites, trace.asm:398, 430, 465;
+            # tr_plain is the single output, trace.asm:478-494): going on at R + 1 follows
+            # the same code, and the code stops the trace before any other I/O or store
+            # (tracedef.py docstring), so those run as the game's own instructions.
+            return 'trace OUT (n),A', [bytes([0xD3, _class_port(x - 0x18)])], R + 1, 'step'
+        if x < 0x40:
+            if x < 0x28:                  # $20-$27: two bytes skipped (fw2.asm:404-411)
+                return ('LD ($FFFC+k),%s' % ('BC' if x < 0x24 else 'DE'),
+                        [bytes([0xED, 0x43 if x < 0x24 else 0x53, 0xFC + (x & 3), 0xFF])], R + 3, 'step')
+            if x < 0x2C:                  # $28-$2B: n, two bytes skipped (fw2.asm:419-424, 333-342)
+                n = b(R + 1)
+                if n is None:
+                    return 'mapper $28 past the image', None, None, 'stop'
+                return 'LD HL,$FFFC+k : LD (HL),n', [bytes([0x21, 0xFC + (x & 3), 0xFF]), bytes([0x36, n])], R + 4, 'step'
+            if x < 0x2F:                  # $2C-$2E: one byte skipped (fw2.asm:425-436)
+                return 'Codemasters LD (nnnn),A', [bytes([0x32, 0x00, (x - 0x2C) << 6])], R + 2, 'step'
+            if x == 0x2F:                 # continuation of the RAMSITES table (fw2.asm:437-445)
+                if self.ramcont is None:
+                    return 'RAMSITES continuation, no ramhook in the spec', None, None, 'stop'
+                return 'RAMSITES continuation', [], self.ramcont, 'step'
+            # $30-$3F: LD (HL),n, fw_ret not moved (fw2.asm:479-485)
+            return 'LD (HL),n', [bytes([0x36, x - 0x30])], R + 1, 'step'
+        if x in (0xC3, 0xCB):             # trace OUTI / OUTD, as for $18-$1F above
+            return 'trace %s' % ('OUTI' if x == 0xC3 else 'OUTD'), [bytes([0xED, x - 0x20])], R + 1, 'step'
+        if x in (0xAB, 0xB3, 0xBB, 0xA2, 0xB2):
+            return BLOCK[(x >> 3 & 7) - 4][x & 3], [bytes([0xED, x])], R + 1, 'step'
+        if x & 0xC7 == 0x40:
+            return 'IN r,(C)', [bytes([0xED, x])], R + 1, 'step'
+        if x & 0xC7 == 0x81:              # trace OUT (C),r ($81 + 8r), as for $18-$1F above
+            return 'trace OUT (C),r', [bytes([0xED, x - 0x40])], R + 1, 'step'
+        if x in (0x47, 0x57):             # fw.asm:592-600
+            return 'LD I,A' if x == 0x47 else 'LD A,I', [bytes([0xED, x])], R + 1, 'step'
+        if x == 0x80:                     # far call: page, entry (op_far, fw.asm:2456-2458)
+            return 'far call', [], R + 3, 'call'
+        return 'op %s: fw_fatal' % h2(x), None, None, 'stop'     # fw.asm:591
+
+    def form(self, b, addr, entry, R, via):
+        """(name, instruction bytes, resume, mode, inline length) for a transfer to
+        jump table entry ENTRY with return address R (via 'rst', 'call' or 'jp')."""
+        kind = FW_JT.get(entry)
+        if kind is None:
+            return 'call into the framework at %s' % h4(entry), None, None, 'stop', 0
+        if via == 'jp' and kind != 'io0':
+            return 'JP to %s' % kind, None, None, 'stop', 0
+        if kind == 'io0':
+            # fw_io0 (fw.asm:368-385): after an RST $00 the byte before the return address
+            # is $C7 and it goes on as fw_io; a jump or a call is a reset to the START
+            # address (fw_start_addr, 0 without a START op)
+            if via == 'rst' and b(R - 1) == 0xC7:
+                kind = 'io'
+            else:
+                return 'reset', [], self.start or 0, 'step', 0
+        if kind in ('start', 'fatal', 'resume'):
+            # fw_start is for the loader; fw_fatal stops (fw.asm:2410-2414); fw_resume
+            # leaves the game (fw.asm:93-95)
+            return kind, None, None, 'stop', 0
+        if kind == 'ld_de_a':             # no inline byte, fw_ret = R (fw.asm:1531-1545)
+            return 'LD (DE),A', [b'\x12'], R, 'step', 0
+        if kind == 'peek':                # A = the byte at HL (fw.asm:2523-2540)
+            return 'jt_peek', [b'\x7e'], R, 'step', 0
+        if kind == 'vwrite':              # A and F change (nms-format.md, "Writing VRAM")
+            return 'jt_vwrite', [b'\xdb\x00'], R, 'step', 0    # IN A,($00) stands for "A unknown"
+        if kind == 'far':                 # page, entry (fw_far, far_ops: fw.asm:2469-2481, 2511-2517)
+            return 'far call', [], R + 2, 'call', 2
+        x = b(R)
+        if x is None:
+            return '%s past the image' % kind, None, None, 'stop', 0
+        if kind == 'out_n':               # fw.asm:344-348
+            return 'OUT (n),A', [bytes([0xD3, x])], R + 1, 'step', 1
+        if kind == 'in_n':                # fw.asm:350-361; vc_fast also returns to R + 1 (fw.asm:244)
+            return 'IN A,(n)', [bytes([0xDB, x])], R + 1, 'step', 1
+        if kind == 'outi_run':            # n OUTIs, fw_ret += 2(n-1) (fw.asm:805-812)
+            if x == 0:
+                return 'OUTI run of 0', None, None, 'stop', 1
+            return 'OUTI run', [b'\xed\xa3'] * x, R + 1 + 2 * (x - 1), 'step', 1
+        if kind == 'io' and x < 0x10:     # io_jump through io_tab (fw.asm:325-342)
+            if x < 8:
+                return 'OUT (n),A', [bytes([0xD3, _class_port(x)])], R + 1, 'step', 1
+            return 'IN A,(n)', [bytes([0xDB, _class_port(x - 8)])], R + 1, 'step', 1
+        name, codes, resume, mode = self.ed_form(b, R, x)    # fw_io >= $10 and fw_ed
+        # the site's bytes: the code and the bytes skipped after it, up to where it goes on
+        inl = resume - R if mode != 'stop' and name != 'RAMSITES continuation' and 0 < resume - R <= 5 else 1
+        return name, codes, resume, mode, inl
+
+    def convert(self, sc, n, ins, fetch):
+        """The framework form at node n, as an Insn with sem ('fw', name, parts, resume,
+        mode, cond), or ins itself."""
+        sem = ins.sem
+        t = sem[0]
+        addr = n[1]
+        if t == 'rst':
+            v = sem[1]
+            vb = sc.rom[v:v + 3] if v + 3 <= len(sc.rom) else b''
+            if len(vb) < 3 or vb[0] != 0xC3:
+                return ins
+            entry = vb[1] | vb[2] << 8
+            if not FW_AREA[0] <= entry < FW_AREA[1]:
+                return ins
+            R, via, cond = addr + 1, 'rst', None
+        elif t in ('call', 'jp') and FW_AREA[0] <= sem[1] < FW_AREA[1]:
+            entry, R, via, cond = sem[1], addr + 3, t, sem[2]
+        else:
+            return ins
+
+        def b(a):
+            return fetch(a - addr)
+        name, codes, resume, mode, inl = self.form(b, addr, entry, R, via)
+        raw = list(ins.raw)
+        for i in range(inl):
+            v = b(R + i)
+            if v is None:
+                break
+            raw.append(v)
+        parts = self._insns(addr, codes or [])
+        txt = '%s ; %s %s%s' % (ins.text, FW_JT.get(entry, h4(entry)), name,
+                                '' if resume is None or mode == 'stop' else ' -> %s' % h4(resume & 0xFFFF))
+        return Insn(addr, raw, txt, ('fw', name, parts, None if resume is None else resume & 0xFFFF, mode, cond))
+
+
 class Scanner:
-    def __init__(self, rom, mapper='sega', unroll=8):
+    def __init__(self, rom, mapper='sega', unroll=8, fw=None):
         self.unroll = unroll
         self.rom = rom
+        self.fw = fw                 # Overlay, with --overlay
+        self.fw_stops = set()        # (node, form name): framework forms that end a path
+        self.fw_used = {}            # form name -> nodes
         self.size = len(rom)
         self.nb = max(1, (self.size + 0x3FFF) // 0x4000)
         self.mapper = mapper
@@ -714,6 +908,8 @@ class Scanner:
         self.copies_prev = []
         self.code_starts_prev = set()
         self.harvest_src = {}
+        self.bank_calls = set()
+        self.bank_headers = set()
         self.task_entries = set()
         self.struct_dispatch = set()
         self.slot1_banked_prev = False
@@ -773,6 +969,8 @@ class Scanner:
                 o = self.off_of(region, (addr + i) & 0xFFFF)
                 return None if o is None else self.rom[o]
             ins = decode(fetch, addr)
+            if ins is not None and self.fw is not None:
+                ins = self.fw.convert(self, n, ins, fetch)
             self.decode_cache[n] = ins
         return ins
 
@@ -1321,6 +1519,26 @@ class Scanner:
             if not nodes and final:
                 self.unresolved.append((n, why_ctx, target, why))
 
+        if t == 'fw':
+            # a framework call form in the patched image (Overlay): step the instructions
+            # it stands for and go on where the framework returns
+            _f, name, parts, resume, mode, cond = sem
+            if final:
+                self.fw_used.setdefault(name, set()).add(n)
+            if mode == 'stop':
+                if final:
+                    self.fw_stops.add((n, name))
+            else:
+                st = s
+                for p in parts:
+                    st = self.step(st, p)
+                if mode == 'call':
+                    st = self.apply_summary(DEFAULT_SUMMARY, st)
+                go(resume, st)
+            if cond:
+                go((addr + 3) & 0xFFFF, s)      # CALL cc / JP cc not taken
+            return out
+
         if t in ('jp', 'jr'):
             go(sem[1], s1)
             if sem[2]:
@@ -1768,6 +1986,9 @@ def main():
                     help='run without tools/tracedef.py: the trace and run forms are not costed and the costs differ from the overlay builder\'s (printed in the summary)')
     ap.add_argument('--handler', action='append', default=[],
                     help='frame cost model: the game\'s own interrupt handler entry, hex ADDR or BANK:ADDR (repeatable)')
+    ap.add_argument('--overlay', metavar='SPEC',
+                    help='scan the cart with the patches of this overlay spec in place (mknms.py next to this script)')
+    ap.add_argument('--sjasmplus', default='sjasmplus', help='assembler for the spec\'s asm and page blocks (default: on the PATH)')
     args = ap.parse_args()
     TRACEDEF_OFF[0] = args.no_tracedef
     load_tracedef()         # fail now, not after the scan
@@ -1790,6 +2011,23 @@ def main():
             mapper = 'codemasters'
             result = scan(rom, mapper, args)
     result['mapper'] = mapper
+    if args.overlay:
+        # the plain scan above gives the mapper model and the code its static pass
+        # reaches; the patched image is scanned with both
+        pr = load_mknms().parse(args.overlay, rom, args.sjasmplus)
+        if pr.get('crc') is not None and pr['crc'] != crc:
+            sys.exit('sitescan: %s is for cart %08X, not %08X' % (args.overlay, pr['crc'], crc))
+        img = bytearray(rom)
+        for a, new in pr['ops']:
+            img[a:a + len(new)] = new
+        img = bytes(img)
+        fw = Overlay(rom, pr, result['sc'].static_starts)
+        result = scan(img, mapper, args, fw)
+        result['mapper'] = mapper
+        result['overlay'] = (args.overlay, len(pr['ops']))
+        result['rules'] = pattern_rules(result, img, mapper, args, inline_only=True)
+        write_outputs(result, img, crc, header, name, args)
+        return
     TRACEDEF_OFF[0] = args.no_tracedef
     result['cost'] = frame_cost(result['sc'], [parse_addr(h, result['sc']) for h in args.handler])
     result['rules'] = pattern_rules(result, rom, mapper, args)
@@ -1932,33 +2170,113 @@ def harvest(sc):
         if (w >> 8) == (w & 0xFF):
             continue        # $0909, $2020 and the like are fill or BCD values, not pointers
         node = (sc.region_for(w >> 14, w >> 14), w)
-        o = sc.off_of(node[0], w)
-        if o is None or o in covered or o in sc.table_bytes or sc.rom[o] == 0xFF:
-            continue
-        # the bytes must decode as a plausible run of code
-        a, ok, count = w, True, 0
-        while count < 12:
-            ins = sc.decode_node((node[0], a))
-            if ins is None or ins.sem[0] == 'bad':
-                ok = False
-                break
-            count += 1
-            if ins.sem[0] in ('ret', 'reti', 'jpind') and (ins.sem[0] != 'ret' or ins.sem[1] is None):
-                break
-            if ins.sem[0] in ('jp', 'jr') and ins.sem[2] is None:
-                break
-            a = (a + len(ins.raw)) & 0xFFFF
-        if ok and count >= 2:
+        if code_like(sc, node, covered):
             out.append(node)
             sc.harvest_src[node] = words[w]
             if w in task_ws:
                 sc.task_entries.add(node)
+    for node, src in bank_calls(sc, covered):
+        if node not in out:
+            out.append(node)
+            sc.harvest_src[node] = src
+            sc.bank_calls.add(node)
+    for node in bank_headers(sc, covered):
+        if node not in out:
+            out.append(node)
+            sc.bank_headers.add(node)
     return out
 
 
-def scan(rom, mapper, args):
-    sc = Scanner(rom, mapper, args.unroll)
-    seeds = [((sc.region_for(0, 0), a), 'vector') for a in (0x0000, 0x0038, 0x0066) if a < len(rom)]
+def bank_headers(sc, covered):
+    """Module headers: a bank that starts with two or more JP nn, every nn in $8000-$BFFF.
+
+    Games keep a module (an init entry, a per-frame entry) in a bank of its own
+    and call the header entries with that bank in slot 2. Each JP of the
+    header is an entry in that bank, however the caller picks the bank.
+    """
+    out = []
+    rom = sc.rom
+    for b in range(2, sc.nb):
+        o, jps = b * 0x4000, 0
+        while o + 3 * jps + 2 < len(rom) and rom[o + 3 * jps] == 0xC3 \
+                and 0x8000 <= (rom[o + 3 * jps + 1] | (rom[o + 3 * jps + 2] << 8)) < 0xC000:
+            jps += 1
+        if jps < 2:
+            continue
+        for i in range(jps):
+            node = (sc.region_for(2, b), 0x8000 + 3 * i)
+            if code_like(sc, node, covered, follow_jp=True):
+                out.append(node)
+    return out
+
+
+def seed_kind(sc, k):
+    """The seed kind of an entry that harvest() returned."""
+    return 'bankcall' if k in sc.bank_calls else 'bankhead' if k in sc.bank_headers else 'harvest'
+
+
+def code_like(sc, node, covered, follow_jp=False):
+    """True when the bytes at node are not reached yet and decode as a plausible run of code.
+
+    With follow_jp, a JP nn continues the run at nn, so a jump table entry counts.
+    """
+    o = sc.off_of(node[0], node[1])
+    if o is None or o in covered or o in sc.table_bytes or sc.rom[o] == 0xFF:
+        return False
+    a, count = node[1], 0
+    while count < 12:
+        ins = sc.decode_node((node[0], a))
+        if ins is None or ins.sem[0] == 'bad':
+            return False
+        count += 1
+        if ins.sem[0] in ('ret', 'reti', 'jpind') and (ins.sem[0] != 'ret' or ins.sem[1] is None):
+            break
+        if ins.sem[0] == 'jp' and ins.sem[2] is None and follow_jp and isinstance(ins.sem[1], int):
+            a = ins.sem[1]
+            continue
+        if ins.sem[0] in ('jp', 'jr') and ins.sem[2] is None:
+            break
+        a = (a + len(ins.raw)) & 0xFFFF
+    return count >= 2
+
+
+def bank_calls(sc, covered):
+    """Calls into slot 2 right after a constant bank switch that no path reached.
+
+    The bytes are LD A,n, then optionally LD (nn),A to RAM (a copy of the bank
+    number), then LD ($FFFF),A and CALL nn or JP nn with nn in $8000-$BFFF, all
+    in slot 0 or slot 1. Games start objects this way from a handler that is
+    reached only through RAM. The target in bank n is the entry: (node, store node).
+    """
+    out = []
+    if sc.mapper == 'codemasters':
+        return out
+    # the game's own bytes: with --overlay the store is a framework call form that does
+    # the same bank switch
+    rom = sc.fw.orig if sc.fw is not None else sc.rom
+    for o in range(min(len(rom), 0x8000) - 10):
+        if rom[o] != 0x3E or rom[o + 1] >= sc.nb:
+            continue
+        p = o + 2
+        if rom[p] == 0x32 and rom[p + 2] >= 0xC0 and not (rom[p + 2] == 0xFF and rom[p + 1] >= 0xFC):
+            p += 3
+        if rom[p:p + 3] != b'\x32\xFF\xFF' or p in covered or rom[p + 3] not in (0xCD, 0xC3):
+            continue
+        w = rom[p + 4] | (rom[p + 5] << 8)
+        if not 0x8000 <= w < 0xC000:
+            continue
+        node = (sc.region_for(2, rom[o + 1]), w)
+        if code_like(sc, node, covered, follow_jp=True):
+            out.append((node, (sc.region_for(p >> 14, p >> 14), p)))
+    return out
+
+
+def scan(rom, mapper, args, fw=None):
+    sc = Scanner(rom, mapper, args.unroll, fw)
+    # the framework starts the game at the START address, $0000 without one (fw_start,
+    # src/runtime/fw.asm:2422-2441)
+    start = fw.start if fw is not None and fw.start is not None else 0x0000
+    seeds = [((sc.region_for(0, 0), a), 'vector') for a in (start, 0x0038, 0x0066) if a < len(rom)]
     for e in args.entry:
         seeds.append((parse_addr(e, sc), 'cmdline'))
     sc.run(seeds)
@@ -1978,12 +2296,17 @@ def scan(rom, mapper, args):
                 harvested.remove(k)
                 rejected.append(k)
             harvested += new
-            sc.run(seeds + [(k, 'harvest') for k in harvested])
-        seeds = seeds + [(k, 'harvest') for k in harvested]
+            sc.run(seeds + [(k, seed_kind(sc, k)) for k in harvested])
+        seeds = seeds + [(k, seed_kind(sc, k)) for k in harvested]
         static_starts = set(sc.off_of(x[0], x[1]) for x in sc.ctx)
     sc.harvest_rejected = rejected
+    sc.static_starts = static_starts
 
-    # dynamic seeds: only the PCs that static analysis did not reach
+    # dynamic seeds: only the PCs that static analysis did not reach. With --overlay, log
+    # rows are checked against the cart as dumped (the reference ran that), and a PC that
+    # the plain scan's static pass reaches is not a seed: whether the patched game still
+    # runs it is for the patched image's own paths to show.
+    ref = fw.orig if fw is not None else rom
     log_files = list(args.log)
     for d in args.logdir:
         log_files += logs_in_dir(d)
@@ -2001,13 +2324,13 @@ def scan(rom, mapper, args):
             cands = [(sc.region_for(slot, slot), pc)]
             if bs:
                 o = sc.off_of(cands[0][0], pc)
-                if o is None or rom[o:o + len(bs)] != bs[:len(rom[o:o + len(bs)])]:
+                if o is None or ref[o:o + len(bs)] != bs[:len(ref[o:o + len(bs)])]:
                     mismatched.append((src, pc))
                     continue
         else:
             cands = [(sc.region_for(2, b), pc) for b in range(sc.nb)]
             if bs:
-                cands = [c for c in cands if all(sc.off_of(c[0], pc + i) is not None and rom[sc.off_of(c[0], pc + i)] == bs[i]
+                cands = [c for c in cands if all(sc.off_of(c[0], pc + i) is not None and ref[sc.off_of(c[0], pc + i)] == bs[i]
                                                  for i in range(min(len(bs), 2)))]
             elif sc.nb > 3:
                 log_notes.append('%s: PC %s is in slot 2 and the log has no bytes to pick its bank; skipped' % (src, h4(pc)))
@@ -2032,7 +2355,7 @@ def scan(rom, mapper, args):
     extra = []
     for n, kind, src in dyn:
         o = sc.off_of(n[0], n[1])
-        if o is None or o in static_starts:
+        if o is None or o in static_starts or (fw is not None and o in fw.static_orig):
             continue
         k = 'cdl' if kind == 'cdl' else 'log'
         if (n, k) not in extra:
@@ -2059,6 +2382,10 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
             heap.append((1, repr(e), e, 'log-seed' if 'log' in R.kinds else 'cdl-seed'))
         elif 'harvest' in R.kinds:
             heap.append((2, repr(e), e, 'pointer-harvest'))
+        elif 'bankcall' in R.kinds:
+            heap.append((2, repr(e), e, 'bank-call'))
+        elif 'bankhead' in R.kinds:
+            heap.append((2, repr(e), e, 'bank-header'))
     heapq.heapify(heap)
     while heap:
         r, _k, e, how = heapq.heappop(heap)
@@ -2209,6 +2536,10 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
             add_site(n, ins, 'target_unresolved', h4(target) if target is not None else '', 'unresolved', str(why))
         else:
             add_site(n, ins, 'indirect_unresolved', '', 'unresolved', '%s with target %s' % (via, why))
+    for (n, name) in sorted(sc.fw_stops, key=lambda x: (node_off(x[0]) or 0, nkey(x[0]), x[1])):
+        if n in sc.ctx:
+            add_site(n, sc.decode_node(n), 'fw_stop', name, 'framework',
+                     'patched image: the path ends at this framework call form')
     for (n, via, v) in sc.indirect_resolved:
         if n in sc.ctx and not any(x['kind'] == 'indirect_resolved' and x['addr'] == n[1] and x['target'] == h4(v) for x in sites):
             add_site(n, sc.decode_node(n), 'indirect_resolved', h4(v), 'flow', via + ' with a constant target')
@@ -2259,6 +2590,29 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
     bev = ByteEvidence(sc, rom, code)
     unreached = io_byte_scan(sc, rom, code, bev)
     unreached += mapper_byte_scan(sc, rom, code, bev)
+
+    # Evidence only adds up: a site that only medium paths reach keeps the high
+    # rating the byte scans give it when the code those paths reach is left out.
+    strong = {}
+    for n in sc.ctx:
+        if provenance(n)[0] > 1:
+            continue
+        ins = sc.decode_node(n)
+        for i in range(len(ins.raw)):
+            o = sc.off_of(n[0], (n[1] + i) & 0xFFFF)
+            if o is not None:
+                strong.setdefault(o, 'op' if i == 0 else 'arg')
+    weak = [x for x in sites if x['confidence'] == 'medium' and isinstance(x['offset'], int)]
+    if weak:
+        sbev = ByteEvidence(sc, rom, strong)
+        rated = {(r['offset'], r['insn']): r for r in io_byte_scan(sc, rom, strong, sbev) + mapper_byte_scan(sc, rom, strong, sbev)
+                 if r['confidence'] == 'high'}
+        for x in weak:
+            r = rated.get((x['offset'], x['insn']))
+            if r is not None:
+                x['confidence'] = 'high'
+                x['how'] += ' + byte pattern'
+                x['note'] = '; '.join(v for v in (x['note'], r['note']) if v)
 
     # log comparison
     static_io = set(x['addr'] for x in sites if x['kind'] in ('in', 'out', 'in_c', 'out_c', 'block_in', 'block_out'))
@@ -2842,6 +3196,18 @@ def nkey(n):
 
 
 TRACEDEF_OFF = [False]      # set by --no-tracedef
+
+
+def load_mknms():
+    """mknms.py, from this script's own folder, for --overlay."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import mknms
+    except ImportError as e:
+        sys.exit('sitescan: --overlay needs mknms.py next to sitescan.py (%s)' % e)
+    return mknms
 
 
 def load_tracedef():
@@ -4010,7 +4376,7 @@ def rule_inline(res, rom, mapper, args):
         if not new:
             break
         extra += new
-        sc2 = Scanner(rom, mapper, args.unroll)
+        sc2 = Scanner(rom, mapper, args.unroll, sc.fw)
         sc2.run(seeds + [(m, 'table') for m in extra])
         cur = sc2
         rescans += 1
@@ -4867,7 +5233,7 @@ def rule_rle(res):
     return rows, text
 
 
-def pattern_rules(res, rom, mapper, args):
+def pattern_rules(res, rom, mapper, args, inline_only=False):
     out = {'rows': [], 'sections': []}
     for title, fn in (('Inline jump tables (an RST or CALL that adds 2*A to its return address and jumps '
                        'through the word there)', lambda: rule_inline(res, rom, mapper, args)),
@@ -4876,6 +5242,8 @@ def pattern_rules(res, rom, mapper, args):
                       ('Column and rectangle streamers (a loop with a VDP control write pair, data writes '
                        'and an address step of $40)', lambda: rule_streamers(res)),
                       ('Sega planar RLE decoders (core 7E 23 B7 C8 4F E6 7F 47)', lambda: rule_rle(res))):
+        if inline_only and out['sections']:
+            break               # --overlay: rule 1 finds sites; rules 2-4 need the cost model
         rows, text = fn()
         out['rows'] += rows
         out['sections'].append((title, rows, text))
@@ -4953,6 +5321,18 @@ def write_outputs(res, rom, crc, header, name, args):
        '' if sc.converged else ' (did not converge, results are from the last round)', res['n_extra']))
     if TRACEDEF_OFF[0]:
         w('WARNING: run with --no-tracedef; trace and run forms are not costed, so the costs differ from the overlay builder\'s')
+    if res.get('overlay'):
+        w('Patched image: %s (%d patch operations) applied to the cart. The frame cost model and pattern rules 2-4 '
+          'are not run on it.' % (os.path.basename(res['overlay'][0]), res['overlay'][1]))
+        w('Framework call forms decoded:')
+        for k in sorted(sc.fw_used):
+            w('  %-34s %d' % (k, len(sc.fw_used[k])))
+        if not sc.fw_used:
+            w('  none on the code paths found')
+        stops = [r for r in res['sites'] if r['kind'] == 'fw_stop']
+        w('Paths that end at a framework call form (kind fw_stop): %d' % len(stops))
+        for r in stops:
+            w('  %s bank %s  %-34s %s' % (h4(r['addr']), r['bank'], r['insn'], r['how']))
     w('')
     io = [r for r in res['sites'] if r['kind'] in ('out', 'in', 'out_c', 'in_c', 'block_out', 'block_in')]
     w('I/O instructions found on code paths: %d' % len(io))
@@ -5022,9 +5402,22 @@ def write_outputs(res, rom, crc, header, name, args):
     if getattr(sc, 'harvested', None):
         w('Entry points taken from code addresses stored into RAM (pointer harvest, medium confidence):')
         for k in sc.harvested:
+            if k in sc.bank_calls or k in sc.bank_headers:
+                continue
             src = sc.harvest_src.get(k)
             sins = sc.decode_node(src) if src else None
             w('  %s bank %s, stored by %s %s' % (h4(k[1]), k[0][2], h4(src[1]) if src else '?', sins.text if sins else ''))
+        w('')
+    if getattr(sc, 'harvested', None) and sc.bank_calls & set(sc.harvested):
+        w('Entry points called right after a constant bank switch that no path reached (bank call, medium confidence):')
+        for k in sc.harvested:
+            if k in sc.bank_calls:
+                src = sc.harvest_src[k]
+                w('  %s bank %s, after %s %s' % (h4(k[1]), k[0][2], h4(src[1]), sc.decode_node(src).text))
+        w('')
+    if getattr(sc, 'harvested', None) and sc.bank_headers & set(sc.harvested):
+        w('Entry points in module headers, a run of JP at the start of a bank (bank header, medium confidence):')
+        w('  ' + ' '.join('%s bank %s' % (h4(k[1]), k[0][2]) for k in sc.harvested if k in sc.bank_headers))
         w('')
     if getattr(sc, 'harvest_rejected', None):
         w('Harvested addresses rejected because the code reached from them looks like data: ' +

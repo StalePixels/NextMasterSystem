@@ -32,10 +32,12 @@ Options:
 | `--cdl FILE` | A Mesen2 code/data log (`CDLv2`). |
 | `--mapper auto\|sega\|codemasters` | Mapper model. `auto` (the default) uses the Codemasters model only when the cart has proven Codemasters-style stores and no proven Sega mapper store. |
 | `--name NAME` | Prefix for the output files. Default: the cart file name. |
-| `--no-harvest` | Do not use code addresses found in stores to RAM as entry points (see below). |
+| `--no-harvest` | Do not use code addresses found in stores to RAM, bank calls or bank headers as entry points (see below). |
 | `--unroll N` | Distinct register states kept per instruction before they are merged. Default 8. |
 | `--no-tracedef` | Run without `tracedef.py`. By default the scanner imports `tracedef.py` from the folder that holds `sitescan.py` and stops with an error when it is missing. With this flag the trace and run forms are not costed, so the costs differ from the overlay builder's; the summary says so. |
 | `--handler ADDR` or `--handler BANK:ADDR` | The game's own interrupt handler entry, hex, for the frame cost model, when $0038 reaches it only through RAM or a table. It is also scanned as an `--entry`. Repeatable. |
+| `--overlay SPEC` | Scan the cart with the patches of an overlay spec in place, described below. `mknms.py` must be next to `sitescan.py`. |
+| `--sjasmplus PATH` | The assembler for the spec's `asm` and `page` blocks, with `--overlay`. Default: `sjasmplus` on the PATH. |
 
 The output does not depend on the Python hash seed: the same cart and options give the same files on every run. Keep `tracedef.py` next to `sitescan.py` if you copy the script.
 
@@ -55,6 +57,21 @@ A dynamic log is a list of PCs that an emulator saw the game run. The scanner re
 - `*.features.json`: any JSON. Every string in a list under the key `example_pcs` or `ram_code_writer_pcs` is a PC in hex.
 
 Dynamic logs and CDL files only add entry points. The scanner first runs without them; afterwards it adds only the logged PCs that the static pass did not already reach. A log row whose instruction bytes differ from the cart's bytes at that PC is dropped, and the summary says how many were dropped. A log from another cart therefore does nothing harmful, but `--logdir` on a directory that holds several carts' logs will still read them all.
+
+### The patched image (`--overlay`)
+
+With `--overlay SPEC`, the scanner shows which sites the patched game still runs as SMS I/O instructions or mapper stores. It reads the spec with `mknms.py`, writes the patch operations into a copy of the cart, and scans that copy. A site that the copy still reaches is not covered by the spec. A site inside a routine that the spec replaces is covered, because the copy no longer reaches it.
+
+The scan first runs on the plain cart, for the mapper model and for the code that the plain cart's static pass reaches. Then it scans the copy:
+
+- The game starts at the spec's `start` address, or at $0000 when the spec has none.
+- An `RST` to a vector that holds `JP` to a jump table entry, and a `CALL` to an address in $E000-$E07A, are framework calls. The scanner reads the inline bytes after them as the framework does, steps the instruction they stand for, so that the bank state follows the mapper stores, and goes on where the framework returns. A far call into a code page goes on after its page and entry bytes, with every register and the banks unknown afterwards. A trace form goes on after its inline code, because the framework runs the game's own code from there.
+- A `JP` or `CALL` to `jt_io0` ($E018), and a jump to $0000 when the vector there is `JP jt_io0`, is a reset to the `start` address.
+- A framework call that the scanner cannot follow ends the path. The cases are: the loader entries `jt_start` and `fw_resume`, `jt_fatal`, an inline code that the framework stops on, an address in $E000-$E07A that is not an entry, and a `JP` to any entry other than `jt_io0`. Each one is a `fw_stop` row, and the summary lists them. A site after one of them can be missing from the scan.
+- The search for bank calls (see "How it works") matches its byte pattern in the cart as dumped. In the copy the bank switch is a framework call that does the same switch.
+- Log rows are checked against the cart as dumped. A logged PC that the plain cart's static pass reaches is not a seed: the patches decide whether it still runs.
+
+The frame cost model and pattern rules 2 to 4 do not run on the copy. The summary counts the framework calls of each kind that the paths reached.
 
 ## Output files
 
@@ -101,6 +118,7 @@ Kinds:
 | `mailbox_race` | Pattern rule 2: the second of two foreground stores to a mailbox byte. `target` is the mailbox address. |
 | `streamer` | Pattern rule 3: the head of a loop that streams a column or rectangle to the VDP. `target` is the routine. |
 | `rle_decoder` | Pattern rule 4: a copy of the Sega planar RLE decoder core. `target` is `core`, `variant` or `variant-de`. |
+| `fw_stop` | With `--overlay`: a framework call where the path ends. `target` names the form. |
 
 Port classes follow the SMS decoding of address lines A7, A6 and A0: `memory_control`, `io_control`, `unmapped_read`, `psg`, `v_counter`, `h_counter`, `vdp_data`, `vdp_control`, `vdp_status`, `joypad_a`, `joypad_b_misc`, `no_effect` (a write to $C0-$FF), `fm_address`, `fm_data` and `fm_control` for writes to $F0-$F2, and `fm_detect` for a read of $F2.
 
@@ -109,7 +127,8 @@ Port and value notes in `target`: a plain value was proven inside the routine. `
 Confidence and `how`:
 
 - `high`: reached by proven control flow from the vectors or a `--entry` (`how` is `static`), or from a dynamic log or CDL entry point (`log-seed`, `cdl-seed`).
-- `medium`: reached only through something the scanner inferred: a jump table whose length it guessed (`+table`), or an address harvested from a store to RAM (`pointer-harvest`).
+- `medium`: reached only through something the scanner inferred: a jump table whose length it guessed (`+table`), an address harvested from a store to RAM (`pointer-harvest`), a call after a bank switch that no path reached (`bank-call`), or a module header at the start of a bank (`bank-header`).
+- A `medium` site is raised to `high` when the byte scans rate it `high` with the code that only `medium` paths reach left out: evidence adds up, it never lowers a rating. `how` then ends in ` + byte pattern`, and `note` holds the byte scan evidence.
 - `io_unreached` and `mapper_unreached` rows have their own scale, described under "Byte scans". The `how` of an `io_unreached` row is `byte pattern in bytes no path reached`; of a `mapper_unreached` row, `byte scan, no path reached it`.
 - `+seen-in-log` is added when a dynamic log also has that PC.
 
@@ -119,7 +138,7 @@ Stores through HL, DE, BC, IX or IY, and block copies, whose address the scanner
 
 ### `NAME.summary.txt`
 
-The same results, readable: the constant banks the code writes to $FFFE and $FFFF, I/O sites by port function, mapper and Codemasters stores, unproven-store counts by reason and register, RST vectors, RAM copies, tables, unresolved transfers, harvested entry points (with the instruction that stored each one), harvested addresses that were rejected, paths that stopped on bytes that do not look like code, overlapping decodes, unreached I/O patterns, mapper stores found by the byte scan, coverage per bank, a comparison with the dynamic logs when logs were given, and the frame cost findings (below).
+The same results, readable: the constant banks the code writes to $FFFE and $FFFF, I/O sites by port function, mapper and Codemasters stores, unproven-store counts by reason and register, RST vectors, RAM copies, tables, unresolved transfers, harvested entry points (with the instruction that stored each one), bank call entries (with the bank switch before each one), bank header entries, harvested addresses that were rejected, paths that stopped on bytes that do not look like code, overlapping decodes, unreached I/O patterns, mapper stores found by the byte scan, coverage per bank, a comparison with the dynamic logs when logs were given, and the frame cost findings (below).
 
 ### `NAME.cost.tsv`
 
@@ -173,6 +192,12 @@ Code copied to RAM: an `LDIR`/`LDDR` with a proven ROM source, RAM destination a
 Task switches: a `RET` that runs after `LD SP,HL`, `LD SP,IX`, `LD SP,IY` or `LD SP,(nn)` loaded SP with a value the scanner does not know goes to an address on another stack. Task schedulers switch tasks this way. The scanner does not follow such a `RET`; it lists it with the unresolved indirect jumps, with the `LD SP` instructions of its routine.
 
 Pointer harvest: a constant code-like address that the code stores into RAM ($C000-$FFFF), with `LD (nn),HL` and similar, or as two byte stores into a structure field that some `JP (HL)` in the cart jumps through, becomes an entry point. In a cart with a task switch, the entries of a word table in ROM also become entry points when the code stores a word read from that table into RAM: a task scheduler starts a task by putting its start address, from a table of task entry points, on the task's stack. The table is read as a jump table is. Outside carts with a task switch, a table word stored to RAM is usually a data pointer, so it is not harvested. A harvested address is refused when the store writes several different values, when both bytes are equal ($0909 and the like), when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a harvested entry is dropped again if the code reached from it hits an invalid opcode, a jump into RAM or slot 2 that cannot be resolved, or an I/O port SMS games do not use. A task entry from a table is not dropped for a jump or call into RAM, because games call code they copied to RAM. Harvested code is `medium` confidence.
+
+Bank calls: in slot 0 or slot 1, the bytes `LD A,n`, then `LD ($FFFF),A`, then `CALL nn` or `JP nn` with nn in $8000-$BFFF, at a place no path reached, make nn in bank n an entry point. A `LD (nn),A` to RAM between the first two (a copy of the bank number) is allowed. Games start a module this way from a handler that is reached only through RAM. Only this exact byte form is found.
+
+Bank headers: a bank that starts with two or more `JP nn`, every nn in $8000-$BFFF, is a module with its entries at the start of the bank. Each of those `JP` instructions is an entry point in that bank, whatever way the caller picks the bank.
+
+The target of a bank call or a bank header entry must decode as at least two valid instructions; a `JP nn` there is followed to nn, so a header entry counts. Both kinds go through the same checks as harvested entries after a scan, and are `medium` confidence.
 
 Bytes that are not code: a path stops at an invalid opcode, at `RST $38` followed by $FF (erased fill), at a literal store into $0000-$7FFF other than $0000 and $4000, and at `LD SP,nn` with nn in ROM. The summary lists each place a path stopped and why.
 
@@ -332,6 +357,8 @@ The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; O
 - Rule 1 finds a dispatcher by its instruction shape; a dispatcher that branches before the jump is missed. Its table end rules are guesses like the main scan's, and a table read too long adds data as code (rows with `how` `inline-table` from such tables are noise).
 - Rule 2 sees only stores whose address the scanner proves. Its times are shortest paths, so a pair it reports may never run that close, and its SMS times are too low.
 - Rule 3 misses a loop whose address step comes from a table or from RAM.
+- With `--overlay`, the code pages of the spec are not scanned. A far call is taken to return, as the format requires, and code that only a page reaches is not found.
+- With `--overlay`, a byte-scan row in the copy can be code that the patches cut off. The plain scan shows whether a path reached it.
 - Interrupt mode 2 vectors are not followed. Only $0000, $0038 and $0066 are vector entry points.
 - The frame cost model does not follow jumps through tables whose length is a guess, so a handler that dispatches its frame work through a table is undercounted. It does not count the engine's own frame work (tile conversion, sprites, copper list), the trace builds (about 13,800 cycles the first time a trace site runs, and again for a copy after the code area fills), or the VRAM region of a write. A routine that drops its return address and jumps back into its caller's code is counted as returning to the caller as well.
 
