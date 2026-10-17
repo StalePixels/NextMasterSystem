@@ -696,7 +696,8 @@ class Summary:
 
 
 DEFAULT_SUMMARY = Summary()
-UNKNOWN_ENTRY_KINDS = {'vector', 'cmdline', 'table', 'log', 'cdl', 'ram', 'harvest', 'bankcall', 'bankhead'}
+UNKNOWN_ENTRY_KINDS = {'vector', 'cmdline', 'table', 'log', 'cdl', 'ram', 'harvest', 'bankcall', 'bankhead',
+                       'htable', 'hstore', 'hspawn'}
 STRONG_SEEDS = {'vector', 'cmdline'}
 MAX_ROUNDS = 15
 
@@ -717,6 +718,7 @@ class Scanner:
         self.bank_calls = set()
         self.bank_headers = set()
         self.task_entries = set()
+        self.handler_kind = {}       # handler entry node -> 'htable', 'hstore' or 'hspawn'
         self.struct_dispatch = set()
         self.slot1_banked_prev = False
         self.slot1_banked_cur = False
@@ -1172,6 +1174,9 @@ class Scanner:
             bank1 = region[2]
         else:
             bank1 = ('arg', 'bank1') if self.slot1_banked_prev else 1 % self.nb
+        if not isinstance(bank1, int) and R.kinds & set(HANDLER_HOW) and len(self.bank_values[1]) == 1:
+            # an object handler runs from its dispatcher: slot 1 holds the one bank the code writes there
+            bank1 = next(iter(self.bank_values[1]))
         K = self.unroll
         states = {entry: [initial_state(bank1, bank2)]}
         work = [(entry, 0)]
@@ -1630,6 +1635,15 @@ class Scanner:
             vals[3] = 0
         if not isinstance(vals[4], int) and not self._argform(vals[4]):
             vals[4] = 1
+        hl, bc = vals[1], vals[2]
+        if isinstance(hl, int) and isinstance(bc, int):
+            lo, hi = (hl - (bc or 0x10000) + 1, hl) if name == 'LDDR' else (hl, hl + (bc or 0x10000) - 1)
+            # a source wholly in slot 0 (always bank 0) or slots 0-1 needs no slot 2 bank,
+            # and one wholly in slot 0 no slot 1 bank
+            if 0 <= lo and hi < 0x8000:
+                vals[3] = 0
+            if 0 <= lo and hi < 0x4000:
+                vals[4] = 1
         for res in self.resolve_multi(rt, vals, self.callers_cur):
             if res is None:
                 continue
@@ -1942,6 +1956,11 @@ def harvest(sc):
             sc.harvest_src[node] = words[w]
             if w in task_ws:
                 sc.task_entries.add(node)
+    for node, src, kind in handler_entries(sc, covered):
+        if node not in out:
+            out.append(node)
+            sc.harvest_src[node] = src
+            sc.handler_kind[node] = kind
     for node, src in bank_calls(sc, covered):
         if node not in out:
             out.append(node)
@@ -1979,6 +1998,8 @@ def bank_headers(sc, covered):
 
 def seed_kind(sc, k):
     """The seed kind of an entry that harvest() returned."""
+    if k in sc.handler_kind:
+        return sc.handler_kind[k]
     return 'bankcall' if k in sc.bank_calls else 'bankhead' if k in sc.bank_headers else 'harvest'
 
 
@@ -2005,6 +2026,192 @@ def code_like(sc, node, covered, follow_jp=False):
             break
         a = (a + len(ins.raw)) & 0xFFFF
     return count >= 2
+
+
+HANDLER_HOW = {'htable': 'handler-table', 'hstore': 'handler-store', 'hspawn': 'handler-spawn'}
+FLOW_STOP = {'jp', 'jr', 'djnz', 'call', 'rst', 'ret', 'reti', 'retn', 'jpind', 'bad', 'halt'}
+
+
+def _field_load(ins):
+    """(dst register, index register, d) for LD r,(IX+d) or LD r,(IY+d), else None."""
+    sem = ins.sem
+    if sem[0] == 'ld8' and isinstance(sem[1], str) and not isinstance(sem[2], str) \
+            and sem[2][0] == 'mem' and sem[2][1] in ('IX', 'IY'):
+        return sem[1], sem[2][1], sem[2][2]
+    return None
+
+
+def _field_store(ins):
+    """(index register, d, source) for LD (IX+d),r or LD (IX+d),n (IX or IY), else None."""
+    sem = ins.sem
+    if sem[0] == 'ld8' and not isinstance(sem[1], str) and sem[1][0] == 'mem' and sem[1][1] in ('IX', 'IY'):
+        return sem[1][1], sem[1][2], sem[2]
+    return None
+
+
+def handler_fields(sc):
+    """Offsets d of the record fields that hold an object's handler address.
+
+    A field is a handler field when code a path reached jumps through it:
+    LD L,(IX+d) and LD H,(IX+d+1), in either order (IX or IY), right before
+    JP (HL); or the same loads into E and D right before EX DE,HL; JP (HL).
+    Games run each object this way: the record's handler field holds the
+    address of the routine that updates it.
+    """
+    out = set()
+    for n in sc.ctx:
+        if sc.decode_node(n).sem != ('jpind', 'HL'):
+            continue
+        a, regs = n[1], ('L', 'H')
+        if (n[0], (a - 1) & 0xFFFF) in sc.ctx and sc.decode_node((n[0], (a - 1) & 0xFFFF)).sem == ('exde',):
+            a, regs = a - 1, ('E', 'D')
+        loads = {}
+        for b in ((a - 6) & 0xFFFF, (a - 3) & 0xFFFF):
+            m = (n[0], b)
+            if m not in sc.ctx:
+                break
+            f = _field_load(sc.decode_node(m))
+            if f is None or len(sc.decode_node(m).raw) != 3:
+                break
+            loads[f[0]] = f[1:]
+        lo, hi = loads.get(regs[0]), loads.get(regs[1])
+        if lo and hi and lo[0] == hi[0] and hi[1] == lo[1] + 1:
+            out.add(lo[1])
+    return out
+
+
+def _table_region(sc, base, s):
+    """The region to read a table at cpu address base in state s, or None when its bank is unknown."""
+    slot = base >> 14
+    if slot == 0:
+        return sc.region_for(0, 0)
+    if slot == 1:
+        b = s['bank1']
+        if isinstance(b, int):
+            return sc.region_for(1, b)
+        return None if sc.slot1_banked_prev else sc.region_for(1, 1)
+    if slot == 2 and isinstance(s['bank2'], int):
+        return sc.region_for(2, s['bank2'])
+    return None
+
+
+def handler_entries(sc, covered):
+    """Object handlers stored into a handler field (handler_fields()) by code a path reached.
+
+    The low and high byte stores, LD (X+d),r and LD (X+d+1),r with X IX or IY and d a
+    handler field, in either order and at most four straight-line instructions apart,
+    store a word:
+    - a constant (LD (IX+d),n twice, or the halves of LD HL,nn): the handler ('hstore');
+    - a word read from a table in ROM at a constant base with an index added
+      (LD HL,table; ADD HL,BC; ADD HL,BC; LD A,(HL); INC HL; LD A,(HL)): every entry of
+      the table is a handler ('htable'). The table is read as a jump table is
+      (Scanner.table_targets()), so it ends at the first entry that is not code;
+    - a register pair the routine was called with (a spawn routine that stores the DE
+      its caller loaded): the constant each caller passes ('hspawn').
+    A call of a routine that jumps to its caller's HL (a call through HL), with HL a word
+    read from such a table, also makes every entry of the table a handler ('htable').
+    A handler runs later, from the dispatcher, so the slot 1 bank at the store does not
+    name its bank. When the slot 1 bank is unknown there and the code writes one constant
+    bank to $FFFE and no other, a target in slot 1 is in that bank.
+    Returns [(node, store node, kind)] for targets no path reached that decode as code.
+    """
+    fields = handler_fields(sc)
+    found = []
+    seen = set()
+    one_bank1 = next(iter(sc.bank_values[1])) if len(sc.bank_values[1]) == 1 else None
+
+    def add(w, rt, n, s, kind):
+        if not isinstance(w, int) or w >= 0xC000 or (w >> 8) == (w & 0xFF):
+            return
+        nodes, _why = sc.resolve_target(rt, n, w, s)
+        for (m, _h) in nodes:
+            if m not in seen and code_like(sc, m, covered):
+                seen.add(m)
+                found.append((m, n, kind))
+
+    def table(base, rt, n, s):
+        if not isinstance(base, int) or base >= 0xC000:
+            return
+        region = _table_region(sc, base, s)
+        if region is None:
+            return
+        ents, _nbytes = sc.table_targets(rt, n, region, base, s)
+        for (w, _nodes) in ents:
+            add(w, rt, n, s, 'htable')
+
+    def known1(s):
+        return s if isinstance(s['bank1'], int) or one_bank1 is None else dict(s, bank1=one_bank1)
+
+    for n in sorted(sc.ctx, key=repr):
+        ins = sc.decode_node(n)
+        f = _field_store(ins)
+        if f is None or f[1] not in fields:
+            continue
+        # n stores the low byte; find the high byte store after it, or before it
+        pair = None
+        for direction in (1, -1):
+            path, a = [n], n[1]
+            for _ in range(4):
+                if direction == 1:
+                    a = (a + len(sc.decode_node((n[0], a)).raw)) & 0xFFFF
+                    m = (n[0], a)
+                else:
+                    m = next(((n[0], (a - k) & 0xFFFF) for k in (4, 3, 2, 1)
+                              if (n[0], (a - k) & 0xFFFF) in sc.ctx
+                              and (a - k + len(sc.decode_node((n[0], (a - k) & 0xFFFF)).raw)) & 0xFFFF == a), None)
+                    if m is None:
+                        break
+                    a = m[1]
+                if m not in sc.ctx:
+                    break
+                mi = sc.decode_node(m)
+                if mi.sem[0] in FLOW_STOP:
+                    break
+                path.append(m)
+                g = _field_store(mi)
+                if g is not None and g[0] == f[0] and g[1] == f[1] + 1:
+                    pair = path if direction == 1 else path[::-1]
+                    break
+            if pair:
+                break
+        if not pair:
+            continue
+        first, last = pair[0], pair[-1]
+        lo_node, hi_node = n, (last if direction == 1 else first)
+        for (rt, s, _h) in sc.ctx[first]:
+            st, vals = s, {}
+            for k in pair:
+                ki = sc.decode_node(k)
+                if k in (lo_node, hi_node):
+                    vals[k] = sc.g8(st, _field_store(ki)[2])
+                if k != last:
+                    st = sc.step(st, ki)
+            lo, hi = vals[lo_node], vals[hi_node]
+            w = combine(hi, lo)
+            s = known1(s)
+            if isinstance(w, int):
+                add(w, rt, n, s, 'hstore')
+            elif isinstance(w, tuple) and w[0] == 'word':
+                table(w[1], rt, n, s)
+            elif sc._argform(w):
+                for res in sc.resolve_multi(rt, [w], sc.callers_prev):
+                    if res is not None:
+                        add(res[0], rt, n, s, 'hspawn')
+    # a call through HL with HL a word read from a table
+    for n in sorted(sc.ctx, key=repr):
+        ins = sc.decode_node(n)
+        if ins.sem[0] != 'call' or not isinstance(ins.sem[1], int):
+            continue
+        for (rt, s, _h) in sc.ctx[n]:
+            nodes, _why = sc.resolve_target(rt, n, ins.sem[1], s)
+            for (callee, _hh) in nodes:
+                d = sc.summary(callee).dispatch
+                if not (isinstance(d, tuple) and d[0] == 'jparg' and d[2] == 0):
+                    continue
+                v = pget(s, d[1])
+                if isinstance(v, tuple) and v[0] == 'word':
+                    table(v[1], rt, n, known1(s))
+    return found
 
 
 def bank_calls(sc, covered):
@@ -2036,6 +2243,28 @@ def bank_calls(sc, covered):
     return out
 
 
+def starts_without_handlers(sc):
+    """Cart offsets of the instructions that routines reach from every seed but the object
+    handler entries. Code that only a handler entry reaches stays open to the dynamic logs,
+    so a logged PC there is still a log seed (high confidence)."""
+    seeds = {'vector', 'cmdline', 'harvest', 'bankcall', 'bankhead'}
+    adj = {}
+    for (a, b, _h) in sc.rt_edges:
+        adj.setdefault(a, []).append(b)
+    todo = [e for e, R in sc.routines.items() if R.kinds & seeds]
+    done = set(todo)
+    while todo:
+        for m in adj.get(todo.pop(), []):
+            if m not in done:
+                done.add(m)
+                todo.append(m)
+    out = set()
+    for e in done:
+        for n in sc.routines[e].nodes:
+            out.add(sc.off_of(n[0], n[1]))
+    return out
+
+
 def scan(rom, mapper, args):
     sc = Scanner(rom, mapper, args.unroll)
     seeds = [((sc.region_for(0, 0), a), 'vector') for a in (0x0000, 0x0038, 0x0066) if a < len(rom)]
@@ -2052,15 +2281,20 @@ def scan(rom, mapper, args):
         for _ in range(8):
             new = [k for k in harvest(sc) if k not in harvested and k not in rejected]
             dirty = [k for k in harvested if harvest_dirty(sc, k)]
-            if not new and not dirty:
+            # an entry whose store is in code no longer reached (code of a rejected entry) has lost its evidence
+            stale = [k for k in harvested if k not in dirty and k not in sc.bank_calls
+                     and sc.harvest_src.get(k) is not None and sc.harvest_src[k] not in sc.ctx]
+            if not new and not dirty and not stale:
                 break
             for k in dirty:
                 harvested.remove(k)
                 rejected.append(k)
+            for k in stale:
+                harvested.remove(k)
             harvested += new
             sc.run(seeds + [(k, seed_kind(sc, k)) for k in harvested])
         seeds = seeds + [(k, seed_kind(sc, k)) for k in harvested]
-        static_starts = set(sc.off_of(x[0], x[1]) for x in sc.ctx)
+        static_starts = starts_without_handlers(sc)
     sc.harvest_rejected = rejected
 
     # dynamic seeds: only the PCs that static analysis did not reach
@@ -2154,6 +2388,8 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
             heap.append((2, repr(e), e, 'bank-call'))
         elif 'bankhead' in R.kinds:
             heap.append((2, repr(e), e, 'bank-header'))
+        elif R.kinds & set(HANDLER_HOW):
+            heap.append((2, repr(e), e, HANDLER_HOW[min(R.kinds & set(HANDLER_HOW))]))
     heapq.heapify(heap)
     while heap:
         r, _k, e, how = heapq.heappop(heap)
@@ -2566,6 +2802,15 @@ def io_byte_scan(sc, rom, code, bev):
         conf, ev = bev.rate(o, None, setter, relative=True)
         if conf == 'high' and not setter and not any(e.endswith('bytes of valid code before it') for e in ev):
             conf = 'medium'     # only a branch points at it, and data can supply one
+        if b0 == 0xED and b1 == 0xA3 and conf != 'high':
+            # An unrolled OUTI block is entered at a computed address: the OUTIs before the
+            # first one a path reached are code when an unbroken run of OUTI leads to it.
+            p = o + 2
+            while p + 1 < len(rom) and p >> 14 == o >> 14 and p not in code and rom[p] == 0xED and rom[p + 1] == 0xA3:
+                p += 2
+            if code.get(p) == 'op' and p + 1 < len(rom) and rom[p] == 0xED and rom[p + 1] == 0xA3:
+                conf = 'high'
+                ev = ['in an unrolled OUTI run that reaches code at $%05X' % p] + [e for e in ev if 'looks like data' not in e]
         if port_c == 'very-low':
             conf = 'very-low'   # a port SMS games do not use: data, whatever the bytes around it look like
             ev.insert(0, 'port not used by SMS games')
@@ -4917,6 +5162,38 @@ def _pass_step(sc, fc, e, L):
 
 RLE_CORE = bytes.fromhex('7E23B7C84FE67F47')
 RLE_CORE_DE = bytes.fromhex('1A13B7C8')      # the same core reading the stream through DE (Hang On)
+RLE_JRZ_HEAD = bytes.fromhex('7E23B728')     # the core with JR Z,exit for RET Z (Castle of Illusion) ...
+RLE_JRZ_TAIL = bytes.fromhex('4FE67F47')     # ... then LD C,A; AND $7F; LD B,A
+
+
+def _rle_jrz_loop(rom, j):
+    """True when the JR Z core at offset j is the head of a decoder loop: the
+    code from the core to the JR Z target decodes in a run, holds a jump back
+    to the head, BIT 7,C (the literal or run choice), a count down of B
+    (DJNZ or DEC B) and an OUT to the VDP data port."""
+    d = rom[j + 4]
+    end = j + 5 + (d - 256 if d >= 128 else d)
+    if end <= j + 9:
+        return False
+    bank = j >> 14
+    head = (j & 0x3FFF) | (0x8000 if bank >= 2 else bank * 0x4000)
+    back = bits7 = count = data = False
+    o = j + 9
+    while o < end:
+        ins = decode(lambda i, o=o: rom[o + i] if o + i < len(rom) else None, head + o - j)
+        if ins is None or not ins.raw:
+            return False
+        sem = ins.sem
+        if sem[0] in ('jp', 'jr', 'djnz') and isinstance(sem[1], int) and (sem[1] & 0x3FFF) == (head & 0x3FFF):
+            back = True
+        if sem[0] == 'djnz' or ins.text == 'DEC B':
+            count = True
+        if ins.text == 'BIT 7,C':
+            bits7 = True
+        if sem[0] == 'outn' and port_class(sem[1], 'out') == 'vdp_data':
+            data = True
+        o += len(ins.raw)
+    return back and bits7 and count and data
 
 
 def rule_rle(res):
@@ -4939,6 +5216,11 @@ def rule_rle(res):
             if not any(o == j for o, _k in hits) and 0xE6 in rom[j + 4:j + 8] and rom[rom.index(0xE6, j + 4) + 1] == 0x7F:
                 hits.append((j, form))
             j = rom.find(head, j + 1)
+    j = rom.find(RLE_JRZ_HEAD)
+    while j >= 0:
+        if rom[j + 5:j + 9] == RLE_JRZ_TAIL and _rle_jrz_loop(rom, j):
+            hits.append((j, 'jr-z'))
+        j = rom.find(RLE_JRZ_HEAD, j + 1)
     rows, text = [], []
     vec_ctrl = set(v for v in range(0, 0x40, 8) if rom[v:v + 2] == b'\xD3\xBF')
     for o, form in sorted(hits):
@@ -4992,6 +5274,102 @@ def rule_rle(res):
     return rows, text
 
 
+
+# ---- rule 5: H scroll from a table in the interrupt handler
+
+def _vdp_ctrl_out(sc, n):
+    ins = sc.decode_node(n)
+    return ins is not None and ins.sem[0] == 'outn' and port_class(ins.sem[1], 'out') == 'vdp_control'
+
+
+def _code_stores(sc):
+    """Proven store addresses anywhere in the code: address -> store nodes."""
+    out = {}
+    for n in sc.ctx:
+        sem = sc.decode_node(n).sem
+        if sem[0] == 'ld8' and not isinstance(sem[1], str):
+            for (rt, st, _h) in sc.ctx[n]:
+                for a in _mem_addrs(sc, rt, st, sem[1]):
+                    out.setdefault(a, set()).add(n)
+        elif sem[0] == 'st16':
+            for a in (sem[1], (sem[1] + 1) & 0xFFFF):
+                out.setdefault(a, set()).add(n)
+    return out
+
+
+def rule_raster(res):
+    """Interrupt code that writes VDP register 8 (H scroll) with a byte read
+    from an address that changes from one interrupt to the next."""
+    sc, fc = res['sc'], res['cost']['fc']
+    stores = None
+    found = {}
+    for e in sorted(fc.irq_set, key=nkey):
+        R = sc.routines[e]
+        d = fc.dedges(R)
+        preds = {}
+        for n, es in d.items():
+            for (m, _t) in es:
+                preds.setdefault(m, set()).add(n)
+        for n in d:
+            if not _vdp_ctrl_out(sc, n):
+                continue
+            a = set(st['A'] for (rt, st, _h) in sc.ctx.get(n, ()) if rt == e)
+            if a != {0x88}:
+                continue
+            # LD A,src; OUT ($BF),A; LD A,$88; OUT ($BF),A
+            for p1 in preds.get(n, ()):
+                if sc.decode_node(p1).sem != ('ld8', 'A', ('imm', 0x88)):
+                    continue
+                for p2 in preds.get(p1, ()):
+                    if not _vdp_ctrl_out(sc, p2):
+                        continue
+                    for m in preds.get(p2, ()):
+                        ins = sc.decode_node(m)
+                        sem = ins.sem
+                        if sem[0] != 'ld8' or sem[1] != 'A' or isinstance(sem[2], str) or sem[2][0] not in ('mem', 'abs'):
+                            continue
+                        o = sem[2]
+                        how = None
+                        if o[0] == 'mem':
+                            addrs, unknown = set(), False
+                            for (rt, st, _h) in sc.ctx.get(m, ()):
+                                if rt != e:
+                                    continue
+                                v = _mem_addrs(sc, rt, st, o)
+                                addrs |= v
+                                unknown |= not v
+                            if unknown or len(addrs) > 1:
+                                how = 'pointer'
+                                what = '%s from %s' % (ins.text, 'a pointer the scanner cannot prove' if unknown else
+                                                      ' '.join(h4(x) for x in sorted(addrs)))
+                        elif m[0][0] == 'ram':
+                            if stores is None:
+                                stores = _code_stores(sc)
+                            ops = sorted(set(x for b in (m[1] + 1, m[1] + 2) for x in stores.get(b & 0xFFFF, ())),
+                                         key=lambda x: (sc.off_of(x[0], x[1]) or 0, nkey(x)))
+                            if ops:
+                                how = 'patched address'
+                                what = '%s, its address written by %s' % (
+                                    ins.text, ' '.join('%s(%s) %s' % (h4(x[1]), fmt_off(sc.off_of(x[0], x[1])),
+                                                                      sc.decode_node(x).text) for x in ops))
+                        if how is None or m in found:
+                            continue
+                        vc = sorted((x for x in d if sc.decode_node(x).sem[0] == 'inn' and
+                                     port_class(sc.decode_node(x).sem[1], 'in') == 'v_counter'), key=nkey)
+                        found[m] = (e, n, how, what, vc)
+    rows, text = [], []
+    for m, (e, n, how, what, vc) in sorted(found.items(), key=lambda x: (sc.off_of(x[0][0], x[0][1]) or 0, nkey(x[0]))):
+        ins = sc.decode_node(m)
+        note = ('H scroll (VDP register 8) from a table: %s; register write at %s(%s); interrupt routine %s; %s; '
+                'the spec may need a rastercode routine' %
+                (what, h4(n[1]), fmt_off(sc.off_of(n[0], n[1])), h4(e[1]),
+                 ('reads the V counter at ' + ' '.join(h4(x[1]) for x in vc)) if vc else 'no V counter read'))
+        rows.append({'addr': m[1], 'bank': node_bank_s(m), 'offset': sc.off_of(m[0], m[1]), 'bytes': ins.hexbytes(),
+                     'insn': ins.text, 'kind': 'raster_hscroll', 'target': h4(e[1]), 'class': how,
+                     'confidence': 'high', 'how': 'static', 'note': note})
+        text.append('  %s bank %s: %s' % (h4(m[1]), node_bank_s(m), note))
+    return rows, text
+
 def pattern_rules(res, rom, mapper, args):
     out = {'rows': [], 'sections': []}
     for title, fn in (('Inline jump tables (an RST or CALL that adds 2*A to its return address and jumps '
@@ -5000,7 +5378,10 @@ def pattern_rules(res, rom, mapper, args):
                        'foreground plain stores)', lambda: rule_mailbox(res)),
                       ('Column and rectangle streamers (a loop with a VDP control write pair, data writes '
                        'and an address step of $40)', lambda: rule_streamers(res)),
-                      ('Sega planar RLE decoders (core 7E 23 B7 C8 4F E6 7F 47)', lambda: rule_rle(res))):
+                      ('Sega planar RLE decoders (core 7E 23 B7 C8 4F E6 7F 47, or JR Z,exit for RET Z)',
+                       lambda: rule_rle(res)),
+                      ('Raster H scroll (interrupt code that writes VDP register 8 from a table)',
+                       lambda: rule_raster(res))):
         rows, text = fn()
         out['rows'] += rows
         out['sections'].append((title, rows, text))
@@ -5012,7 +5393,7 @@ def write_rules(res, w):
     if not pr:
         return
     w('Pattern rules (rows in the sites file with kinds inline_table, mailbox_race, streamer, rle_decoder, '
-      'and new sites with how inline-table):')
+      'raster_hscroll, and new sites with how inline-table):')
     for title, rows, text in pr['sections']:
         w('  %s: %d rows' % (title, len(rows)))
         for x in text:
@@ -5028,7 +5409,7 @@ def write_outputs(res, rom, crc, header, name, args):
              'cartarea_store': 3, 'rst': 4, 'rst_vector': 5, 'ram_copy': 6, 'ram_exec': 7, 'jump_table': 8,
              'indirect_resolved': 9, 'indirect_unresolved': 10, 'bank_unresolved': 11, 'target_unresolved': 12,
              'inline_unresolved': 13, 'inline_table': 14, 'mailbox_race': 16, 'streamer': 17, 'rle_decoder': 18,
-             'mapper_unreached': 19, 'io_unreached': 20}
+             'raster_hscroll': 19, 'mapper_unreached': 20, 'io_unreached': 21}
     rows = res['sites'] + res['unreached'] + res.get('rules', {}).get('rows', [])
     rows.sort(key=lambda r: (order.get(r['kind'], 15), r['offset'] if r['offset'] is not None else 1 << 30, r['addr']))
     with open(os.path.join(out, name + '.sites.tsv'), 'w') as f:
@@ -5147,11 +5528,19 @@ def write_outputs(res, rom, crc, header, name, args):
     if getattr(sc, 'harvested', None):
         w('Entry points taken from code addresses stored into RAM (pointer harvest, medium confidence):')
         for k in sc.harvested:
-            if k in sc.bank_calls or k in sc.bank_headers:
+            if k in sc.bank_calls or k in sc.bank_headers or k in sc.handler_kind:
                 continue
             src = sc.harvest_src.get(k)
             sins = sc.decode_node(src) if src else None
             w('  %s bank %s, stored by %s %s' % (h4(k[1]), k[0][2], h4(src[1]) if src else '?', sins.text if sins else ''))
+        w('')
+    if getattr(sc, 'harvested', None) and set(sc.handler_kind) & set(sc.harvested):
+        w('Entry points taken from object handler fields (handler-table, handler-store, handler-spawn; medium confidence):')
+        for k in sc.harvested:
+            if k in sc.handler_kind:
+                src = sc.harvest_src[k]
+                w('  %s bank %s, %s, from %s %s' % (h4(k[1]), k[0][2], HANDLER_HOW[sc.handler_kind[k]],
+                                                       h4(src[1]), sc.decode_node(src).text))
         w('')
     if getattr(sc, 'harvested', None) and sc.bank_calls & set(sc.harvested):
         w('Entry points called right after a constant bank switch that no path reached (bank call, medium confidence):')

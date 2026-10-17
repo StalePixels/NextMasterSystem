@@ -53,6 +53,7 @@ static const char s_none[]    = "none";
 static const char s_prio[]    = "priority tiles";
 static const char s_top[]     = "line-0 palette";
 static const char s_tc[]      = "tile cache";
+static const char s_hs[]      = "scroll split";
 static const char s_sep[]     = ", ";
 static const char s_prompt[]  = "Press any key or fire to start.";
 
@@ -163,7 +164,7 @@ static void wait_key(void)
 
 void *info_show(void *unused)
 {
-    char buf[NM_TITLE_MAX + 1];
+    char buf[64];        /* the longest value is the list of every switch */
     char *p, *q;
     const char *name;
     uint32_t size;
@@ -233,6 +234,10 @@ void *info_show(void *unused)
     if (fl & NM_FL_TILECACHE) {
         if (q != buf) q = put_str(q, s_sep);
         q = put_str(q, s_tc);
+    }
+    if (fl & NM_FL_HSPLIT) {
+        if (q != buf) q = put_str(q, s_sep);
+        q = put_str(q, s_hs);
     }
     if (q == buf) q = put_str(q, s_none);
     *q = 0;

@@ -965,3 +965,67 @@ mapst 06CB2   ; LD ($FFFF),A
 mapst 06D1F   ; LD ($FFFF),A
 mapst 06D28   ; LD ($FFFF),A
 mapst 06D36   ; LD ($FFFF),A
+# I/O instructions that the scanner finds in code that no recording ran, judged as code.
+# Object handlers are reached through the pointer table at $202B, which the object spawn
+# routine ($1E31, table read at $1E4D) indexes with the object type, and through handler
+# addresses stored with LD (IX+$1E),n and LD (IX+$1F),n or passed in DE to a spawn routine.
+# The dispatcher at $1DF3 jumps to the stored address.
+# Stage cleared screen. $0CDA calls $1D15, which spawns object type $1E; the table entry
+# for type $1E is $67F8, and its handler chain is $6826, $6924, $69D2, $6A11.
+# $0197 writes one character of a number, $6AB1 writes a string (STAGE CLEARED,
+# STAGE SCORE, TOTAL SCORE, SUPER STAGE CLEARED) with OUTI and OUT (C),A.
+site 0019E   ; OUT ($BE),A
+site 06AC0   ; OUTI
+site 06AC7   ; OUT (C),A
+# Object type $0E, handler $5604: reads name table rows back with INI and rewrites them.
+# $01B6 sets the VRAM read address for it ($561D calls it).
+site 001B8   ; OUT ($BF),A
+site 001BB   ; OUT ($BF),A
+site 05623   ; INI
+site 05634   ; INI
+site 05639   ; OUT ($BE),A
+# Tile block writers. The routine at $02D8 is entered at $02F3 from $4854 and $48AA, and at
+# $0307 from $592B. $4CA8 is called from $456A, $487F and $48F0, in the handler chain that
+# starts at $44B2, which the type $1B handler at $432C spawns. $5657 is jumped to from $3234,
+# which the type $33 handler at $31FE reaches with CALL $322C.
+site 00319   ; OUT ($BE),A
+site 0031F   ; OUT ($BE),A
+site 04CC2   ; OUT ($BE),A
+site 04CC8   ; OUT ($BE),A
+site 0567F   ; OUT ($BE),A
+site 05687   ; OUT ($BE),A
+# Bank 4 module, update entry $8003 -> $84B3. $0CC9 runs it when $CC5C is 4 ($3843 stores 4).
+# $86A0 clears a name table row, $873C reads name table rows back with IN A,($BE),
+# $9F5E rewrites the name table with bit 4 cleared.
+site 106A2   ; OUT ($BF),A
+site 106A5   ; OUT ($BF),A
+site 106AA   ; OUT ($BE),A
+site 106B1   ; OUT ($BE),A
+site 1074A   ; OUT ($BF),A
+site 10750   ; OUT ($BF),A
+site 10757   ; IN A,($BE)
+site 1075D   ; IN A,($BE)
+site 11F66   ; OUT ($BF),A
+site 11F69   ; OUT ($BF),A
+site 11F6D   ; IN A,($BE)
+site 11F74   ; OUT ($BF),A
+site 11F79   ; OUT ($BF),A
+site 11F7C   ; OUT ($BE),A
+# Bank 5 module. $CC5C is 5 after the type $1A handler ($4314); $0CC9 runs its update entry
+# $8003 -> $AD43, and $431A runs its first entry $8000 -> $AD33, which calls $B6C3.
+site 17252   ; OUT ($BF),A
+site 17258   ; OUT ($BF),A
+site 17263   ; OUT ($BE),A
+site 17269   ; OUT ($BE),A
+site 17677   ; OUT ($BF),A
+site 1767D   ; OUT ($BF),A
+site 17685   ; OUT ($BE),A
+site 1768C   ; OUT ($BE),A
+site 176A6   ; OUT ($BF),A
+site 176AC   ; OUT ($BF),A
+site 176B4   ; OUT ($BE),A
+site 176B9   ; OUT ($BE),A
+site 176C6   ; OUT ($BF),A
+site 176CA   ; OUT ($BF),A
+site 176D0   ; OUT ($BE),A
+site 176D7   ; OUT ($BE),A

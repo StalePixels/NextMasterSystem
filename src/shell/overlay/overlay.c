@@ -201,7 +201,7 @@ static uint8_t conf_is(const char *line, int16_t n, const char *s)
     return n == l && !memcmp(line, s, l);
 }
 
-/* CONF switches: priority=1, toppal=1, tilecache=1, and hz=50 or hz=60.
+/* CONF switches: priority=1, toppal=1, tilecache=1, hsplit=1, and hz=50 or hz=60.
  * Unknown keys, and hz=any, are skipped.
  * Returns 0 or a failure code. */
 static uint8_t read_conf(const struct nms *f)
@@ -217,6 +217,7 @@ static uint8_t read_conf(const struct nms *f)
         if (conf_is(line, n, "priority=1")) nm.launch.flags |= NM_FL_PRIORITY;
         if (conf_is(line, n, "toppal=1")) nm.launch.flags |= NM_FL_TOPPAL;
         if (conf_is(line, n, "tilecache=1")) nm.launch.flags |= NM_FL_TILECACHE;
+        if (conf_is(line, n, "hsplit=1")) nm.launch.flags |= NM_FL_HSPLIT;
         if (conf_is(line, n, "hz=50")) nm.launch.flags |= NM_FL_HZ;
         if (conf_is(line, n, "hz=60")) nm.launch.flags |= NM_FL_HZ | NM_FL_HZ60;
     }

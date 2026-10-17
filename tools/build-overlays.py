@@ -15,6 +15,10 @@ OUTDIR are removed first.
 
 A spec with no "cart" line, or whose cart is not in CARTDIR, is reported
 and skipped. The tool then exits with status 1, after building the rest.
+
+Every overlay that uses a library page (a libpage line) must carry the same
+bytes for it. When one does not, the tool names the two specs and exits
+with status 1.
 """
 import argparse
 import glob
@@ -65,6 +69,7 @@ def main():
         os.remove(old)
     carts = cart_crcs(a.cartdir)
     fail = 0
+    lib_first = {}   # library page name -> (spec, PAGE data) of the first spec that uses it
     for spec in sorted(glob.glob(os.path.join(a.specdir, '*.spec'))):
         crc = spec_cart(spec)
         if crc is None:
@@ -75,11 +80,19 @@ def main():
             print(f'{os.path.basename(spec)}: cart {crc:08X} not found', file=sys.stderr)
             fail = 1
             continue
+        libs = {}
         try:
-            mknms.build(spec, carts[crc], a.outdir, a.compat, a.titles, a.sjasmplus)
+            mknms.build(spec, carts[crc], a.outdir, a.compat, a.titles, a.sjasmplus, libs)
         except SystemExit as e:
             print(f'{os.path.basename(spec)}: {e}', file=sys.stderr)
             fail = 1
+        for name, data in sorted(libs.items()):
+            first, fdata = lib_first.setdefault(name, (spec, data))
+            if data != fdata:
+                print(f'{os.path.basename(spec)}: library page {name} does not have the bytes it has in '
+                      f'{os.path.basename(first)}; a library page must not use a name that a spec '
+                      f'defines differently', file=sys.stderr)
+                fail = 1
     try:
         mknmsindex.build_index(a.outdir)
     except SystemExit as e:

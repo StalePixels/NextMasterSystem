@@ -1,9 +1,13 @@
 # Changelog
 
-## Release 2 (not released yet)
+## Release 2 (unreleased)
+
+- Added compatibility with Asterix.
+- Added compatibility with Castle of Illusion Starring Mickey Mouse.
 
 - Improved compatibility with Alien Syndrome.
 - Improved compatibility with Bubble Bobble.
+- Improved compatibility with Choplifter.
 - Improved compatibility with Fantasy Zone II.
 - Improved compatibility with R-Type.
 - Improved compatibility with Space Harrier.

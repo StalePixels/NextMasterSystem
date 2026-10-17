@@ -87,6 +87,7 @@ struct nm_launch {
 #define NM_FL_TILECACHE 0x04   /* tilecache=1 */
 #define NM_FL_HZ        0x08   /* hz=50 or hz=60: the game sets the video rate */
 #define NM_FL_HZ60      0x10   /* with NM_FL_HZ: 60 Hz */
+#define NM_FL_HSPLIT    0x20   /* hsplit=1 */
 void nm_launch(struct nm_launch *p) __z88dk_fastcall;
 
 /* Leave for NextZXOS (glue.asm). Never returns. */

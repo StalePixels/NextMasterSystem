@@ -805,7 +805,7 @@ vdp_reg_w:
 		dec a
 		jp z,fallback2		; 7
 		dec a
-		jp z,hscroll_set	; 8
+r8_hk:		jp z,hscroll_set	; 8 (hsplit: hs_reg8 in fw.asm, fw2_switches)
 		dec a
 		jp z,vdp_reg_w__r9
 		dec a

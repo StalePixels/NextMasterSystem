@@ -12,7 +12,7 @@
 - mapper store byte patterns in bytes that no path reached, each rated by how much the bytes around it look like code;
 - how many bytes it classified as code;
 - a frame cost model: how many Next cycles each routine takes on the runtime, which foreground routines can be cut by the interrupt handler while they write the VDP, and which interrupt routines take longer than a frame;
-- pattern rules: code shapes that broke or slowed particular games on the Next (inline jump tables, mailbox races, column and rectangle streamers, the Sega planar RLE decoder).
+- pattern rules: code shapes that broke or slowed particular games on the Next (inline jump tables, mailbox races, column and rectangle streamers, the Sega planar RLE decoder, H scroll from a table in the interrupt handler).
 
 It uses only the Python 3 standard library. Run it with `python3 -I`.
 
@@ -54,7 +54,7 @@ A dynamic log is a list of PCs that an emulator saw the game run. The scanner re
 - `*.io.tsv` and `*.mapper.tsv`: tab-separated, with a header line. The `pc` column is the PC in hex. An optional `insn_bytes` column holds the instruction's bytes in hex; when it is there, the scanner checks them against the cart. An optional `cart_offset` column holds the cart offset, in hex, that the PC ran from; it names the bank. A row with no `cart_offset` is used only for a slot that the cart does not bank: slot 0 with the Sega mapper, and slot 1 when the cart never writes $FFFE. In any other slot (slot 2 always, and every slot with the Codemasters mapper) the address alone does not say which bank ran, so the row is skipped, and the summary counts the skipped PCs for each log.
 - `*.features.json`: any JSON. Every string in a list under the key `example_pcs` or `ram_code_writer_pcs` is a PC in hex. A list `example_offsets` or `ram_code_writer_offsets` of the same length next to it holds each PC's cart offset in hex, or an empty string; a PC with no offset follows the rule for rows with no `cart_offset`.
 
-Dynamic logs and CDL files only add entry points. The scanner first runs without them; afterwards it adds only the logged PCs that the static pass did not already reach. A log row whose instruction bytes differ from the cart's bytes at that PC is dropped, and the summary says how many were dropped. A log from another cart therefore does nothing harmful, but `--logdir` on a directory that holds several carts' logs will still read them all.
+Dynamic logs and CDL files only add entry points. The scanner first runs without them; afterwards it adds only the logged PCs that the static pass did not already reach. Code that only object handler entries reach counts as not reached here, so a logged PC in it is still a log seed. A log row whose instruction bytes differ from the cart's bytes at that PC is dropped, and the summary says how many were dropped. A log from another cart therefore does nothing harmful, but `--logdir` on a directory that holds several carts' logs will still read them all.
 
 ## Output files
 
@@ -100,7 +100,8 @@ Kinds:
 | `inline_table` | Pattern rule 1: a call of an inline table dispatcher. `target` is the table start, `class` the dispatcher, `note` the entries and why the table ends. |
 | `mailbox_race` | Pattern rule 2: the second of two foreground stores to a mailbox byte. `target` is the mailbox address. |
 | `streamer` | Pattern rule 3: the head of a loop that streams a column or rectangle to the VDP. `target` is the routine. |
-| `rle_decoder` | Pattern rule 4: a copy of the Sega planar RLE decoder core. `target` is `core`, `variant` or `variant-de`. |
+| `rle_decoder` | Pattern rule 4: a copy of the Sega planar RLE decoder core. `target` is `core`, `variant`, `variant-de` or `jr-z`. |
+| `raster_hscroll` | Pattern rule 5: interrupt code that reads the H scroll value from a table. `target` is the interrupt routine, `class` `pointer` or `patched address`. |
 
 Port classes follow the SMS decoding of address lines A7, A6 and A0: `memory_control`, `io_control`, `unmapped_read`, `psg`, `v_counter`, `h_counter`, `vdp_data`, `vdp_control`, `vdp_status`, `joypad_a`, `joypad_b_misc`, `no_effect` (a write to $C0-$FF), `fm_address`, `fm_data` and `fm_control` for writes to $F0-$F2, and `fm_detect` for a read of $F2.
 
@@ -109,7 +110,7 @@ Port and value notes in `target`: a plain value was proven inside the routine. `
 Confidence and `how`:
 
 - `high`: reached by proven control flow from the vectors or a `--entry` (`how` is `static`), or from a dynamic log or CDL entry point (`log-seed`, `cdl-seed`).
-- `medium`: reached only through something the scanner inferred: a jump table whose length it guessed (`+table`), an address harvested from a store to RAM (`pointer-harvest`), a call after a bank switch that no path reached (`bank-call`), or a module header at the start of a bank (`bank-header`).
+- `medium`: reached only through something the scanner inferred: a jump table whose length it guessed (`+table`), an address harvested from a store to RAM (`pointer-harvest`), a call after a bank switch that no path reached (`bank-call`), a module header at the start of a bank (`bank-header`), or an object handler address stored into a handler field (`handler-table`, `handler-store`, `handler-spawn`).
 - A `medium` site is raised to `high` when the byte scans rate it `high` with the code that only `medium` paths reach left out: evidence adds up, it never lowers a rating. `how` then ends in ` + byte pattern`, and `note` holds the byte scan evidence.
 - `io_unreached` and `mapper_unreached` rows have their own scale, described under "Byte scans". The `how` of an `io_unreached` row is `byte pattern in bytes no path reached`; of a `mapper_unreached` row, `byte scan, no path reached it`.
 - `+seen-in-log` is added when a dynamic log also has that instruction: the same cart offset, or, for a row with no `cart_offset`, the same PC outside slot 2.
@@ -120,7 +121,7 @@ Stores through HL, DE, BC, IX or IY, and block copies, whose address the scanner
 
 ### `NAME.summary.txt`
 
-The same results, readable: the constant banks the code writes to $FFFE and $FFFF, I/O sites by port function, mapper and Codemasters stores, unproven-store counts by reason and register, RST vectors, RAM copies, tables, unresolved transfers, harvested entry points (with the instruction that stored each one), bank call entries (with the bank switch before each one), bank header entries, harvested addresses that were rejected, paths that stopped on bytes that do not look like code, overlapping decodes, unreached I/O patterns, mapper stores found by the byte scan, coverage per bank, a comparison with the dynamic logs when logs were given, and the frame cost findings (below).
+The same results, readable: the constant banks the code writes to $FFFE and $FFFF, I/O sites by port function, mapper and Codemasters stores, unproven-store counts by reason and register, RST vectors, RAM copies, tables, unresolved transfers, harvested entry points (with the instruction that stored each one), object handler entries (with their kind and the store or call each came from), bank call entries (with the bank switch before each one), bank header entries, harvested addresses that were rejected, paths that stopped on bytes that do not look like code, overlapping decodes, unreached I/O patterns, mapper stores found by the byte scan, coverage per bank, a comparison with the dynamic logs when logs were given, and the frame cost findings (below).
 
 ### `NAME.cost.tsv`
 
@@ -169,17 +170,25 @@ A table's length is not known. The scanner reads entries until one is not a code
 
 Banks: cart slot 0 is always bank 0. Cart slot 2 starts unknown at the vectors and takes the value written to $FFFF (or to $8000 in the Codemasters model). A jump or call into $8000-$BFFF goes to that bank when the value is a constant, or to each bank the callers pass when the routine receives it. Code that is itself in slot 2 assumes its own bank. Slot 1 is taken as bank 1 unless the cart writes $FFFE (or $4000 in the Codemasters model) with another value or an unknown one; after that slot 1 is tracked the same way as slot 2.
 
-Code copied to RAM: an `LDIR`/`LDDR` with a proven ROM source, RAM destination and length is recorded. A jump or call into that RAM range is decoded from the copy's source bytes, at the RAM address.
+Code copied to RAM: an `LDIR`/`LDDR` with a proven ROM source, RAM destination and length is recorded. A source wholly in slot 0 needs no known bank, and one wholly in slots 0 and 1 needs only the slot 1 bank. A jump or call into that RAM range is decoded from the copy's source bytes, at the RAM address.
 
 Task switches: a `RET` that runs after `LD SP,HL`, `LD SP,IX`, `LD SP,IY` or `LD SP,(nn)` loaded SP with a value the scanner does not know goes to an address on another stack. Task schedulers switch tasks this way. The scanner does not follow such a `RET`; it lists it with the unresolved indirect jumps, with the `LD SP` instructions of its routine.
 
-Pointer harvest: a constant code-like address that the code stores into RAM ($C000-$FFFF), with `LD (nn),HL` and similar, or as two byte stores into a structure field that some `JP (HL)` in the cart jumps through, becomes an entry point. In a cart with a task switch, the entries of a word table in ROM also become entry points when the code stores a word read from that table into RAM: a task scheduler starts a task by putting its start address, from a table of task entry points, on the task's stack. The table is read as a jump table is. Outside carts with a task switch, a table word stored to RAM is usually a data pointer, so it is not harvested. A harvested address is refused when the store writes several different values, when both bytes are equal ($0909 and the like), when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a harvested entry is dropped again if the code reached from it hits an invalid opcode, a jump into RAM or slot 2 that cannot be resolved, or an I/O port SMS games do not use. A task entry from a table is not dropped for a jump or call into RAM, because games call code they copied to RAM. Harvested code is `medium` confidence.
+Pointer harvest: a constant code-like address that the code stores into RAM ($C000-$FFFF), with `LD (nn),HL` and similar, or as two byte stores into a structure field that some `JP (HL)` in the cart jumps through, becomes an entry point. In a cart with a task switch, the entries of a word table in ROM also become entry points when the code stores a word read from that table into RAM: a task scheduler starts a task by putting its start address, from a table of task entry points, on the task's stack. The table is read as a jump table is. Outside carts with a task switch, a table word stored to RAM is usually a data pointer, so it is not harvested. A harvested address is refused when the store writes several different values, when both bytes are equal ($0909 and the like), when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a harvested entry is dropped again if the code reached from it hits an invalid opcode, a jump into RAM or slot 2 that cannot be resolved, or an I/O port SMS games do not use. A task entry from a table is not dropped for a jump or call into RAM, because games call code they copied to RAM. A harvested entry whose store is in code that no path reaches any more, such as the code of an entry dropped this way, is dropped as well. Harvested code is `medium` confidence.
 
 Bank calls: in slot 0 or slot 1, the bytes `LD A,n`, then `LD ($FFFF),A`, then `CALL nn` or `JP nn` with nn in $8000-$BFFF, at a place no path reached, make nn in bank n an entry point. A `LD (nn),A` to RAM between the first two (a copy of the bank number) is allowed. Games start a module this way from a handler that is reached only through RAM. Only this exact byte form is found.
 
 Bank headers: a bank that starts with two or more `JP nn`, every nn in $8000-$BFFF, is a module with its entries at the start of the bank. Each of those `JP` instructions is an entry point in that bank, whatever way the caller picks the bank.
 
 The target of a bank call or a bank header entry must decode as at least two valid instructions; a `JP nn` there is followed to nn, so a header entry counts. Both kinds go through the same checks as harvested entries after a scan, and are `medium` confidence.
+
+Object handlers: many games keep their objects in records in RAM. Each record has a handler field, a word that holds the address of the routine that updates the object, and a dispatcher runs each object by jumping through that field. A handler field is found from the dispatcher: an offset d such that code a path reached does `LD L,(IX+d)` and `LD H,(IX+d+1)` (IX or IY, in either order) right before `JP (HL)`, or the same loads into E and D right before `EX DE,HL; JP (HL)` (`handler_fields()` in `sitescan.py`). The handler addresses then come from the code that stores into a handler field: a store of the low byte, `LD (IX+d),r` or `LD (IX+d),n`, and a store of the high byte to d+1 through the same index register, in either order and at most four straight-line instructions apart (`handler_entries()`). What the two stores write decides the entry:
+
+- `handler-store`: a constant word, as `LD (IX+d),n` twice or the two halves of `LD HL,nn`. The word is the handler.
+- `handler-table`: a word read from a table in ROM with an index added, as in `LD HL,table; ADD HL,BC; ADD HL,BC; LD A,(HL); INC HL; LD A,(HL)`. Every entry of the table is a handler. The table is read as a jump table is, so its length is detected from its contents, not guessed from a count: it ends at the first entry that is not a code address or does not decode as valid instructions, at an entry that points into the table, where the table reaches the lowest entry address above its start, or at an entry position that is the start of code. A call of a routine that jumps to the caller's HL, with HL a word read from such a table, also makes every entry of the table a handler.
+- `handler-spawn`: a register pair that the storing routine received from its callers, as in a spawn routine that stores DE. The constant that each caller loads into the pair, such as `LD DE,handler; CALL spawn`, is a handler.
+
+A handler runs later, from the dispatcher, so the slot 1 bank at the store does not say which bank it is in. When the slot 1 bank is unknown there and the code writes one constant bank to $FFFE and no other, a handler in slot 1, and the slot 1 bank at the start of each handler, is that bank. A handler in slot 2 is taken in the bank that slot 2 holds at the store. A handler address is refused when both its bytes are equal, when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a handler entry is dropped on the same signs of data as a harvested entry. Handler code is `medium` confidence. Entries found from handlers' own stores add more handlers in the next round, as harvested entries do. The summary lists each handler entry with its kind and the store or call it came from.
 
 Bytes that are not code: a path stops at an invalid opcode, at `RST $38` followed by $FF (erased fill), at a literal store into $0000-$7FFF other than $0000 and $4000, and at `LD SP,nn` with nn in ROM. The summary lists each place a path stopped and why.
 
@@ -223,6 +232,7 @@ The I/O byte scan looks for `D3 n` (`OUT (n),A`), `DB n` (`IN A,(n)`) and the `E
 - the setter is checked only for `OUT (n),A`: the instruction before it loads A, as in the mapper store list;
 - a jump target also counts a `JR`, `JR cc` or `DJNZ` that targets the instruction, and any branch that targets a one-byte instruction just before it, which then runs on into it. Games branch into the operand of an instruction this way: the operand byte runs as a one-byte instruction and falls into the `OUT`. Branches are decoded at every byte, so data can supply one;
 - a hit that would be `high` only because it is a jump target, with no setter and fewer than 8 bytes of valid code before it, is `medium`;
+- an `OUTI` is `high` when an unbroken run of `OUTI` after it, in the same bank, leads to an `OUTI` that a path reached. A game enters an unrolled `OUTI` block at an address it computes from the byte count, so the `OUTI`s before the first entry that was reached are code too;
 - a port SMS games do not use is always `very-low`. The ports SMS games use are $BE, $BF, $BD, $7E, $7F, $DC, $DD, $C0, $C1, $3E, $3F and $F0-$F2.
 
 The summary lists every `io_unreached` row except the `very-low` ones, with its evidence.
@@ -318,7 +328,18 @@ A streamer is a loop that, in one pass, writes the VDP control port at least twi
 
 ### Rule 4: Sega planar RLE decoder
 
-The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; OR A; RET Z; LD C,A; AND $7F; LD B,A`) anywhere in the cart, and for two variants with `AND $7F` in the four bytes after them: `7E 23 B7 C8` (`variant`), and `1A 13 B7 C8` (`variant-de`: the same core reading the stream through DE, as in Hang On). For each copy a path reached it reports the routines that hold it, whether it is frame work (`irq`: a routine reached from the interrupt handler) or foreground, the control and data writes of its loop with their addresses, the routine's cost, and the calls of the routine. A copy no path reached is `unreached` with the count of `OUT ($BE),A` and control writes in the 64 bytes from the core.
+The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; OR A; RET Z; LD C,A; AND $7F; LD B,A`) anywhere in the cart, and for two variants with `AND $7F` in the four bytes after them: `7E 23 B7 C8` (`variant`), and `1A 13 B7 C8` (`variant-de`: the same core reading the stream through DE, as in Hang On). A fourth form, `jr-z`, has `JR Z,exit` in place of `RET Z`: the bytes `7E 23 B7 28 d 4F E6 7F 47`, as in Castle of Illusion, where the plane loop that calls the core in the other forms is wrapped around it in the same routine. The bytes alone are not enough. The code from the core up to the `JR Z` target must also hold a jump back to the core, `BIT 7,C` (the choice between a run of one byte and a run of literal bytes), a count down of B (`DJNZ` or `DEC B`) and an `OUT` to the VDP data port. A copy that decodes into RAM has no data port write and is not reported.
+
+For each copy a path reached it reports the routines that hold it, whether it is frame work (`irq`: a routine reached from the interrupt handler) or foreground, the control and data writes of its loop with their addresses, the routine's cost, and the calls of the routine. A copy no path reached is `unreached` with the count of `OUT ($BE),A` and control writes in the 64 bytes from the core.
+
+### Rule 5: H scroll from a table
+
+A game that changes the H scroll every few lines sets VDP register 8 from its line interrupt, and the runtime then needs a `rastercode` routine in the spec ([overlays.md](overlays.md)). The rule looks in every routine the interrupt handler runs for `LD A,src; OUT ($BF),A; LD A,$88; OUT ($BF),A`, a write of register 8, where `src` is a byte at an address that changes from one interrupt to the next, a table:
+
+- `pointer`: `src` is `(HL)`, `(DE)`, `(BC)`, `(IX+d)` or `(IY+d)`, and the scanner cannot prove the pointer to a single address. Castle of Illusion steps a pointer into a table 2 bytes on each interrupt.
+- `patched address`: `src` is `(nn)` in code run from RAM, and a store in the code writes the bytes of nn. Hang On and OutRun copy the handler to RAM and write a value worked out from the V counter into the address of the load.
+
+A load from one fixed address is a single value for the whole picture and is left out. The row is the load. Its note gives the register write, the interrupt routine and the routine's V counter reads, if any. A flagged game does not always need a routine: Black Belt, with up to 11 changes a frame, plays without one.
 
 ## Known limits
 
@@ -326,10 +347,11 @@ The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; O
 - The frame cost model costs every run of outputs in a row as a run of `OUTI`. A run of other outputs, or of `OUTI` mixed with them, costs more in the runtime.
 - A task switch (`RET` after `LD SP`) is not followed. The task entries are found only when the code stores them into RAM from a word table in ROM; otherwise add them with `--entry`.
 - A routine reached only through a pointer the scanner cannot trace back to a constant (a handler address kept in RAM or computed at run time, a table it did not recognise) is missed. The summary lists unresolved indirect jumps; add their targets with `--entry`, or give a dynamic log or CDL.
+- The object handler rules read a handler table only up to the end of the slot it starts in, so a table that runs on from slot 1 into slot 2 gives only its first entries. A handler that calls into slot 2 starts with an unknown slot 2 bank, so it is dropped as data when it calls slot 2 code; add such handlers with `--entry`.
 - Table lengths are guesses. A table can be read too short (missed handlers) or too long (data decoded as code). Rows reached that way are `medium`.
 - Pointer harvest can take a data value for a code address. The checks above catch the cases seen so far; the summary lists every harvested entry and the instruction that stored it, so a person can check them.
 - Stores through IX and IY into object structures make up most of the unproven list in commercial games. The object pointer comes from the caller and usually from a RAM table, so the scanner cannot prove where it points.
-- Memory other than the stack is not modelled. A value stored to RAM and loaded back later is unknown, so a pointer kept in a RAM variable (an interrupt handler hook, an object's handler) is only found through pointer harvest.
+- Memory other than the stack is not modelled. A value stored to RAM and loaded back later is unknown, so a pointer kept in a RAM variable (an interrupt handler hook, an object's handler) is only found through pointer harvest and the object handler rules.
 - When a table entry or call target is in a banked slot whose bank comes from RAM, the scanner does not follow it. The summary lists the table's first words and the constant banks the code writes to $FFFE and $FFFF anywhere, so a person can add `--entry BANK:ADDR`.
 - Slot 0 is assumed to stay bank 0. A cart that writes $FFFD with a non-zero value shows that write as a `mapper` row, but code in slot 0 is still read from bank 0.
 - A store whose address is unknown is assumed not to change the mapper. Only proven stores to $FFFE/$FFFF change the tracked banks.
@@ -339,6 +361,7 @@ The scanner looks for the bytes `7E 23 B7 C8 4F E6 7F 47` (`LD A,(HL); INC HL; O
 - Rule 1 finds a dispatcher by its instruction shape; a dispatcher that branches before the jump is missed. Its table end rules are guesses like the main scan's, and a table read too long adds data as code (rows with `how` `inline-table` from such tables are noise).
 - Rule 2 sees only stores whose address the scanner proves. Its times are shortest paths, so a pair it reports may never run that close, and its SMS times are too low.
 - Rule 3 misses a loop whose address step comes from a table or from RAM.
+- Rule 5 sees only the write order above, in code the interrupt handler reaches by proven flow. A register write through a helper routine, through `OUT (C),r`, or with other instructions between the four is missed.
 - Interrupt mode 2 vectors are not followed. Only $0000, $0038 and $0066 are vector entry points.
 - The frame cost model does not follow jumps through tables whose length is a guess, so a handler that dispatches its frame work through a table is undercounted. It does not count the runtime's own once-a-frame work (tile conversion, sprites, copper list), the trace builds (about 13,800 cycles the first time a trace site runs, and again for a copy after the code area fills), or the VRAM region of a write. A routine that drops its return address and jumps back into its caller's code is counted as returning to the caller as well.
 

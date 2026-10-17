@@ -76,6 +76,11 @@ first 32K it is also the Z80 address.
                          rst <io vector> : db far_io, pg_NAME, ent_NAME
                          call jt_far : db pg_NAME, ent_NAME
                      The page source knows the same names as an asm block.
+  libpage N NAME     library page NAME as PAGE chunk N: the source is the file
+                     lib/NAME.asm in the spec's folder, built as a page block.
+                     Its entries are the names on the file's one comment
+                     line "; entries: NAME...". build-overlays.py stops if two
+                     overlays carry different bytes for one library page.
   start ADDR [SP]    the game starts at ADDR instead of $0000, with SP
                      (default $DFF0)
   ramsite ADDR BB    an I/O instruction (bytes BB) that the game builds in
@@ -98,6 +103,9 @@ first 32K it is also the Z80 address.
                      cart, not converted again
   hz RATE            CONF hz=RATE: the video rate the game runs at, 50, 60
                      or any (the default: the rate the Next booted at)
+  hsplit             CONF hsplit=1: a horizontal scroll write in the picture
+                     (a line interrupt split) also moves the copper's map
+                     switch column for the lines below it; needs ABI 8
 
 Names that every asm block knows (the framework's jump table and the fixed
 state at $E000-$E07A, from src/runtime/fw.asm). Jump table entries:
@@ -123,7 +131,7 @@ three or more outputs, which the framework copies and runs in one call.
 The framework ABI the file needs is worked out from what it uses: 1 without
 an io vector, 2 with one, 3 with trace forms, fw_io0 or mapsthl, 4 with
 RAMSITES, RASTER or the ABI 4 mapper lines, 5 with LD I,A, LD A,I or a CONF
-switch, 6 with a page, 7 with a block that calls jt_vwrite.
+switch, 6 with a page, 7 with a block that calls jt_vwrite, 8 with hsplit.
 """
 import argparse
 import csv
@@ -199,6 +207,25 @@ def page_line(spec, n, w):
     return int(w[1]), w[2:]
 
 
+def libpage_line(spec, n, w):
+    """The page number, entry names, source lines and file of a libpage line
+    (words W). The file is lib/NAME.asm in the spec's folder."""
+    if len(w) != 3 or not re.fullmatch(r'[0-9]+', w[1]) or int(w[1]) >= PAGE_COUNT \
+            or not re.fullmatch(r'[A-Za-z0-9_]+', w[2]):
+        raise SystemExit(f'{spec}:{n}: libpage N NAME with N from 0 to {PAGE_COUNT - 1}')
+    path = os.path.join(os.path.dirname(os.path.abspath(spec)), 'lib', w[2] + '.asm')
+    if not os.path.isfile(path):
+        raise SystemExit(f'{spec}:{n}: library page {w[2]}: no file {path}')
+    body = [l.rstrip('\n') for l in open(path)]
+    ents = [l.split(':', 1)[1].split() for l in body if re.match(r';\s*entries:', l)]
+    if len(ents) != 1 or not ents[0]:
+        raise SystemExit(f'{path}: needs one line "; entries: NAME..."')
+    for x in ents[0]:
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', x):
+            raise SystemExit(f'{path}: page entry {x} is not a label name')
+    return int(w[1]), ents[0], body, path
+
+
 def spec_labels(spec):
     """The names a spec gives its asm blocks: label lines (name -> Z80
     address), and pg_NAME and ent_NAME for each page entry."""
@@ -217,6 +244,11 @@ def spec_labels(spec):
         elif w[:1] == ['page']:
             read_asm_block(it, spec, n, 'endpage')
             num, names = page_line(spec, n, w)
+            for e, x in enumerate(names):
+                add(n, f'pg_{x}', num)
+                add(n, f'ent_{x}', e)
+        elif w[:1] == ['libpage']:
+            num, names, _, _ = libpage_line(spec, n, w)
             for e, x in enumerate(names):
                 add(n, f'pg_{x}', num)
                 add(n, f'ent_{x}', e)
@@ -287,7 +319,7 @@ def chunk(tag, data):
 def parse(spec, cart, sjasmplus):
     """Run the spec over the cart. Returns a dict of what the file needs."""
     r = dict(name='', crc=None, ops=[], start=None, rcode=None, ramsites=[], ramcont=None,
-             priority=False, toppal=False, tilecache=False, hz='any', abi=1, pages={})
+             priority=False, toppal=False, tilecache=False, hsplit=False, hz='any', abi=1, pages={}, libpages={})
     rst = {}
     outs = {}
     notrace, plain, io0, abi4, abi5, abi7 = False, set(), False, False, False, False
@@ -322,12 +354,17 @@ def parse(spec, cart, sjasmplus):
                 raise SystemExit(f'{spec}:{lineno}: asm {a:05X}: the code is {len(code)} bytes, '
                                  f'more than the {n} it replaces')
             patch(a, code + b'\0' * (n - len(code)))
-        elif word == 'page':
-            body = read_asm_block(it, spec, lineno, 'endpage')
-            num, names = page_line(spec, lineno, line.split())
+        elif word in ('page', 'libpage'):
+            if word == 'page':
+                body = read_asm_block(it, spec, lineno, 'endpage')
+                num, names = page_line(spec, lineno, line.split())
+                src, n0 = spec, lineno
+            else:
+                num, names, body, src = libpage_line(spec, lineno, line.split())
+                n0 = 0   # the file's line k is body line k
             if num in r['pages']:
                 raise SystemExit(f'{spec}:{lineno}: page {num} is already defined')
-            code, syms = assemble_block(sjasmplus, spec, lineno, body, PAGE_ORG, labels, sym=True)
+            code, syms = assemble_block(sjasmplus, src, n0, body, PAGE_ORG, labels, sym=True)
             abi7 = abi7 or uses_names(body, ABI7_NAMES)
             if len(code) > PAGE_MAX:
                 raise SystemExit(f'{spec}:{lineno}: page {num} is {len(code)} bytes, more than {PAGE_MAX}')
@@ -337,6 +374,8 @@ def parse(spec, cart, sjasmplus):
                     raise SystemExit(f'{spec}:{lineno}: page {num}: entry {x} is not a label in its code')
                 ents.append(syms[x])
             r['pages'][num] = (ents, code)
+            if word == 'libpage':
+                r['libpages'][line.split()[2]] = num
         elif word == 'name':
             r['name'] = rest
         elif word == 'cart':
@@ -393,6 +432,8 @@ def parse(spec, cart, sjasmplus):
             r['toppal'] = True
         elif word == 'tilecache':
             r['tilecache'] = True
+        elif word == 'hsplit':
+            r['hsplit'] = True
         elif word == 'hz':
             rest = rest.strip()
             if rest not in ('50', '60', 'any'):
@@ -540,6 +581,8 @@ def parse(spec, cart, sjasmplus):
         r['abi'] = max(r['abi'], 6)
     if abi7:
         r['abi'] = max(r['abi'], 7)
+    if r['hsplit']:
+        r['abi'] = max(r['abi'], 8)
     r['ntrace'] = ntrace
     return r
 
@@ -611,7 +654,10 @@ def load_meta(crc, name, compat, titles):
     return {k: ascii_text(v) for k, v in meta.items() if v and ascii_text(v)}
 
 
-def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplus'):
+def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplus', libs=None):
+    """Write the overlay file and return its path. With LIBS, a dict, add to
+    it the PAGE chunk data, without the page number, of each library page
+    the spec uses, by name."""
     cart = open(cart_path, 'rb').read()
     if len(cart) % 16384 == 512:
         cart = cart[512:]
@@ -644,7 +690,8 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     ptch += b'\0'
 
     conf = (f'priority={int(r["priority"])}\ntoppal={int(r["toppal"])}\n'
-            f'tilecache={int(r["tilecache"])}\nhz={r["hz"]}\n').encode('ascii')
+            f'tilecache={int(r["tilecache"])}\nhz={r["hz"]}\n'
+            + ('hsplit=1\n' if r['hsplit'] else '')).encode('ascii')
     meta = load_meta(crc, r['name'], compat, titles)
     metab = ''.join(f'{k}={v}\n' for k, v in meta.items()).encode('ascii')
 
@@ -653,8 +700,13 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     body += chunk('PTCH', ptch)
     body += chunk('CONF', conf)
     body += chunk('META', metab)
-    for num, (ents, code) in sorted(r['pages'].items()):
-        body += chunk('PAGE', struct.pack('<BB', num, len(ents)) + b''.join(struct.pack('<H', a) for a in ents) + code)
+    pdata = {num: bytes([len(ents)]) + b''.join(struct.pack('<H', a) for a in ents) + code
+             for num, (ents, code) in r['pages'].items()}
+    for num in sorted(pdata):
+        body += chunk('PAGE', bytes([num]) + pdata[num])
+    if libs is not None:
+        for name, num in r['libpages'].items():
+            libs[name] = pdata[num]
     body += chunk('END ', struct.pack('<I', crc32(body)))
     out = os.path.join(outdir, f'{crc:08X}.nms')
     open(out, 'wb').write(body)

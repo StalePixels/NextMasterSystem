@@ -88,7 +88,7 @@ fw_jt:
 		jp fw_outi_run		; $E012 run of OUTIs to the end of an unrolled block (RST + inline count)
 		jp fw_io		; $E015 any I/O instruction (RST + inline op), ABI 2
 		jp fw_io0		; $E018 the same, as the RST $00 vector (ABI 3)
-FW_ABI		equ 7			; 6: code pages (far call, jt_far, jt_peek); 7: jt_vwrite
+FW_ABI		equ 8			; 6: code pages (far call, jt_far, jt_peek); 7: jt_vwrite; 8: hsplit
 		public FW_ABI
 ; $E01B: a JP to the outer shell's resume entry. The shell writes its target
 ; (the two bytes at $E01C) before it starts a game. fw_quit jumps here.
@@ -153,7 +153,8 @@ tr_free:	dw $FFFF		; pixel values no sprite-palette tile on screen uses
 ; pri_frame), bit 1 line-0 palette (toppal: cram_x in fw2, pal_vbl here),
 ; bit 2 tiles from cart ROM (tilecache: kn_entry here, kn_block in fw2),
 ; bit 3 the game sets the video rate (hz=50 or hz=60), bit 4 60 Hz (hz_setup
-; in fw3)
+; in fw3), bit 5 mid-frame H scroll writes (hsplit: hs_reg8 here, sg_write
+; and sg_frame in fw3)
 fw_flags:	db 0
 pal43:		db %00000010		; NextReg $43 display bits: ULA second; bits 3 and 2
 					; (second sprite and Layer 2 palettes) while toppal shows them
@@ -1595,6 +1596,17 @@ fw2_call:
 		nextreg $51,a
 		pop af
 		ret
+; Register 8 = E with the hsplit switch, from vdp_reg_w (r8_hk) in fw2:
+; hscroll_set, then sg_write (fw3, mapped at $0000 for it; interrupts are off
+; in a handler), so that a write that moves the tilemap in the picture also
+; moves the map switch column of the lines still to come.
+hs_reg8:	call hscroll_set
+		nextreg $50,FW3_PAGE
+		call sg_write
+		ld a,(cur_mmu+0)
+		nextreg $50,a
+		ret
+
 ; The same for a routine in fw4 (FW4_PAGE). Keeps A and F from the routine.
 fw4_call:
 		nextreg $51,FW4_PAGE

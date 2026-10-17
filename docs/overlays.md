@@ -2,7 +2,7 @@
 
 An overlay file (`.nms`) tells NextMasterSystem how to patch one Master System cart. This guide takes a cart from scan to SD card. The file format is in [nms-format.md](nms-format.md).
 
-You need Python 3. You need `sjasmplus` only for a spec with a `rastercode` line, an `asm` block or a `page` block. All commands run from the repository root, and the tools are in `tools/`.
+You need Python 3. You need `sjasmplus` only for a spec with a `rastercode` line, an `asm` block, a `page` block or a `libpage` line. All commands run from the repository root, and the tools are in `tools/`.
 
 The steps:
 
@@ -167,9 +167,31 @@ In page code:
 
 `overlays/ecco.spec` has a page that writes a name table column with one `jt_vwrite` call. `overlays/aliensyndrome.spec` has a page that writes rows of name table cells.
 
+### Library pages
+
+A library page is a code page that more than one game uses. Its source is one file, `overlays/lib/NAME.asm`, and a spec uses it with one line:
+
+```
+libpage 0 rle_tiles
+```
+
+`libpage N NAME` builds the file `lib/NAME.asm` in the spec's folder into `PAGE` chunk `N`, in the same way as a `page` block with that source: at `$2000`, with the same names, the same limits and the same ABI. Each overlay carries its own built copy of the page. The loader and the runtime see a plain `PAGE` chunk.
+
+The file lists its entries on one comment line, `; entries: NAME...`, in entry order. For each entry, every `asm` block of the spec knows `pg_NAME` and `ent_NAME`, as for a `page` block.
+
+The file starts with its contract, in comments:
+
+- the game routine it replaces, and the `sitescan.py` rule and form that find that routine;
+- each entry: the registers it reads, and the registers, flags and interrupt state it returns;
+- what it needs from the game: the code cave that calls it and the bytes the cave replaces, the `io` vector it uses, what the game's interrupt code must not do, and the runtime ABI.
+
+A library page has the same bytes in every overlay that uses it. It must not depend on a name that specs define differently, such as a `label`. `build-overlays.py` compares each library page's entries and code across the overlays it builds, and exits with status 1, naming the two specs, when they differ.
+
+`overlays/lib/rle_tiles.asm` replaces the `jr-z` form of the Sega planar RLE decoder ([sitescan.md](sitescan.md), "Rule 4: Sega planar RLE decoder"). Castle of Illusion and Asterix use it.
+
 ## Switches
 
-A switch is a spec line of one word, or for `hz` a word and a value. It turns on a runtime feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1`, and `hz` as `hz=50`, `hz=60` or `hz=any` ([nms-format.md](nms-format.md)). The information screen lists the switches that are on and shows the video rate the game will use.
+A switch is a spec line of one word, or for `hz` a word and a value. It turns on a runtime feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1`, `hsplit` only as `hsplit=1` when it is on, and `hz` as `hz=50`, `hz=60` or `hz=any` ([nms-format.md](nms-format.md)). The information screen lists the switches that are on and shows the video rate the game will use.
 
 | Spec line | `CONF` key | What it does | What it costs | When to turn it on |
 |---|---|---|---|---|
@@ -177,6 +199,7 @@ A switch is a spec line of one word, or for `hz` a word and a value. It turns on
 | `toppal` | `toppal` | Shows the palette the frame handler leaves from line 0 of the picture. CRAM writes also go to the second tilemap, sprite and Layer 2 palettes, which are shown from the frame event to the first line event. A display-off write in that time is held until the picture would show it ([design.md](design.md), "Display off and on"). | Each CRAM write does more work, and the frame and line events switch the palettes. | The frame handler writes the palette late, and the top lines of the picture show the wrong colours. |
 | `hz 50`, `hz 60`, `hz any` | `hz` | The video rate of the game. With `50` or `60` the runtime sets the Next to that rate when the game starts, after the information screen. BREAK out of the game sets the rate the Next booted at again before the browser shows. With `any`, or no `hz` line, the game runs at the rate the Next booted at. The V counter counts like a PAL Master System at 50 Hz and like an NTSC one at 60 Hz ([design.md](design.md), "The video rate"). | At 60 Hz the Next's frame is 264 lines, 481,536 cycles at 28 MHz, against 311 lines and 567,264 cycles at 50 Hz. Its vertical blank is 72 lines against 119. A game whose frame work nearly fills a 50 Hz frame can overrun at 60 Hz. A monitor that cannot show the rate shows no picture until the player presses BREAK. | Set it from the dump's No-Intro regions. Europe only, or Europe and Brazil: `50`. Any of USA, Japan and Brazil without Europe: `60`. USA or Japan with Europe, or World: `any`. Before you set `60`, measure the frame loads at 60 Hz (`tools/mame/run.py --measure` with the overlay built with `hz 60`). |
 | `tilecache` | `tilecache` | Tiles that a block write (`OTIR`, `OUTI` runs) copies whole from cart ROM, with the source and the VRAM address aligned alike, are copied from the converted cart (the cart as Next tile rows, made at game start) and are not converted again. | The runtime converts the whole cart at game start: about 1.1 seconds more of loading for each 256K of cart, and RAM pages 125 and 128-191. Each block write costs more: about 45 cycles for a block read from RAM, and about 250 for a block from ROM that holds no whole aligned tile. | The game copies many tiles from ROM while it plays. Measure the frame loads with and without it (`tools/mame/run.py --measure`), and turn it on only where the loads go down. |
+| `hsplit` | `hsplit` | A horizontal scroll write in the picture, with line interrupts on, also moves the copper list's map switch column for the lines below it, so a line interrupt split (a status bar, parallax bands) shows the right map columns on the right of each line. The runtime keeps the list as segments, one for each line where such a write comes; a write rewrites the lines down to the next segment when its column changes ([design.md](design.md), "The once-a-frame work"). The file needs runtime ABI 8. | Every register 8 write does more work, and a column change rewrites one byte of each line down to the next split, in the game's own line handler (about 80 cycles a line). Measured over the same frames: a median of 1,766 cycles a frame more in Asterix's play, 4,383 in Choplifter's attract mode. For one frame after a game stops a split, the lines below it keep the split's column. | The game writes register 8 from a line interrupt (the reference logs' mid-frame register 8 writes), with values far enough apart that the lines need other map columns (K = -H over 64 for one of them), and a band on the right of the lines below the split shows the wrong map columns. |
 
 ## 4. Build the overlay file and the index
 
@@ -195,7 +218,7 @@ To build a folder of specs:
 python3 tools/build-overlays.py specs carts ovl
 ```
 
-`build-overlays.py` finds the cart for each spec in `carts/` by the CRC32 on the spec's `cart` line, so the cart files may have any names. It builds every spec, then writes the index. It exits with status 1 if a spec has no `cart` line, if its cart is missing or if the build fails, and builds the rest.
+`build-overlays.py` finds the cart for each spec in `carts/` by the CRC32 on the spec's `cart` line, so the cart files may have any names. It builds every spec, then writes the index. It exits with status 1 if a spec has no `cart` line, if its cart is missing, if the build fails or if a library page differs between two overlays, and builds the rest.
 
 ### Game details
 

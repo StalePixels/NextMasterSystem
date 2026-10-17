@@ -409,7 +409,7 @@ cop_update__f0:
 		ld d,a			; D = c
 		nextreg $62,0
 		nextreg $61,0
-		call cop_head
+cf_hk:		call cop_head		; hsplit: sg_head
 		ld a,224
 		sub e
 		dec a
@@ -608,7 +608,7 @@ cop_switches__b:	push de
 		add a,a
 		or $80
 		ld d,a			; D = the first byte of WAIT y,c
-		ld a,192
+cs_end:		ld a,192		; hsplit: the line of segment 1 (sg_end)
 		sub b
 		ld c,a			; C = lines
 cop_switches__one:	ld a,h
@@ -661,6 +661,278 @@ cop_switches__pn:	inc b
 		cp 192
 		jr nz,cop_switches__pl
 		ret
+
+; ----------------------------------------------------------------------
+; Mid-frame H scroll, with the hsplit switch (fw_flags bit 5). A line event
+; split (Asterix's status bar, Choplifter's bands): a register 8 write in the
+; picture moves the tilemap at once (hscroll_set__direct in fw2), so the
+; lines still to come need the map switch column of the new H as well. The
+; normal list is then a set of segments (sg_tab): segment 0 from line 0, with
+; column cop_sw from the H the vertical blank work sees, and one more from
+; each line where a mid-frame write comes, with that write's column. A write
+; rewrites only the lines from the beam's line down to the next segment,
+; where the game's next write in the frame comes again, and only when the
+; column changes or the split moved. A segment whose write did not come in a
+; frame is merged into the one above by sg_frame, so for one frame after a
+; game stops a split the lines below it keep the old column.
+; fw2_switches turns it on by pointing three calls elsewhere, so a game
+; without the switch runs the same instructions as before: r8_hk in fw2
+; (vdp_reg_w) at hs_reg8 in fw.asm, which calls sg_write after hscroll_set;
+; vb_cop in fw2 (the once-a-frame work) at sg_vbl; and cf_hk (cop_update's
+; whole rebuild) at sg_head. cop_switches rewrites segment 0's lines only:
+; the sg_ routines keep its line count's end (cs_end) at segment 1's line.
+; ----------------------------------------------------------------------
+SG_MAX		equ 8			; segments, segment 0 included
+SG_TOL		equ 8			; lines a split may move from one frame to the next
+sg_n:		db 1			; segments in the list
+sg_tab:		db 0,0,0, 192		; per segment: first line, column (segment 0's is
+		ds SG_MAX*3-1		; copied from cop_sw), 1 when its write came in
+					; this frame; then 192
+
+; The list rebuilt whole: one segment.
+sg_head:	call sg_reset
+		jp cop_head
+
+; One segment again.
+sg_reset:	ld a,1
+		ld (sg_n),a
+		ld a,192
+		ld (sg_tab+3),a
+		ld (cs_end+1),a
+		ret
+
+; Once a frame, in place of rast_frame (vb_cop): sg_frame, then rast_frame.
+sg_vbl:		call sg_frame
+		jp rast_frame
+
+; hs_reg8 (fw.asm), with this page at $0000 in a handler, interrupts off,
+; after hscroll_set: register 8 was written, h_sw is its column. Keeps IX.
+sg_write:
+		ld a,(vdp_regs+0)
+		and $10
+		ret z			; line interrupts off: hscroll_set leaves X to the copper
+		ld a,(m224)
+		ld hl,cop_mode
+		or (hl)
+		and $FD
+		ret nz			; not the normal list (224 lines, lock right, raster, or not built)
+		ld a,(cop_sw)
+		or a
+		ret z			; no switches in the list yet
+		ld (sg_tab+1),a
+		ld a,(h_sw)
+		ld b,a			; B = column
+		call cur_line
+		cp 192
+		ret nc			; vertical blank: h_sw takes it from line 0
+		ld c,a			; C = the beam's line
+		cp 16
+		jr nc,sg_write__go
+		ld a,(cop_mode)		; lines 0-15 of a lock top list have no switch,
+		or a			; and with register 0 bit 6 X stays (hscroll_set)
+		ret nz
+		ld a,(vdp_regs+0)
+		and $40
+		ret nz
+sg_write__go:		push ix
+		call sg_wr
+		pop ix
+sg_end:		ld a,(sg_tab+3)
+		ld (cs_end+1),a
+		ret
+sg_wr:		ld ix,sg_tab
+		ld de,3
+		ld l,0			; L = i, the segment that holds line C
+sg_wr__f:		ld a,c
+		cp (ix+3)		; the next segment's first line, 192 past the last
+		jr c,sg_wr__fi
+		add ix,de
+		inc l
+		jr sg_wr__f
+sg_wr__fi:		ld a,l			; segment i's split again, up to SG_TOL lines later?
+		or a
+		jr z,sg_wr__nx
+		ld a,c
+		sub (ix+0)
+		cp SG_TOL+1
+		jr nc,sg_wr__nx
+		ld a,(ix+2)
+		or a
+		jr z,sg_wr__k
+sg_wr__nx:		ld a,(sg_n)		; or segment i+1's, up to SG_TOL lines earlier?
+		dec a
+		cp l
+		jr z,sg_wr__new		; i is the last
+		ld a,(ix+3)
+		sub c
+		cp SG_TOL+1
+		jr nc,sg_wr__new
+		ld a,(ix+5)
+		or a
+		jr nz,sg_wr__new
+		add ix,de
+		jr sg_wr__k
+sg_wr__new:		ld a,(ix+1)		; a new split in segment i
+		cp b
+		ret z			; its lines have this column already
+		ld a,(sg_n)
+		cp SG_MAX
+		ret nc			; no free segment: the lines keep their column
+		inc a
+		ld (sg_n),a
+		sub l
+		dec a			; old n - i: segments i+1 .. n-1 and the 192
+		ld h,a
+		add a,a
+		add a,h
+		push bc
+		ld c,a
+		ld b,0			; BC = their bytes
+		push ix
+		pop hl
+		add hl,bc
+		inc hl
+		inc hl			; HL = the last byte to move
+		ld d,h
+		ld e,l
+		inc de
+		inc de
+		inc de
+		lddr			; one segment up
+		pop bc
+		ld de,3
+		add ix,de		; IX = the new segment i+1
+		ld (ix+0),c
+		ld a,(ix-2)
+		ld (ix+1),a		; segment i's column: no line changes yet
+sg_wr__k:		ld (ix+2),1		; IX = segment k (k >= 1): its write came
+		ld a,(ix+0)		; its split in the list now
+		ld (ix+0),c
+		sub c
+		jr z,sg_wr__col
+		jr c,sg_wr__down
+		ld e,a			; earlier than in the list: lines C to the old split
+		ld a,b
+		cp (ix+1)
+		jr nz,sg_wr__col	; sg_wr__col writes them with the rest
+		ld a,(ix-2)
+		cp b
+		ret z
+		ld a,b
+		ld b,c
+		ld c,e
+		jr cop_wlines		; take this column
+sg_wr__down:		neg			; later than in the list: the lines from the old
+		push bc			; split to C take segment k-1's column
+		ld e,a
+		ld a,c
+		sub e
+		ld b,a
+		ld c,e
+		ld a,(ix-2)
+		cp (ix+1)
+		call nz,cop_wlines
+		pop bc
+sg_wr__col:		ld a,b
+		cp (ix+1)
+		ret z
+		ld (ix+1),a
+		ld a,(ix+3)		; the lines from C to the next split take the column
+		sub c
+		ld e,a
+		ld a,b
+		ld b,c
+		ld c,e
+; A = column (1-39), B = first line, C = lines (0-192): writes the first
+; byte of WAIT y,c of each line, whose switch pair already has a switch, as
+; cop_switches does. The copper keeps running. Uses A, C, DE, HL.
+cop_wlines:
+		inc c
+		dec c
+		ret z
+		add a,a
+		or $80
+		push af
+		ld e,b
+		ld d,10
+		mul d,e
+		ld hl,6
+		add hl,de		; HL = 2 * (3 + 5B): line B's first slot
+		pop de			; D = the first byte of WAIT y,c
+cop_wlines__one:	ld a,h
+		or %11000000
+		nextreg $62,a
+cop_wlines__l:		ld a,l
+		nextreg $61,a
+		ld a,d
+		nextreg $60,a
+		ld a,l
+		add a,10
+		ld l,a
+		jr c,cop_wlines__c
+		dec c
+		jr nz,cop_wlines__l
+		ret
+cop_wlines__c:		inc h
+		dec c
+		jr nz,cop_wlines__one
+		ret
+
+; Once a frame, before rast_frame and cop_update: a segment whose write did
+; not come in the frame is merged into the one above it (its lines take that
+; column).
+sg_frame:
+		ld a,(sg_n)
+		cp 2
+		ret c
+		ld a,(m224)
+		ld hl,cop_mode
+		or (hl)
+		and $FD
+		jp nz,sg_reset
+		ld a,(cop_sw)
+		ld (sg_tab+1),a
+		push ix
+		push iy
+		ld ix,sg_tab+3		; read
+		ld iy,sg_tab+3		; write
+		ld a,(sg_n)
+		dec a
+		ld b,a			; B = segments 1 .. n-1
+		ld c,1			; C = segments kept
+sg_frame__l:		ld a,(ix+2)
+		or a
+		jr z,sg_frame__drop
+		ld (iy+2),0
+		ld a,(ix+0)
+		ld (iy+0),a
+		ld a,(ix+1)
+		ld (iy+1),a
+		ld de,3
+		add iy,de
+		inc c
+		jr sg_frame__nx
+sg_frame__drop:		ld a,(iy-2)		; the column of the last segment kept
+		cp (ix+1)
+		jr z,sg_frame__nx
+		push bc
+		ld e,a
+		ld b,(ix+0)
+		ld a,(ix+3)		; the next segment's split (not yet moved down)
+		sub b
+		ld c,a
+		ld a,e
+		call cop_wlines
+		pop bc
+sg_frame__nx:		ld de,3
+		add ix,de
+		djnz sg_frame__l
+		ld (iy+0),192
+		ld a,c
+		ld (sg_n),a
+		pop iy
+		pop ix
+		jp sg_end
 
 ; move the wrap MOVE from the old V to the new one (E = new V)
 cop_wrap:
@@ -1980,6 +2252,20 @@ fw2_switches__c:		ld (cram_hk),a
 fw2_switches__k:	ld (kn_hk+1),hl
 		ld (tf_vbl+1),de
 		ld (tf_tw+1),de
+		; hsplit: three calls go to the sg_ routines (see sg_tab)
+		call sg_reset
+		ld hl,hscroll_set
+		ld de,rast_frame
+		ld bc,cop_head
+		ld a,(fw_flags)
+		and $20
+		jr z,fw2_switches__h
+		ld hl,hs_reg8
+		ld de,sg_vbl
+		ld bc,sg_head
+fw2_switches__h:	ld (r8_hk+1),hl
+		ld (vb_cop+1),de
+		ld (cf_hk+1),bc
 		; Layer 2 (priority tiles): 256x192 from L2_BANK, above the sprites;
 		; its transparent colour is one the SMS palette never makes
 		ld a,(fw_flags)

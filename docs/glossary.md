@@ -140,6 +140,8 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **Layer 2.** A Next bitmap layer. The runtime uses it for priority tiles, at 256x192 in 192-line mode and 320x256 in 224-line mode. Code: `L2_PAGE`, `L2W_PAGE`, `L2_TRANS`. Read more: overlays.md, "Switches" (`priority`).
 
+**Library page.** A code page that more than one game uses. Its source is one file in `overlays/lib/`, which starts with its contract: the game routine it replaces, its entries and registers, and what it needs from the game. A spec uses it with the line `libpage N NAME`, and each overlay carries its own built copy in a `PAGE` chunk. `build-overlays.py` stops when two overlays carry different bytes for one library page. Read more: overlays.md, "Library pages".
+
 **Line event.** An SMS line interrupt, programmed by the game. The runtime delivers it to the game's handler. Read more: design.md, "The video rate".
 
 **Line mode (192-line, 224-line).** The Master System picture heights. 192 lines is the usual size. 224 lines is the taller picture some games use (Micro Machines). The runtime uses a different copper list and a wider Layer 2 for priority tiles in 224-line mode. Read more: design.md, "Known limits".

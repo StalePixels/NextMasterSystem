@@ -128,9 +128,10 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 | `priority` | `0`, `1` | draw priority tiles again in Layer 2, above the sprites |
 | `toppal` | `0`, `1` | show the palette the frame handler leaves from line 0 of the picture |
 | `tilecache` | `0`, `1` | copy the tiles that block writes take whole from cart ROM from the converted cart (the cart as Next tile rows, made at game start), and do not convert them again |
+| `hsplit` | `0`, `1` | a horizontal scroll write in the picture (a line interrupt split) also moves the copper's map switch column for the lines below it. A file with `hsplit=1` needs runtime ABI 8. |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
 
-NextMasterSystem acts on `priority`, `toppal`, `tilecache` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
+NextMasterSystem acts on `priority`, `toppal`, `tilecache`, `hsplit` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
 
 ## `META`: the game's details
 
@@ -247,4 +248,4 @@ Most changes in `PTCH` replace an instruction in the game with an `RST` to the r
 ## Versions
 
 - The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip.
-- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, and a file whose page code calls `jt_vwrite` needs ABI 7.
+- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, a file whose page code calls `jt_vwrite` needs ABI 7, and a file with `hsplit=1` in `CONF` needs ABI 8, so that a runtime that does not know the key refuses the file rather than run the game without it.
