@@ -6,6 +6,18 @@ hz 50		; No-Intro regions Europe, Brazil
 # starts at its target.
 vector 00 io
 start 00C6
+# LD HL,$0155; LD DE,$FFFC; LD BC,4; LDIR copies 0,0,1,2 to the mapper registers.
+# Two pair stores do the same: A is 0 here, and HL, DE and BC are dead (the
+# calls at 00127 and 0012A keep them, the one at 00138 loads them).
+asm 00114 11   ; LDIR $FFFC-$FFFF
+    ld h,a
+    ld l,a
+    rst $00
+    db $15, 0         ; LD ($FFFC),HL
+    ld hl,$0201
+    rst $00
+    db $17, 0         ; LD ($FFFE),HL
+endasm
 asm 0011F 2   ; IM 1 -> IM 2
     im 2
 endasm
@@ -135,6 +147,7 @@ site 030E0   ; OUT ($BF),A
 site 030E7   ; OUT ($BF),A
 site 030EC   ; OUT ($BE),A
 site 033E0   ; OUT ($BE),A
+site 0340F   ; OUT ($BE),A
 site 035A4   ; OUT ($BF),A
 site 035AB   ; OUT ($BF),A
 site 035B0   ; OUT ($BE),A
@@ -167,6 +180,16 @@ site 03E17   ; OUT ($BE),A
 site 03E1C   ; OUT ($BE),A
 site 03E22   ; OUT ($BE),A
 site 03E28   ; OUT ($BE),A
+site 03E61   ; OUT ($BF),A
+site 03E68   ; OUT ($BF),A
+site 03E72   ; OUT ($BE),A
+site 03E77   ; OUT ($BE),A
+site 03E7D   ; OUT ($BE),A
+site 03E83   ; OUT ($BE),A
+site 03E9C   ; OUT ($BE),A
+site 03EA1   ; OUT ($BE),A
+site 03EA7   ; OUT ($BE),A
+site 03EAD   ; OUT ($BE),A
 site 0871E   ; OUT ($BE),A
 site 08724   ; OUT ($BE),A
 site 08736   ; OUT ($BE),A
@@ -175,6 +198,10 @@ site 087CB   ; OUT ($BE),A
 site 087D1   ; OUT ($BE),A
 site 087D5   ; OUT ($BE),A
 site 087DB   ; OUT ($BE),A
+site 0A0B8   ; OUT ($BE),A
+site 0A0BC   ; OUT ($BE),A
+site 0A0C0   ; OUT ($BE),A
+site 0A0C5   ; OUT ($BE),A
 site 0A81C   ; OUT ($BE),A
 site 0A820   ; OUT ($BE),A
 site 0A824   ; OUT ($BE),A

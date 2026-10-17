@@ -329,10 +329,70 @@ site 138B2   ; OUT ($BF),A
 site 138B6   ; OUT ($BF),A
 site 138BC   ; OUT ($BE),A
 site 138C3   ; OUT ($BE),A
+# Screen I/O that the draft missed: the scan reached these only as bytes no path
+# reached (bank 0) or as the bank 4 routines that the level 3 warship and the level 4
+# dot-droppers draw with. The attract-mode I/O log runs every one of them.
+site 02E98   ; OUT ($BE),A
+site 02E9F   ; OUT ($BE),A
+site 02EC2   ; OUT ($BE),A
+site 02EC9   ; OUT ($BE),A
+site 106D7   ; OUT ($BF),A
+site 106DB   ; OUT ($BF),A
+site 10894   ; OUT ($BF),A
+site 10897   ; OUT ($BF),A
+site 1089A   ; OUT ($BE),A
+site 108A2   ; OUT ($BE),A
+site 10BCC   ; OUT ($BF),A
+site 10BD1   ; OUT ($BF),A
+site 10BD5   ; IN A,($BE)
+site 10BDB   ; IN A,($BE)
+site 10BE8   ; OUT ($BF),A
+site 10BEF   ; OUT ($BF),A
+site 10BF5   ; IN A,($BE)
+site 10BFA   ; IN A,($BE)
+site 10CEA   ; OUT ($BF),A
+site 10CED   ; OUT ($BF),A
+site 10CF3   ; OUT ($BE),A
+site 10CFA   ; OUT ($BE),A
+site 10D0B   ; OUT ($BF),A
+site 10D10   ; OUT ($BF),A
+site 10D1B   ; OUT ($BF),A
+site 10D1E   ; OUT ($BF),A
+site 10D28   ; OUT ($BF),A
+site 10D2D   ; OUT ($BF),A
+site 10D33   ; OUT ($BE),A
+site 10D3A   ; OUT ($BE),A
+site 111FC   ; OUT ($BF),A
+site 111FF   ; OUT ($BF),A
+site 118CB   ; OUT ($BF),A
+site 118CE   ; OUT ($BF),A
+site 118D8   ; OUT ($BF),A
+site 118DB   ; OUT ($BF),A
+site 118E5   ; OUT ($BF),A
+site 118E8   ; OUT ($BF),A
+site 11925   ; OUT ($BE),A
+site 1192B   ; OUT ($BE),A
+site 11A9E   ; OUT ($BF),A
+site 11AA1   ; OUT ($BF),A
+site 11AA4   ; OUT ($BE),A
+site 11AAB   ; OUT ($BE),A
+site 122AE   ; OUT ($BF),A
+site 122B4   ; OUT ($BF),A
+site 122DD   ; OUTI
+site 12300   ; OUT ($BE),A
+site 12313   ; OUTI
+site 12317   ; OUTI
+site 1231B   ; OUTI
+site 1231F   ; OUTI
+site 1234A   ; OUT ($BE),A
 # CHECK mapper at 00006 ($0006 bank 0): LD (HL),$00 $FFFC<-$00
 # CHECK mapper at 00009 ($0009 bank 0): LD (HL),$00 $FFFD<-$00
 # CHECK mapper at 0000C ($000C bank 0): LD (HL),$01 $FFFE<-$01
 # CHECK mapper at 0000F ($000F bank 0): LD (HL),$02 $FFFF<-$02
+mapldk 00003   # loads HL with $FFFC, then stores $00 through it
+maphl 00009   # LD (HL),$00, HL = $FFFD
+maphl 0000C   # LD (HL),$01, HL = $FFFE
+maphl 0000F   # LD (HL),$02, HL = $FFFF
 mapst 0048E   ; LD ($FFFF),A
 mapsthl 00495   # LD ($FFFE),HL in the ISR: restores both banks
 mapst 004E9   ; LD ($FFFF),A

@@ -38,6 +38,8 @@ site 02F8   ; OUT ($BF),A
 site 02FD   ; OUT ($BF),A
 # CHECK mapper at 006F: LD ($FFFC),DE $FFFC,$FFFD
 # CHECK mapper at 0076: LD ($FFFE),DE $FFFE,$FFFF
+mapstde 0006F   ; LD ($FFFC),DE
+mapstde 00076   ; LD ($FFFE),DE
 # CHECK cartarea_store at 06A5: LD ($AACC),HL $AACC,$AACD
 # CHECK cartarea_store at 8819: LD ($AAAA),HL $AAAA,$AAAB
 # CHECK cartarea_store at 8826: LD ($2AAA),HL $2AAA,$2AAB

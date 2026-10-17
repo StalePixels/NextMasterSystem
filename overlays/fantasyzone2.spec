@@ -132,6 +132,10 @@ mapst 002C7   ; LD ($FFFF),A
 # CHECK mapper at 00416 ($0416 bank 0): LD (HL),$00 $FFFD<-$00
 # CHECK mapper at 00419 ($0419 bank 0): LD (HL),$01 $FFFE<-$01
 # CHECK mapper at 0041C ($041C bank 0): LD (HL),$02 $FFFF<-$02
+mapldk 00410   # loads HL with $FFFC, then stores $80 through it
+maphl 00416   # LD (HL),$00, HL = $FFFD
+maphl 00419   # LD (HL),$01, HL = $FFFE
+maphl 0041C   # LD (HL),$02, HL = $FFFF
 # CHECK cartarea_store at 00081 ($0081 bank 0): LD (BC),A $0202
 # CHECK cartarea_store at 00677 ($0677 bank 0): LD (HL),A $46B4
 # CHECK cartarea_store at 006BB ($06BB bank 0): INC (HL) $46B4

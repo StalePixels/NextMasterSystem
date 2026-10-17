@@ -291,6 +291,13 @@ vc_fast__gen:	pop af			; P/V = IFF2
 		ei
 		ret
 
+; map_bank for code in fw2 that goes on after it (cold_mapper's pair
+; stores): slot 0 (E = 0) maps MMU1 too, where fw2 runs, so FW2 goes back
+; at $2000. cur_mmu+1 keeps the game's page for fw2_call to put back.
+map_bank_fw2:	call map_bank
+		nextreg $51,FW2_PAGE
+		ret
+
 fw_gap_end:
 ; assert fw_gap_end <= mapattr_table, "the code after fw_stack runs into the tables' page" (checked by tools/check-layout)
 

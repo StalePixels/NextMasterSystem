@@ -1,6 +1,6 @@
 # The `.nms` overlay file format
 
-An `.nms` file tells NextMasterSystem how to run one Master System game. The file holds the changes NextMasterSystem makes to the player's own cart image, the settings for the game, the game's details for the browser, a 32x32 icon, and any code pages of our own that the game needs. The file never holds bytes copied from a game.
+An `.nms` file tells NextMasterSystem how to run one Master System game. The file holds the changes NextMasterSystem makes to the player's own cart, the settings for the game, the game's details for the browser, a 32x32 icon, and any code pages of our own that the game needs. The file never holds bytes copied from a game.
 
 Files live in the `ovl` folder next to `nms.nex` on the SD card. NextMasterSystem reads the current directory when it starts (esxDOS `F_GETCWD`), and that is the folder holding `nms.nex`. Each file is named after the CRC32 of the cart it was made for, in upper-case hex: `ovl/0123ABCD.nms`.
 
@@ -9,7 +9,7 @@ Files live in the `ovl` folder next to `nms.nex` on the SD card. NextMasterSyste
 - All numbers are little-endian.
 - `u8`, `u16`, `u24` and `u32` are unsigned integers of 1, 2, 3 and 4 bytes.
 - A CRC32 is the standard CRC32 used by zip and PNG. Its polynomial is `$EDB88320`, reflected. Its initial value and final XOR are `$FFFFFFFF`.
-- The cart CRC32 is taken over the cart image without a copier header. A cart image whose size is 512 bytes more than a multiple of 16K has a copier header. The reader leaves out the first 512 bytes.
+- The cart CRC32 is taken over the cart without a copier header. A cart whose size is 512 bytes more than a multiple of 16K has a copier header. The reader leaves out the first 512 bytes.
 - A cart offset is a byte offset into the cart image, after the copier header is removed.
 - Text is ASCII. Each line ends with a single `$0A`.
 
@@ -24,7 +24,7 @@ An `.nms` file has a fixed header, then a sequence of chunks, then the `END ` ch
 | 0 | 4 | magic: `N`, `M`, `S`, `$1A` |
 | 4 | u8 | format major version: 1 |
 | 5 | u8 | format minor version: 0 |
-| 6 | u8 | framework ABI the file needs; see "Versions" |
+| 6 | u8 | runtime ABI the file needs; see "Versions" |
 | 7 | u8 | reserved, 0 |
 | 8 | u32 | primary cart CRC32: the cart the file was made for |
 | 12 | u32 | size in bytes of the primary cart. The loader does not check it, because another accepted dump may have another size. |
@@ -49,7 +49,7 @@ A file has no size limit, and neither has a chunk. NextMasterSystem never holds 
 | `CONF` | no | settings |
 | `META` | no | the game's details for the browser |
 | `ICON` | no | a 32x32 icon |
-| `PAGE` | no, any number | a whole 8K bank of code of our own |
+| `PAGE` | no, any number | a whole 8K page of code of our own |
 | `SIGN` | no | reserved for a signature; readers ignore it for now |
 | `END ` | yes | the CRC32 of the file up to this chunk |
 
@@ -59,7 +59,7 @@ A list of `u32` CRC32 values, of any length. The first is the primary CRC32 from
 
 Listing a CRC32 here claims that the `CHECK` operations in `PTCH` pass for that dump. The file's tools must prove the claim before they add a CRC32. The loader refuses a file whose `CRCS` does not list the cart's CRC32.
 
-### The alias index
+### The index
 
 NextMasterSystem does not open every file to find a match. A tool builds `ovl/index` from the `CRCS` chunks of every file in the folder:
 
@@ -88,11 +88,11 @@ The loader reads `PTCH` twice. The first pass runs every `CHECK` and checks ever
 
 A `PATCH` holds only the new bytes, and only the bytes that differ from the cart. A `CHECK` holds only a CRC32 of the original bytes, so the file never carries code or data from the game. A `CHECK` range must lie inside the cart image; a range past its end fails.
 
-A file has at most one `RAMSITES` and at most one `RASTER`, and not both: the framework keeps the `RAMSITES` table and the `RASTER` routine in the same place.
+A file has at most one `RAMSITES` and at most one `RASTER`, and not both: the runtime keeps the `RAMSITES` table and the `RASTER` routine in the same place.
 
 ### `RAMSITES`
 
-Some games build code in RAM, so its I/O instructions are not in the cart image. The continuation is the address the game jumps to once its RAM code is built; the cart image is patched to call the framework there first. Each entry is:
+Some games build code in RAM, so its I/O instructions are not in the cart image. The continuation is the address the game jumps to once its RAM code is built; the cart image is patched to call the runtime there first. Each entry is:
 
 | Size | Field |
 |---|---|
@@ -101,9 +101,9 @@ Some games build code in RAM, so its I/O instructions are not in the cart image.
 | u16 | low 16 bits of the CRC32 of the original n bytes |
 | n | the new bytes |
 
-The framework compares the RAM with the original bytes, writes the new bytes where they match, then jumps to the continuation.
+The runtime compares the RAM with the original bytes, writes the new bytes where they match, then jumps to the continuation.
 
-The current framework takes entries of 2 bytes only: an `RST` to the I/O entry and an inline code. The loader refuses other lengths. It works out the original instruction from the inline code and the CRC32:
+The current runtime takes entries of 2 bytes only: an `RST` to the I/O entry and an inline code. The loader refuses other lengths. It works out the original instruction from the inline code and the CRC32:
 
 - codes `$00-$07`: `OUT (n),A`, `D3 n`, with n in that port class;
 - codes `$08-$0F`: `IN A,(n)`, `DB n`, with n in that port class;
@@ -113,9 +113,9 @@ Of these candidates, the original is the one whose CRC32 has the entry's low 16 
 
 ### `RASTER`
 
-Some games set the horizontal scroll on nearly every line from a line interrupt. The Next cannot deliver an interrupt on every line in time, so the file brings a routine that works out each line's scroll value from the game's RAM. The routine is code of our own, assembled to run at `$3C00` in the framework's second page, at most 1024 bytes long. The loader copies it there. Its entry is its first byte.
+Some games set the horizontal scroll on nearly every line from a line interrupt. The Next cannot deliver an interrupt on every line in time, so the file brings a routine that works out each line's scroll value from the game's RAM. The routine is code of our own, assembled to run at `$3C00` in the runtime's part 2, at most 1024 bytes long. The loader copies it there. Its entry is its first byte.
 
-The framework calls the routine once a frame with HL pointing to a table of 192 bytes, one per line, IX pointing to the framework's copy of VDP registers 0 to 10, and the game's RAM at `$C000`. The routine fills the table with the value of VDP register 8 for each line, and returns with carry set when the table is valid for this frame. With carry clear, the framework uses its normal scroll handling.
+The runtime calls the routine once a frame with HL pointing to a table of 192 bytes, one per line, IX pointing to the runtime's copy of VDP registers 0 to 10, and the game's RAM at `$C000`. The routine fills the table with the value of VDP register 8 for each line, and returns with carry set when the table is valid for this frame. With carry clear, the runtime uses its normal scroll handling.
 
 ## `CONF`: settings
 
@@ -127,10 +127,10 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 | `cpu` | `28`, `3.5` | the CPU speed for the game's own code |
 | `priority` | `0`, `1` | draw priority tiles again in Layer 2, above the sprites |
 | `toppal` | `0`, `1` | show the palette the frame handler leaves from line 0 of the picture |
-| `tilecache` | `0`, `1` | copy the tiles that block writes take whole from cart ROM from a converted copy of the cart, made at game start, and do not convert them again |
+| `tilecache` | `0`, `1` | copy the tiles that block writes take whole from cart ROM from the converted cart (the cart as Next tile rows, made at game start), and do not convert them again |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
 
-NextMasterSystem acts on `priority`, `toppal`, `tilecache` and `hz`. It does not act on the other keys yet. An engine that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. An engine that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
+NextMasterSystem acts on `priority`, `toppal`, `tilecache` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
 
 ## `META`: the game's details
 
@@ -159,7 +159,7 @@ NextMasterSystem does not read the `ICON` chunk yet.
 
 ## `PAGE`: code pages
 
-A page is a whole 8K bank of Z80N code of our own for this game. It can replace a slow routine of the game or act as a library of helpers. A file may hold any number of `PAGE` chunks, one for each page number.
+A code page is a whole 8K Next page of Z80N code of our own for this game. It can replace a slow routine of the game or act as a library of helpers. A file may hold any number of `PAGE` chunks, one for each page number.
 
 | Offset | Size | Field |
 |---|---|---|
@@ -170,22 +170,22 @@ A page is a whole 8K bank of Z80N code of our own for this game. It can replace 
 
 The code is assembled to run at `$2000-$3FFF`. Each entry address lies inside the code. Entry n of the page is the n-th address in the list.
 
-The loader puts each page into its own 8K RAM page before the game starts, and fills the rest of that RAM page with zeros. The current framework takes page numbers 0 to 7 and at most 64 entries over all the pages of a file. The loader refuses a file with a page number over 7, a page number twice, more entries, no entries, or an entry outside its page's code.
+The loader puts each page into its own 8K RAM page before the game starts, and fills the rest of that RAM page with zeros. The current runtime takes page numbers 0 to 7 and at most 64 entries over all the pages of a file. The loader refuses a file with a page number over 7, a page number twice, more entries, no entries, or an entry outside its page's code.
 
 ### The far call
 
-A patched site reaches a page entry through a far call. It has one of two forms:
+A site reaches a page entry through a far call. It has one of two forms:
 
-- an `RST` to the framework's I/O entry, the inline code `$80`, then `u8` page and `u8` entry: 4 bytes;
+- an `RST` to the runtime's I/O entry, the inline code `$80`, then `u8` page and `u8` entry: 4 bytes;
 - `CALL $E072` (`jt_far` in the jump table), then `u8` page and `u8` entry: 5 bytes.
 
-The framework then:
+The runtime then:
 
 1. maps the page into `$2000-$3FFF` (MMU1), in place of the page the window held;
 2. jumps to the entry, with the game's registers and the game's interrupt state as they were at the site;
 3. when the entry returns, maps the old page back into the window and returns to the byte after the page and entry bytes, with the registers and flags the entry returned.
 
-At the entry, the stack holds the return into the framework, then a word whose low byte is the page the window held, then the return address after the site. An entry can make a far call itself. A page number that the file has no page for, or an entry number that the page does not list, stops the game with a red border.
+At the entry, the stack holds the return into the runtime, then a word whose low byte is the page the window held, then the return address after the site. An entry can make a far call itself. A page number that the file has no page for, or an entry number that the page does not list, stops the game with a red border.
 
 ### Rules for page code
 
@@ -193,9 +193,9 @@ Page code may do what it needs. It can turn interrupts off, switch to a stack of
 
 - Before an entry returns, it restores everything it changed that the game code it replaces does not change: the stack pointer, the interrupt state, the MMU slots, and the registers. The game then carries on as if its own code had run.
 - While an entry runs, `$2000-$3FFF` holds the page, not the game's code and data there. `jt_peek` (`$E075` in the jump table) gives in A the byte that the game sees at the address in HL. For an address in `$2000-$3FFF` it reads the game's own page. It keeps every other register except F, and leaves interrupts as they are.
-- Page code can use the overlay's I/O `RST` with the inline codes in this file, in the same way as a patched site. For example, one `OTIR` through the framework writes a whole buffer to the VDP.
+- Page code can use the overlay's I/O `RST` with the inline codes in this file, in the same way as a site. For example, one `OTIR` through the runtime writes a whole buffer to the VDP.
 - `jt_vwrite` (`$E078`, ABI 7) writes bytes into VRAM in runs: the same bytes, in the same places, as a control write of each run's address and then its data writes to the VDP data port. It is much faster than the I/O `RST`, because it maps the pages it uses once for the call. See "Writing VRAM from page code" below.
-- The game's interrupt handler can run while an entry runs with interrupts on. The framework then maps the game's own page into `$2000-$3FFF` for the handler, and maps the code page back when the handler returns. An entry can leave interrupts on only for a game whose interrupt code does not write the mapper register `$FFFD`. For any other game, the entry turns interrupts off while it runs.
+- The game's interrupt handler can run while an entry runs with interrupts on. The runtime then maps the game's own page into `$2000-$3FFF` for the handler, and maps the code page back when the handler returns. An entry can leave interrupts on only for a game whose interrupt code does not write the mapper register `$FFFD`. For any other game, the entry turns interrupts off while it runs.
 
 ### Writing VRAM from page code
 
@@ -213,7 +213,7 @@ Page code may do what it needs. It can turn interrupts off, switch to a stack of
 
 The source lies in `$0000-$DFFF`. For example, a name table column of 28 cells, 2 bytes each, from a copy in RAM with 64 bytes to a row: HL = the copy's first cell, DE = the VRAM address of the column's first cell, B = 2, C = 28, IX = IY = 64.
 
-For each byte, `jt_vwrite` does what the framework does for a write to the data port: it writes the framework's copy of VRAM, the Next tilemaps for a name table entry, the priority marks with the `priority` switch, the mark that a tile must be converted again, and the mark that the sprite table changed. It leaves the VDP state as the writes would: the address after the last byte of the last run, code 1 (a VRAM write), the control latch clear, and the read buffer holding the last byte written.
+For each byte, `jt_vwrite` does what the runtime does for a write to the data port: it writes the VRAM copy, the Next tilemaps for a name table entry, the priority marks with the `priority` switch, the mark that a tile must be converted again, and the mark that the sprite table changed. It leaves the VDP state as the writes would: the address after the last byte of the last run, code 1 (a VRAM write), the control latch clear, and the read buffer holding the last byte written.
 
 It keeps BC, DE, HL, IX, IY, the alternate registers and the interrupt state; A and F change. It runs with interrupts off and on a stack of its own, so the game's interrupt handler cannot run in the middle of it. It writes VRAM only: CRAM writes go through the I/O `RST`.
 
@@ -223,7 +223,7 @@ The chunk is one `u32`: the CRC32 of every byte of the file before this chunk's 
 
 ## Inline codes
 
-Most changes in `PTCH` replace an instruction in the game with an `RST` to the framework's I/O entry. The `RST` is followed by an inline code byte. That byte tells the framework which instruction it replaced. The inline codes and their operand bytes are part of the framework ABI. A code never changes meaning. New codes need a new ABI version.
+Most changes in `PTCH` replace an instruction in the game with an `RST` to the runtime's I/O entry. The `RST` is followed by an inline code byte. That byte tells the runtime which instruction it replaced. The inline codes and their operand bytes are part of the runtime ABI. A code never changes meaning. New codes need a new ABI version.
 
 | Code | Instruction replaced | Operands after the code |
 |---|---|---|
@@ -247,4 +247,4 @@ Most changes in `PTCH` replace an instruction in the game with an `RST` to the f
 ## Versions
 
 - The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip.
-- The **framework ABI** in the header says which inline codes and framework features the file uses. A framework accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, and a file whose page code calls `jt_vwrite` needs ABI 7.
+- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, and a file whose page code calls `jt_vwrite` needs ABI 7.

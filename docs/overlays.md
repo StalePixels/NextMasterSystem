@@ -36,7 +36,7 @@ The draft is not finished. Before you build it:
 - Go through every `CHECK` comment. A `CHECK high`, `CHECK medium` or `CHECK low` site is a byte pattern that looks like an I/O instruction in bytes that the scanner did not reach, rated by how much the bytes around it look like code; the comment gives the evidence. It can be data. Make it a `site` line only if it is code.
 - Check the mapper stores from the byte scan. `sitescan.py` also looks for mapper store byte patterns in code that no path reached, because an unpatched mapper store does not switch the bank and the game then reads the wrong bank. `mkspec.py` writes a spec line for each one with high confidence; the comment after it gives the evidence. Read the code around each one. A `CHECK byte scan` comment is a medium or low confidence hit: make it a spec line only if it is code. [sitescan.md](sitescan.md) describes the ratings.
 - Read `game.unproven.tsv`. It lists stores that the scanner could not prove to stay off the mapper registers.
-- Give the spec an `io` vector (`vector 10 io`, or any free vector, `vector 00 io` when no other is free). `mknms.py` gives a site a trace form (a run of outputs, a loop or straight code with several outputs run in one framework call) only when the spec has an `io` vector. Without it every site is a single trap of about 1,000 to 2,100 Next cycles, and a long copy, such as a 192-byte sprite table, can run past the next frame's work. In DataStorm this made the sprites jump. When a spec patches I/O sites and has no `io` vector, `mknms.py` prints a warning to stderr. The warning is not an error: Canyon Racer (`racer.spec`) has no `io` vector, and a test with one showed little gain. Add the vector, rebuild and measure before you ignore the warning.
+- Give the spec an `io` vector (`vector 10 io`, or any free vector, `vector 00 io` when no other is free). `mknms.py` gives a site a trace form (a run of outputs, a loop or straight code with several outputs run in one runtime call) only when the spec has an `io` vector. Without it every site is a single output of about 1,000 to 2,100 Next cycles, and a long copy, such as a 192-byte sprite table, can run past the next frame's work. In DataStorm this made the sprites jump. When a spec patches I/O sites and has no `io` vector, `mknms.py` prints a warning to stderr. The warning is not an error: Canyon Racer (`racer.spec`) has no `io` vector, and a test with one showed little gain. Add the vector, rebuild and measure before you ignore the warning.
 
 `python3 tools/mknms.py --help` lists every spec line and what it does.
 
@@ -67,7 +67,7 @@ endasm
 
 ### Names that every block knows
 
-These are the framework's entry points and fixed addresses. They are the same in every overlay. `src/runtime/fw.asm` defines them, and [design.md](design.md) describes the jump table.
+These are the runtime's entry points and fixed addresses. They are the same in every overlay. `src/runtime/fw.asm` defines them, and [design.md](design.md) describes the jump table.
 
 The jump table entries. A patch calls or jumps to one of these addresses:
 
@@ -96,7 +96,7 @@ The fixed state variables:
 | `fw_size` | `$E025` | 4 | cart size |
 | `fw_npages` | `$E029` | 1 | cart size in 8K pages |
 | `fw_lastop` | `$E02A` | 1 | the last `ED` operation |
-| `fw_frames` | `$E02B` | 2 | frames of vblank work done |
+| `fw_frames` | `$E02B` | 2 | frames of once-a-frame work done |
 | `cur_mmu` | `$E02D` | 8 | the game's MMU0 to MMU7 pages |
 | `vdp_latch` | `$E035` | 1 | VDP control latch |
 | `vdp_code` | `$E036` | 1 | VDP code register |
@@ -127,7 +127,7 @@ The builder assembles `call wait_frame` at `$2F10` as `CD 40 1B`, adds three `NO
 
 ## Code pages
 
-A routine that is too slow through the framework's I/O traps can be replaced with code of our own in a code page. A page is an 8K bank that runs at `$2000-$3FFF` while one of its entries runs. [nms-format.md](nms-format.md) describes the far call and the rules that page code follows.
+A routine that is too slow through the runtime's traps can be replaced with code of our own in a code page. A code page is an 8K Next page that runs at `$2000-$3FFF` while one of its entries runs. [nms-format.md](nms-format.md) describes the far call and the rules that page code follows.
 
 ```
 page 0 fill_rows clear_map
@@ -156,27 +156,27 @@ asm 01234 5          ; 5 bytes, with no io vector
 endasm
 ```
 
-The entry runs with the game's registers and interrupt state, and the patch goes on after the two bytes with the registers the entry returns. A spec with a page needs framework ABI 6, and ABI 7 when a block calls `jt_vwrite`. `mknms.py` sets it.
+The entry runs with the game's registers and interrupt state, and the patch goes on after the two bytes with the registers the entry returns. A spec with a page needs runtime ABI 6, and ABI 7 when a block calls `jt_vwrite`. `mknms.py` sets it.
 
 In page code:
 
 - Read the game's memory with `call jt_peek` for any address that can be in `$2000-$3FFF`. A plain read there reads the page itself.
-- Use the game's I/O `RST` and inline codes for I/O, as a patch does. `rst <io vector>` then `db $B3` is an `OTIR` through the framework: it writes B bytes from HL to the port in C.
-- Write VRAM with `call jt_vwrite`. It writes the bytes as the game's writes to the VDP data port would: the framework's copy of VRAM, the Next tilemaps, the priority marks, the tiles to convert again and the sprite table. Each run of bytes needs only one call, and many runs with the same step need only one call too. The arguments and results are in [nms-format.md](nms-format.md).
+- Use the game's I/O `RST` and inline codes for I/O, as a patch does. `rst <io vector>` then `db $B3` is an `OTIR` through the runtime: it writes B bytes from HL to the port in C.
+- Write VRAM with `call jt_vwrite`. It writes the bytes as the game's writes to the VDP data port would: the VRAM copy, the Next tilemaps, the priority marks, the tiles to convert again and the sprite table. Each run of bytes needs only one call, and many runs with the same step need only one call too. The arguments and results are in [nms-format.md](nms-format.md).
 - The state variables in the table above (`vdp_addr`, `vdp_code`, `vdp_latch` and the others) can be read and written directly.
 
 `overlays/ecco.spec` has a page that writes a name table column with one `jt_vwrite` call. `overlays/aliensyndrome.spec` has a page that writes rows of name table cells.
 
 ## Switches
 
-A switch is a spec line of one word, or for `hz` a word and a value. It turns on an engine feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1`, and `hz` as `hz=50`, `hz=60` or `hz=any` ([nms-format.md](nms-format.md)). The information screen lists the switches that are on and shows the video rate the game will use.
+A switch is a spec line of one word, or for `hz` a word and a value. It turns on a runtime feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1`, and `hz` as `hz=50`, `hz=60` or `hz=any` ([nms-format.md](nms-format.md)). The information screen lists the switches that are on and shows the video rate the game will use.
 
 | Spec line | `CONF` key | What it does | What it costs | When to turn it on |
 |---|---|---|---|---|
-| `priority` | `priority` | Draws the tiles that have the priority bit again in Layer 2, above the sprites, in 192-line and 224-line mode. | Layer 2 pages are cleared at game start (RAM pages 102-107, and 192-201 for 224-line mode). Each name table write marks its cell when the cell gets the priority bit or Layer 2 holds it, and the vertical blank work draws the marked cells again. A game that shows many priority cells pays for them every frame. In 224-line mode each H scroll change that moves the first map column shown into another 8-pixel cell draws the priority cells of the cell columns that move (Micro Machines' bath race: about 6,000 cycles a frame on average). A new tile under many priority cells has them all drawn again in one vertical blank, about 6,500 cycles a cell in 224-line mode: Micro Machines' intro screen of about 700 priority cells takes 8 frames once; Layer 2 is hidden until such a whole redraw ends. When the display goes on after the game had it off, the marked cells are drawn before it goes on, and the display-on write waits for them ([design.md](design.md), "Display off and on"). | Tiles with the priority bit must cover sprites, as in the game on the Master System. |
+| `priority` | `priority` | Draws the tiles that have the priority bit again in Layer 2, above the sprites, in 192-line and 224-line mode. | Layer 2 pages are cleared at game start (RAM pages 102-107, and 192-201 for 224-line mode). Each name table write marks its cell when the cell gets the priority bit or Layer 2 holds it, and the once-a-frame work draws the marked cells again. A game that shows many priority cells pays for them every frame. In 224-line mode each H scroll change that moves the first map column shown into another 8-pixel cell draws the priority cells of the cell columns that move (Micro Machines' bath race: about 6,000 cycles a frame on average). A new tile under many priority cells has them all drawn again in one vertical blank, about 6,500 cycles a cell in 224-line mode: Micro Machines' intro screen of about 700 priority cells takes 8 frames once; Layer 2 is hidden until such a whole redraw ends. When the display goes on after the game had it off, the marked cells are drawn before it goes on, and the display-on write waits for them ([design.md](design.md), "Display off and on"). | Tiles with the priority bit must cover sprites, as in the game on the Master System. |
 | `toppal` | `toppal` | Shows the palette the frame handler leaves from line 0 of the picture. CRAM writes also go to the second tilemap, sprite and Layer 2 palettes, which are shown from the frame event to the first line event. A display-off write in that time is held until the picture would show it ([design.md](design.md), "Display off and on"). | Each CRAM write does more work, and the frame and line events switch the palettes. | The frame handler writes the palette late, and the top lines of the picture show the wrong colours. |
-| `hz 50`, `hz 60`, `hz any` | `hz` | The video rate of the game. With `50` or `60` the engine sets the Next to that rate when the game starts, after the information screen. BREAK out of the game sets the rate the Next booted at again before the browser shows. With `any`, or no `hz` line, the game runs at the rate the Next booted at. The V counter counts like a PAL Master System at 50 Hz and like an NTSC one at 60 Hz ([design.md](design.md), "The video rate"). | At 60 Hz the Next's frame is 264 lines, 481,536 cycles at 28 MHz, against 311 lines and 567,264 cycles at 50 Hz. Its vertical blank is 72 lines against 119. A game whose frame work nearly fills a 50 Hz frame can overrun at 60 Hz. A monitor that cannot show the rate shows no picture until the player presses BREAK. | Set it from the dump's No-Intro regions. Europe only, or Europe and Brazil: `50`. Any of USA, Japan and Brazil without Europe: `60`. USA or Japan with Europe, or World: `any`. Before you set `60`, measure the frame loads at 60 Hz (`tools/mame/run.py --measure` with the overlay built with `hz 60`). |
-| `tilecache` | `tilecache` | Tiles that a block write (`OTIR`, `OUTI` runs) copies whole from cart ROM, with the source and the VRAM address aligned alike, are copied from a converted copy of the cart and are not converted again. | The engine converts the whole cart at game start: about 1.1 seconds more of loading for each 256K of cart, and RAM pages 125 and 128-191. Each block write costs more: about 45 cycles for a block read from RAM, and about 250 for a block from ROM that holds no whole aligned tile. | The game copies many tiles from ROM while it plays. Measure the frame loads with and without it (`tools/mame/run.py --measure`), and turn it on only where the loads go down. |
+| `hz 50`, `hz 60`, `hz any` | `hz` | The video rate of the game. With `50` or `60` the runtime sets the Next to that rate when the game starts, after the information screen. BREAK out of the game sets the rate the Next booted at again before the browser shows. With `any`, or no `hz` line, the game runs at the rate the Next booted at. The V counter counts like a PAL Master System at 50 Hz and like an NTSC one at 60 Hz ([design.md](design.md), "The video rate"). | At 60 Hz the Next's frame is 264 lines, 481,536 cycles at 28 MHz, against 311 lines and 567,264 cycles at 50 Hz. Its vertical blank is 72 lines against 119. A game whose frame work nearly fills a 50 Hz frame can overrun at 60 Hz. A monitor that cannot show the rate shows no picture until the player presses BREAK. | Set it from the dump's No-Intro regions. Europe only, or Europe and Brazil: `50`. Any of USA, Japan and Brazil without Europe: `60`. USA or Japan with Europe, or World: `any`. Before you set `60`, measure the frame loads at 60 Hz (`tools/mame/run.py --measure` with the overlay built with `hz 60`). |
+| `tilecache` | `tilecache` | Tiles that a block write (`OTIR`, `OUTI` runs) copies whole from cart ROM, with the source and the VRAM address aligned alike, are copied from the converted cart (the cart as Next tile rows, made at game start) and are not converted again. | The runtime converts the whole cart at game start: about 1.1 seconds more of loading for each 256K of cart, and RAM pages 125 and 128-191. Each block write costs more: about 45 cycles for a block read from RAM, and about 250 for a block from ROM that holds no whole aligned tile. | The game copies many tiles from ROM while it plays. Measure the frame loads with and without it (`tools/mame/run.py --measure`), and turn it on only where the loads go down. |
 
 ## 4. Build the overlay file and the index
 

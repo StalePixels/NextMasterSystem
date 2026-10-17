@@ -6,13 +6,13 @@ A fixed recompiler that runs Sega Master System games on the ZX Spectrum Next.
 
 NextMasterSystem runs the game's own Z80 code on the Next's Z80N processor. NextMasterSystem patches each Master System I/O instruction in the game into a call to a small runtime. The runtime draws with the Next's tilemap, sprites and copper. It plays sound on the AY chips.
 
-An overlay (`.nms` file) holds the patches for one game. NextMasterSystem uses the CRC32 of the cart image to match it to the required overlay. This means that arbitrary cart images, and patched files, most likely won't work unless they have a matching overlay, or alias.
+An overlay (`.nms` file) holds the patches for one game. NextMasterSystem uses the CRC32 of the cart to match it to the required overlay. This means that arbitrary carts, and patched carts, most likely won't work unless an overlay accepts their CRC32, as its own or as an alias.
 
 - z88dk C for the UX/loader/overlay/info screen/etc, direct assembly for the hot loops and tight code caves.
 - Overlays can carry their own native code pages, for the game routines that are too slow through the runtime.
-- Engine features with a cost are switches, turned on per overlay. [docs/overlays.md](docs/overlays.md) lists them.
+- Runtime features with a cost are switches, turned on per overlay. [docs/overlays.md](docs/overlays.md) lists them.
 
-The design notes are in [docs/design.md](docs/design.md).
+The design notes are in [docs/design.md](docs/design.md). The terms the docs use are explained in [docs/glossary.md](docs/glossary.md).
 
 ### What you need
 

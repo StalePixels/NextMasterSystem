@@ -254,6 +254,10 @@ site 07EE6   ; OUT ($7F),A
 # CHECK mapper at 00086 ($0086 bank 0): LD (HL),$00 $FFFD<-$00
 # CHECK mapper at 00089 ($0089 bank 0): LD (HL),$01 $FFFE<-$01
 # CHECK mapper at 0008C ($008C bank 0): LD (HL),$02 $FFFF<-$02
+mapldk 00080   # loads HL with $FFFC, then stores $80 through it
+maphl 00086   # LD (HL),$00, HL = $FFFD
+maphl 00089   # LD (HL),$01, HL = $FFFE
+maphl 0008C   # LD (HL),$02, HL = $FFFF
 mapst 001B1   ; LD ($FFFF),A
 mapld 003D4   # loads HL with $FFFF, then stores $03 through it
 mapst 00444   ; LD ($FFFF),A

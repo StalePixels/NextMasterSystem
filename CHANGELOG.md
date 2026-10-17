@@ -2,8 +2,11 @@
 
 ## Release 2 (not released yet)
 
+- Improved compatibility with Alien Syndrome.
 - Improved compatibility with Bubble Bobble.
+- Improved compatibility with Fantasy Zone II.
 - Improved compatibility with R-Type.
+- Improved compatibility with Space Harrier.
 
 ## Release 1, October 2026
 

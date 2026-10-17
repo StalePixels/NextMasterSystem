@@ -382,6 +382,7 @@ cold_mapper__pair:		; A = register low byte, HL = value
 		call cold_mapper__one
 		pop hl
 		inc e
+		ret z			; $FFFF+1 = $0000: a ROM write, no register
 		ld a,h
 cold_mapper__one:		; E = register low byte, A = value
 		push de
@@ -398,7 +399,7 @@ cold_mapper__one:		; E = register low byte, A = value
 cold_mapper__o1:		add a,a
 		ld e,a
 		ld a,c
-		call map_bank
+		call map_bank_fw2	; $FFFD maps MMU1, where this page runs
 cold_mapper__o2:		pop de
 		ret
 cold_mapper__new:		cp $28

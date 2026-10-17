@@ -170,6 +170,8 @@ site 064A   ; OUTI
 site 064C   ; OUTI
 # CHECK mapper at 006F: LD ($FFFC),DE $FFFC,$FFFD
 # CHECK mapper at 0076: LD ($FFFE),DE $FFFE,$FFFF
+mapstde 0006F   ; LD ($FFFC),DE
+mapstde 00076   ; LD ($FFFE),DE
 # CHECK indirect_unresolved at 00F5: CALL $0032 
 # CHECK low: site 850B  IN B,(C)  (port in C)
 # CHECK low: site 877E  IN A,($BF)  (vdp_status)

@@ -221,6 +221,10 @@ mapst 00319   ; LD ($FFFF),A
 # CHECK mapper at 00440 ($0440 bank 0): LD (HL),$00 $FFFD<-$00
 # CHECK mapper at 00443 ($0443 bank 0): LD (HL),$01 $FFFE<-$01
 # CHECK mapper at 00446 ($0446 bank 0): LD (HL),$02 $FFFF<-$02
+mapldk 0043A   # loads HL with $FFFC, then stores $00 through it
+maphl 00440   # LD (HL),$00, HL = $FFFD
+maphl 00443   # LD (HL),$01, HL = $FFFE
+maphl 00446   # LD (HL),$02, HL = $FFFF
 mapst 004DA   ; LD ($FFFF),A
 mapst 00547   ; LD ($FFFF),A
 mapst 0054E   ; LD ($FFFF),A
