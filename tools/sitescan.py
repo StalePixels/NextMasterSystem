@@ -841,6 +841,10 @@ def port_class(port, d):
 COMMON_PORTS = {0xBE, 0xBF, 0xBD, 0x7E, 0x7F, 0xDC, 0xDD, 0xC0, 0xC1, 0x3E, 0x3F, 0xF0, 0xF1, 0xF2}
 MAPPER_LO, MAPPER_HI = 0xFFFC, 0xFFFF
 CODEM_ADDRS = (0x0000, 0x4000, 0x8000)
+# LD ($0007),A between VDP port accesses: a delay that writes ROM, so it changes nothing.
+# Lemmings, The Lion King, The Jungle Book, Battlemaniacs, Bram Stoker's Dracula and The
+# Terminator have it.
+DELAY_STORE = 0x0007
 
 
 # ------------------------------------------------------------------ routines
@@ -1730,7 +1734,7 @@ class Scanner:
         elif t == 'st16':
             nn, width = sem[1], 2
         if nn is not None and nn + width - 1 < 0x8000:
-            if nn not in CODEM_ADDRS:
+            if nn not in CODEM_ADDRS and not (nn == DELAY_STORE and width == 1 and sem[2] == 'A'):
                 return 'store to ROM address %s' % h4(nn)
         if t == 'ld16' and sem[1] == 'SP' and not isinstance(sem[2], str) and sem[2][0] == 'imm' \
                 and 0 < sem[2][1] < 0xC000:

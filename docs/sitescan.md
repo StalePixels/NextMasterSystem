@@ -202,7 +202,7 @@ Object handlers: many games keep their objects in records in RAM. Each record ha
 
 A handler runs later, from the dispatcher, so the slot 1 bank at the store does not say which bank it is in. When the slot 1 bank is unknown there and the code writes one constant bank to $FFFE and no other, a handler in slot 1, and the slot 1 bank at the start of each handler, is that bank. A handler in slot 2 is taken in the bank that slot 2 holds at the store. A handler address is refused when both its bytes are equal, when the target starts with $FF, or when the bytes at the target do not decode as at least two valid instructions. After a scan, a handler entry is dropped on the same signs of data as a harvested entry. Handler code is `medium` confidence. Entries found from handlers' own stores add more handlers in the next round, as harvested entries do. The summary lists each handler entry with its kind and the store or call it came from.
 
-Bytes that are not code: a path stops at an invalid opcode, at `RST $38` followed by $FF (erased fill), at a literal store into $0000-$7FFF other than $0000 and $4000, and at `LD SP,nn` with nn in ROM. The summary lists each place a path stopped and why.
+Bytes that are not code: a path stops at an invalid opcode, at `RST $38` followed by $FF (erased fill), at a literal store into $0000-$7FFF other than $0000 and $4000 and `LD ($0007),A`, and at `LD SP,nn` with nn in ROM. The summary lists each place a path stopped and why. `LD ($0007),A` is a delay between VDP port accesses in several games (Lemmings, The Lion King, The Jungle Book, Battlemaniacs, Bram Stoker's Dracula, The Terminator): it writes ROM and changes nothing, and the code goes on after it.
 
 ### Byte scans
 

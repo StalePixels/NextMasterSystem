@@ -489,8 +489,9 @@ def choose(rd, s, rst):
 
 
 def short_djnz(rd, h, e, rst):
-    """A DJNZ loop that LD B,n with n < 8 sets up just before its head:
-    a few passes per call, so the copy costs more than it saves."""
+    """A DJNZ loop that LD B,n with n from 1 to 7 sets up just before its
+    head: a few passes per call, so the copy costs more than it saves.
+    LD B,0 gives 256 passes."""
     a, last = h, None
     while a < e:
         d = decode(rd, a, rst)
@@ -504,7 +505,7 @@ def short_djnz(rd, h, e, rst):
             d = decode(rd, a, rst)
             if d[0] != K_COPY:
                 break
-            if rd(a) == 0x06 and rd(a + 1) < 8:
+            if rd(a) == 0x06 and 0 < rd(a + 1) < 8:
                 ok = True
             a += d[1]
             n += 1

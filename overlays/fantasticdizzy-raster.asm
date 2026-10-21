@@ -19,11 +19,16 @@
 ; by line 255.
 ;
 ; Play, in 224-line mode, splits the status bar from the play area at the
-; sprite collision line. pal8p (page 0), at the split, stamps $DF06 and keeps
+; sprite collision line. The page 3 split (split_d, split_n) stamps $DF06 and keeps
 ; the status bar's H in $DF07; while that stamp is fresh and the VDP is in
 ; 224-line mode, the table is the status bar's H from line 0 and the play
 ; area's, ($D795), from line 33, where the Master System takes the split's
 ; register 8 write.
+;
+; The item menu (the frame handler's state ($DBE3) 2, at $02ED) splits at the
+; same line through $BBBA, which writes ($D795), and then writes the status
+; bar's H again at $034E, about a line later. Its table gives ($D795) for line
+; 33 only and the status bar's H from line 34.
 ISR_N		equ $E071		; isr_n in the runtime's fixed state
 		org $3C00
 		ld a,(ISR_N)
@@ -49,7 +54,15 @@ ISR_N		equ $E071		; isr_n in the runtime's fixed state
 		ld a,($D795)
 		ld (hl),a
 		inc hl
-		ld (hl),255
+		ld a,($DBE3)		; the frame handler's state
+		cp 2
+		jr nz,pend
+		ld (hl),34		; item menu: the status bar's H again
+		inc hl
+		ld a,($DF07)
+		ld (hl),a
+		inc hl
+pend:		ld (hl),255
 		scf
 		ret
 title:		call m224

@@ -95,7 +95,7 @@ workline 56
 # into the copper list for the next picture only, so the whole picture showed
 # the play area's H. On the Master System the split's write comes about 1.9
 # lines after the status read that sees the flag, so the H changes from line
-# 33. pal8p stamps the split; the rastercode routine then gives play as two
+# 33. The split (page 3) stamps the frame; the rastercode routine then gives play as two
 # segments (rastseg): the status bar's H from line 0 and ($D795) from 33.
 # The title polls for lines 155 and 182 to set the H scroll of its mountain
 # and grass bands. The cave drops the polls and the two register 8 writes and
@@ -130,9 +130,8 @@ endasm
 #   writes the 96 bytes with two jt_vwrite calls, then goes on at the
 #   routine's end ($3A16).
 # - $0263-$0278 writes all 32 CRAM entries each frame (status bar palette from
-#   $007D, then $D971), and the split at $BB9D or $BBC9 writes entries 0-7
-#   from $D969: about 1,700 cycles an entry with toppal. pal32 and pal8p
-#   write only the entries whose colour differs from the runtime's copy.
+#   $007D, then $D971): about 1,700 cycles an entry with toppal. pal32 writes
+#   only the entries whose colour differs from the runtime's copy.
 # - $BC08 writes 4 name table bytes of the status bar, each with its own
 #   control word (stat4); $BCDB writes 8 bytes of tile $13F with a data read
 #   before each (anim8). Both use jt_vwrite.
@@ -158,16 +157,6 @@ asm 00263 22   ; LD A,$00 : OUT ($BF),A : LD A,$C0 : OUT ($BF),A : LD HL,$007D :
     db far_io, pg_pal32, ent_pal32
     jp $0279
 endasm
-asm 0BB9D 19   ; LD A,$00 : OUT ($BF),A : LD A,$C0 : OUT ($BF),A : LD HL,$D969 : LD B,$08 : LD A,(HL) : OUT ($BE),A : INC HL : DJNZ
-    rst $00
-    db far_io, pg_pal8p, ent_pal8p
-    jp $BBB0
-endasm
-asm 0BBC9 19   ; the same at $BBC9
-    rst $00
-    db far_io, pg_pal8p, ent_pal8p
-    jp $BBDC
-endasm
 asm 0BC08 6    ; LD A,$5C : OUT ($BF),A : LD A,$78 (4 name table bytes)
     rst $00
     db far_io, pg_stat4, ent_stat4
@@ -178,7 +167,7 @@ asm 0BCDB 6    ; LD A,$E4 : OUT ($BF),A : LD A,$67 (8 tile bytes, every second b
     db far_io, pg_anim8, ent_anim8
     ret
 endasm
-page 0 cells16 cells24 tiles3 pal32 pal8p stat4 anim8
+page 0 cells16 cells24 tiles3 pal32 stat4 anim8
 ; cells16, cells24: as the game's $1F3D-$200B and $200C-$213A, with
 ; interrupts off. Each cell is a word pair: the VDP control word (low byte
 ; first), then the 2 data bytes. Cells that set VRAM write addresses with the
@@ -330,13 +319,9 @@ tiles3: push bc
         ret
 tbuf:   ds 96
 ; pal32: as the game's $0263-$0278, CRAM 0-7 from $007D and CRAM 8-31 from
-; $D971; pal8p: as $BB9D-$BBAF and $BBC9-$BBDB, CRAM 0-7 from $D969. Both
-; write only the entries whose colour differs from the runtime's copy
-; (cram), and leave the VDP state as the game's writes would. pal32 returns
-; HL = $D989, C = $BE, B - 32 and A = $C0; pal8p HL = $D971, B = 0 and
-; A = the last byte, as the game's code leaves them. pal8p also stamps $DF06
-; with isr_n and keeps in $DF07 the H that the lines above the split show
-; (register 8 as the frame handler wrote it), for the rastercode routine.
+; $D971. It writes only the entries whose colour differs from the runtime's
+; copy (cram), and leaves the VDP state as the game's writes would. Returns
+; HL = $D989, C = $BE, B - 32 and A = $C0, as the game's code leaves them.
 pal32:  push de
         push bc
         ld hl,$007D
@@ -356,17 +341,6 @@ pal32:  push de
         ld c,$BE
         ld hl,$D989
         ld a,$C0
-        pop de
-        ret
-pal8p:  push de
-        ld a,(isr_n)            ; stamp for the rastercode routine
-        ld ($DF06),a
-        ld a,(vdp_regs+8)       ; the status bar's H
-        ld ($DF07),a
-        ld hl,$D969
-        ld bc,$0800             ; 8 entries from index 0
-        call cram_upd
-        ld a,($D970)
         pop de
         ret
 ; HL = the source, C = the first CRAM index, B = the entries. Each entry
@@ -891,6 +865,497 @@ io_code:
         db $02, $02, $02, $05, $04, $04, $04, $05, $05, $B3, $02, $02, $02, $02, $02, $02
         db $02, $02, $02, $05, $05, $05, $05, $04, $04, $04, $04, $05, $05, $04, $05, $05
         db $04, $04, $05, $05, $05, $05, $04
+endpage
+# The item menu's cursor is four sprites, drawn by $2944 with tiles $BB-$BE
+# (LD B,n before each CALL $341B). The menu writes those tiles to VRAM
+# $3760-$37DF with the sprite tile loader ($6FDB: ($D61C) the address, 4
+# tiles from $C500). In 224-line mode that is name table rows 1-3, which V
+# scroll 32 hides, and the runtime takes writes there as name table only, so
+# the Next's sprite patterns for $BB-$BE stay blank and the cursor did not
+# show. Tiles $9F-$A2 ($33E0-$345F) are free: the game clears them at power-on
+# and its sprite set leaves them out. The cave after the loader calls
+# curs4, which runs the loader's plane writes and, for the cursor's load,
+# writes the same 4 tiles to $9F-$A2 with jt_vwrite; the cursor draws
+# with $9F-$A2. Tile $BF in the same rows (the split's two collision sprites,
+# which the Master System hides behind priority tiles) stays unconverted.
+asm 06FF6 9    ; LD A,($D600) : LD E,A : CALL $7023 : EI : RET (sprite tile loader, plane writes)
+    rst $00
+    db far_io, pg_curs4, ent_curs4
+    ei
+    ret
+endasm
+asm 02950 2    ; LD B,$BB (cursor, top left)
+    ld b,$9F
+endasm
+asm 0295D 2    ; LD B,$BC (top right)
+    ld b,$A0
+endasm
+asm 02970 2    ; LD B,$BD (bottom left)
+    ld b,$A1
+endasm
+asm 0297D 2    ; LD B,$BE (bottom right)
+    ld b,$A2
+endasm
+page 2 curs4
+; curs4: as the game's $6FF6-$6FFC: E = ($D600), the plane mode, then CALL
+; $7023 (game code in bank 1). When that load was the cursor's (VRAM $3760,
+; 4 tiles), builds the same 128 bytes in cbuf from the 2-plane data at $C500
+; (16 bytes a tile: plane 0 rows, then plane 1 rows; planes 2 and 3 are
+; plane 0 OR plane 1, or 0 as the mode clears them) and writes them to
+; $33E0 (tiles $9F-$A2) with one jt_vwrite call. The VDP state is put back
+; as $7023 left it. Returns the registers $7023 returns.
+curs4:  ld a,($D600)
+        ld e,a
+        call $7023
+        push af
+        push bc
+        push de
+        push hl
+        push ix
+        push iy
+        ld hl,($D61C)
+        ld de,$7760
+        or a
+        sbc hl,de
+        jp nz,.done
+        ld a,($D601)
+        cp 4
+        jp nz,.done
+        ld a,($D600)            ; mode 0: planes 2, 3 clear; 1: plane 3; 2: plane 2
+        ld c,$FF                ; plane 2 mask
+        ld b,$FF                ; plane 3 mask
+        or a
+        jr nz,.m1
+        ld bc,0
+.m1:    cp 1
+        jr nz,.m2
+        ld b,0
+.m2:    cp 2
+        jr nz,.m3
+        ld c,0
+.m3:    ld ix,$C500
+        ld hl,cbuf
+        ld e,4                  ; tiles
+.tile:  ld d,8                  ; rows
+.row:   ld a,(ix+0)
+        ld (hl),a
+        inc hl
+        ld a,(ix+8)
+        ld (hl),a
+        inc hl
+        or (ix+0)
+        push af
+        and c
+        ld (hl),a
+        inc hl
+        pop af
+        and b
+        ld (hl),a
+        inc hl
+        inc ix
+        dec d
+        jr nz,.row
+        push de
+        ld de,8
+        add ix,de
+        pop de
+        dec e
+        jr nz,.tile
+        ld hl,(vdp_addr)        ; the VDP state as $7023 left it
+        ld (cvdp),hl
+        ld a,(vdp_code)
+        ld (cvdp+2),a
+        ld a,(vdp_latch)
+        ld (cvdp+3),a
+        ld a,(vdp_rbuf)
+        ld (cvdp+4),a
+        ld hl,cbuf
+        ld de,$33E0
+        ld bc,$8001             ; one run of 128 bytes
+        ld ix,128
+        ld iy,128
+        ld a,1                  ; the page's own bytes
+        call jt_vwrite
+        ld hl,(cvdp)
+        ld (vdp_addr),hl
+        ld a,(cvdp+2)
+        ld (vdp_code),a
+        ld a,(cvdp+3)
+        ld (vdp_latch),a
+        ld a,(cvdp+4)
+        ld (vdp_rbuf),a
+.done:  pop iy
+        pop ix
+        pop hl
+        pop de
+        pop bc
+        pop af
+        ret
+cvdp:   ds 5
+cbuf:   ds 128
+endpage
+# The status bar split ($BBBA, and $BB96 for the rooms where ($DAE7) is
+# $24-$2A) polls the VDP status for the sprite collision flag, then writes
+# CRAM 0-7 from $D969 and register 8 = ($D795); $BBBA also turns the display
+# off before and on after. The flag comes from sprites 0 and 1, which $BB63
+# puts at Y $1D, X $DE, tile $BF in every frame (the game adds its other
+# sprites from index 2): two copies of one sprite, so their pixels meet on
+# line 30 (tile $BF has pixels on its first row only). In the reference
+# I/O logs (play, a walk through several rooms, the item menu) the first
+# status read that sees the flag is on line 30 in every frame. On the Master
+# System the CRAM writes land on lines 31-32 and the display is on again
+# at line 33. Through the runtime the flag came from the generic box scan
+# (cl_fresh, over 64 sprites: 37,000 cycles in the item menu) and each CRAM
+# write cost about 2,700 cycles, so the play palette started on line 34
+# in play and line 40 in the item menu.
+# The caves call split_d ($BBBA) or split_n ($BB96) in page 3, which wait on
+# the Next's line for line 30, write the palette into the Next palette
+# registers on the reference lines (split_d also turns the tilemap and
+# sprites off from line 31 to 33), and then make the game's writes through
+# the I/O RST, so the runtime's own state ends as the game's code leaves it.
+asm 0BB96 36   ; the split without display off: poll, CRAM 0-7, register 8, RET
+    rst $00
+    db far_io, pg_split_n, ent_split_n
+    ret
+endasm
+asm 0BBBA 52   ; the split: poll, display off, CRAM 0-7, register 8, display on, RET
+    rst $00
+    db far_io, pg_split_d, ent_split_d
+    ret
+endasm
+page 3 split_d split_n
+; split_d: as the game's $BBBA-$BBED; split_n: as $BB96-$BBB9.
+;
+; The page uses these runtime internals, with the addresses of
+; public/build/rt/runtime.map from the 16:44 build of nms.nex (runtime.sym
+; gives the same names relative to the fw section at $E000). An engine
+; change that moves one of them must change this page:
+;   pal43 $E09F        the NextReg $43 display bits; bit 3: toppal shows the
+;                      second palettes
+;   pal_hi_table $E300, pal_lo_table $E340
+;                      SMS colour to the two NextReg $44 bytes (pal_out)
+;   cl_arm $F1F1       collline: 1 or 3 while this picture's flag is not
+;                      given yet, 0 after the read that gets it
+;   line_pend $E08A, fdone $E089
+;                      cleared by a status read (rd_status) in the picture
+;   m224 $E08F         224-line mode
+;   fw_flags $E09E     bit 0: priority tiles (Layer 2 palettes, not handled)
+; and the Next registers $6B (tilemap), $15 (sprites) and $4A (fallback
+; colour), which r1_hw and fallback2 in fw2.asm set for the display enable.
+;
+; 1. The wait. The flag is given at the first status read from line 30 of
+; a picture; the game's status read at $BB87, or the frame handler's, takes
+; it if it came after line 30. So the entry goes on at once when the flag
+; is pending (vdp_status bit 5, or cl_arm 1 or 3 on line 30-223), and else
+; waits for line 30 of the next picture, reading the Next's line (NextReg
+; $1E, $1F; in 224-line mode SMS line L is Next line L - 16). With the
+; display off, outside 224-line mode or with priority tiles, it polls
+; through the runtime as the game does.
+; 2. The palette. CRAM 0-3 go into the Next palette on line 31 and CRAM
+; 4-7 on line 32 ($BBBA; $BB96: 0-4 on 31, 5-7 on 32), as the Master
+; System's writes land, into the tilemap palette the Next shows: the second
+; while toppal shows it (pal43 bit 3), else the first, with pal_hi_table and
+; pal_lo_table, as cram_x and cram_set write them. The other palettes get
+; the colours from the runtime's writes in step 3. The page selects NextReg
+; $44 once and writes its bytes through port $253B, which is faster than a
+; NEXTREG for each. split_d turns the tilemap and sprites off and shows
+; the backdrop colour (NextReg $6B, $15, $4A as r1_hw and fallback2 set them
+; for the display off) from line 31, and puts the three registers back on
+; line 33.
+; 3. The bookkeeping. The status read is done as rd_status and cl_read leave
+; it (vdp_status bits 7, 6, 5 clear, latch, line_pend, fdone and cl_arm 0;
+; cl_line is not worked out again: cl_vbl does that before it is next
+; read). Then the game's writes go through the I/O RST, as the game's code
+; makes them: register 1 = $30 (held by toppal), CRAM 0-7 from $D969 (one
+; OTIR), register 8 = ($D795), register 1 = $70. They write the same
+; palette values again, and leave cram, cram_top, pal_vm, the second
+; palettes, the transparent value, the fallback colour, the VDP registers
+; and the VDP address as the game's code does. The
+; entry stamps $DF06 with isr_n and keeps in $DF07 the H of the lines above
+; the split, for the rastercode routine.
+; Returns A = $81 (split_d) or $88 (split_n), B = 0, HL = $D971, as the
+; game's code leaves them; keeps C, DE, IX, IY.
+        OPT --zxnext            ; NEXTREG
+PAL43   equ $E09F
+PALHI   equ $E300
+PALLO   equ $E340
+CLARM   equ $F1F1
+LPEND   equ $E08A
+FDONE   equ $E089
+M224    equ $E08F
+FWFLAGS equ $E09E
+split_d:
+        ld a,1
+        jr split
+split_n:
+        xor a
+split:  ld (sp_mode),a
+        push bc
+        push de
+        ld a,i                  ; P/V = the game's interrupt state
+        push af
+        ld hl,$D969             ; the Next colours of the 8 entries
+        ld de,sp_col
+.col:   ld a,(hl)
+        and $3F
+        push hl
+        ld l,a
+        ld h,0
+        push hl
+        ld bc,PALHI
+        add hl,bc
+        ld a,(hl)
+        ld (de),a
+        inc de
+        pop hl
+        ld bc,PALLO
+        add hl,bc
+        ld a,(hl)
+        ld (de),a
+        inc de
+        pop hl
+        inc hl
+        ld a,e
+        cp 255&(sp_col+16)
+        jr nz,.col
+        ld a,(vdp_regs+1)       ; the generic poll: display off, 192-line
+        and $40                 ; mode, or priority tiles
+        jp z,.gen
+        ld a,(M224)
+        or a
+        jp z,.gen
+        ld a,(FWFLAGS)
+        rra
+        jp c,.gen
+        ld a,(vdp_status)
+        and $20
+        jr nz,.go
+        call sline
+        cp 30
+        jr c,.w30
+        cp 224
+        jr nc,.w30
+        ld a,(CLARM)            ; line 30-223: pending unless already taken
+        cp 1
+        jr z,.go
+        cp 3
+        jr z,.go
+.wend:  call sline              ; taken in this picture: the next one
+        cp 224
+        jr c,.wend
+.w30:   call sline
+        cp 30
+        jr c,.w30
+        cp 224
+        jr nc,.w30
+.go:    di
+        ld hl,vdp_status        ; the status read that gets the flag
+        ld a,(hl)
+        and $1F
+        ld (hl),a
+        xor a
+        ld (vdp_latch),a
+        ld (LPEND),a
+        ld (FDONE),a
+        ld (CLARM),a
+        ld a,(isr_n)            ; stamp for the rastercode routine
+        ld ($DF06),a
+        ld a,(vdp_regs+8)       ; the status bar's H
+        ld ($DF07),a
+        ld e,31
+        call swait              ; line 31
+        ld a,(sp_mode)
+        or a
+        jr z,.p1
+        ld a,$6B                ; display off, as r1_hw and fallback2
+        call nrd
+        ld (sp_6b),a
+        and $10
+        or $02
+        nextreg $6B,a
+        ld a,$15
+        call nrd
+        ld (sp_15),a
+        and $FE
+        nextreg $15,a
+        ld a,$4A
+        call nrd
+        ld (sp_4a),a
+        ld a,(vdp_regs+7)       ; the backdrop: CRAM 16 + register 7
+        and $0F
+        add a,255&(cram+16)
+        ld l,a
+        ld h,(cram+16)>>8
+        ld a,(hl)
+        ld l,a
+        ld h,0
+        ld bc,PALHI
+        add hl,bc
+        ld a,(hl)
+        nextreg $4A,a
+.p1:    ld a,(sp_mode)          ; entries on line 31: 4 ($BBBA) or 5 ($BB96)
+        or a
+        ld a,4
+        jr nz,.p1n
+        inc a
+.p1n:   ld b,a
+        ld c,0
+        ld hl,sp_col
+        call pals
+        ld e,32
+        call swait
+        ld a,8
+        sub c
+        ld b,a
+        call pals
+        ld a,(sp_mode)
+        or a
+        jr z,.book
+        ld e,33
+        call swait              ; display on
+        ld a,(sp_6b)
+        nextreg $6B,a
+        ld a,(sp_15)
+        nextreg $15,a
+        ld a,(sp_4a)
+        nextreg $4A,a
+        jr .book
+.gen:   rst $00                 ; the game's poll through the runtime
+        db $0D                  ; IN A,($BF)
+        bit 5,a
+        jp z,.gen
+        ld a,(isr_n)
+        ld ($DF06),a
+        ld a,(vdp_regs+8)
+        ld ($DF07),a
+.book:  pop af                  ; the game's interrupt state back
+        jp po,.di
+        ei
+.di:    ld a,(sp_mode)
+        or a
+        jr z,.b1
+        ld a,$30                ; register 1 = $30 (toppal holds it)
+        rst $00
+        db $05
+        ld a,$81
+        rst $00
+        db $05
+.b1:    xor a                   ; CRAM 0-7 from $D969
+        rst $00
+        db $05
+        ld a,$C0
+        rst $00
+        db $05
+        ld hl,$D969
+        ld bc,$08BE
+        rst $00
+        db $B3                  ; OTIR
+        ld a,($D795)            ; register 8
+        rst $00
+        db $05
+        ld a,$88
+        rst $00
+        db $05
+        ld a,(sp_mode)
+        or a
+        jr z,.ret
+        ld a,$70                ; register 1 = $70
+        rst $00
+        db $05
+        ld a,$81
+        rst $00
+        db $05
+.ret:   pop de
+        pop bc
+        ld b,0
+        ld hl,$D971
+        ret
+; B entries from HL (2 bytes each, pal_hi then pal_lo) from index C into the
+; tilemap palette the Next shows: the second while toppal shows it (pal43
+; bit 3, as cram_x writes it), else the first (as cram_set). NextReg $44
+; steps the index after each second byte. Returns C + B and HL past the
+; bytes; uses A, B, D. Interrupts off.
+pals:   ld a,(PAL43)
+        bit 3,a
+        jr z,.p1
+        or %01110000            ; the second tilemap palette
+        jr .p2
+.p1:    or %00110000            ; the first tilemap palette
+.p2:    nextreg $43,a
+        ld a,c
+        nextreg $40,a
+        add a,b
+        ld (sp_idx),a
+        ld a,b
+        add a,a
+        ld d,a                  ; the bytes
+        ld bc,$243B
+        ld a,$44
+        out (c),a
+        inc b
+.e:     ld a,(hl)
+        inc hl
+        out (c),a
+        dec d
+        jr nz,.e
+        ld a,(sp_idx)
+        ld c,a
+        ret
+; wait until SMS line E or later in the picture
+swait:  call sline
+        cp e
+        jr c,swait
+        ret
+; A = the SMS line of the beam in 224-line mode (Next line + 16; the 16
+; lines above Next line 0 are lines 295-310 of the 311-line frame), or 255
+; below the picture. Keeps the interrupt state and the registers.
+sline:  push bc
+        ld a,i
+        push af
+        di
+.rd:    ld a,$1E
+        call nrd
+        ld b,a
+        ld a,$1F
+        call nrd
+        ld c,a
+        ld a,$1E
+        call nrd
+        cp b
+        jr nz,.rd
+        rra
+        ld a,c
+        jr c,.hi
+        cp 208
+        jr nc,.out
+        add a,16
+        jr .ok
+.hi:    cp 295-256
+        jr c,.out
+        sub 295-256
+        jr .ok
+.out:   ld a,255
+.ok:    ld c,a
+        pop af
+        jp po,.k
+        ei
+.k:     ld a,c
+        pop bc
+        ret
+; A = NextReg A
+nrd:    push bc
+        ld bc,$243B
+        out (c),a
+        inc b
+        in a,(c)
+        pop bc
+        ret
+sp_mode: db 0
+sp_6b:  db 0
+sp_15:  db 0
+sp_4a:  db 0
+sp_idx: db 0
+sp_col: ds 16
 endpage
 asm 003A7 2   ; IM 1 -> IM 2
     im 2
@@ -1621,16 +2086,6 @@ site 0B7F2   ; OUT ($BE),A
 site 0B7F4   ; IN A,($BE)
 site 0B7F8   ; OUT ($BE),A
 site 0BB87   ; IN A,($BF)
-site 0BB96   ; IN A,($BF)
-site 0BBB3   ; OUT ($BF),A
-site 0BBB7   ; OUT ($BF),A
-site 0BBBA   ; IN A,($BF)
-site 0BBC3   ; OUT ($BF),A
-site 0BBC7   ; OUT ($BF),A
-site 0BBDF   ; OUT ($BF),A
-site 0BBE3   ; OUT ($BF),A
-site 0BBE7   ; OUT ($BF),A
-site 0BBEB   ; OUT ($BF),A
 site 0BC0E   ; OUT ($BF),A
 site 0BC11   ; OUT ($BE),A
 site 0BC15   ; OUT ($BF),A
