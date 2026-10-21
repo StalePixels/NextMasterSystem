@@ -677,7 +677,7 @@ cop_switches__pn:	inc b
 ; game stops a split the lines below it keep the old column.
 ; fw2_switches turns it on by pointing three calls elsewhere, so a game
 ; without the switch runs the same instructions as before: r8_hk in fw2
-; (vdp_reg_w) at hs_reg8 in fw.asm, which calls sg_write after hscroll_set;
+; (vdp_reg_w) at hs_reg8, also in fw2, which calls sg_write after hscroll_set;
 ; vb_cop in fw2 (the once-a-frame work) at sg_vbl; and cf_hk (cop_update's
 ; whole rebuild) at sg_head. cop_switches rewrites segment 0's lines only:
 ; the sg_ routines keep its line count's end (cs_end) at segment 1's line.
@@ -705,7 +705,7 @@ sg_reset:	ld a,1
 sg_vbl:		call sg_frame
 		jp rast_frame
 
-; hs_reg8 (fw.asm), with this page at $0000 in a handler, interrupts off,
+; hs_reg8 (fw2), with this page at $0000 in a handler, interrupts off,
 ; after hscroll_set: register 8 was written, h_sw is its column. Keeps IX.
 sg_write:
 		ld a,(vdp_regs+0)
@@ -1795,7 +1795,7 @@ rast_frame__c:		call 0
 		ld (hl),a
 		jr z,rast_frame__same
 		or a
-		jr nz,cop_raster
+rf_new:		jp nz,cop_raster	; rastseg: seg_new (fw2_switches)
 		; back to the normal list: rebuilt in full, X from register 8
 		ld a,$FF
 		ld (cop_mode),a
@@ -1807,7 +1807,7 @@ rast_frame__c:		call 0
 		jp hscroll_set
 rast_frame__same:		or a
 		ret z
-		jr cop_raster__inc
+rf_inc:		jp cop_raster__inc	; rastseg: seg_inc (fw2_switches)
 ; The copper list from hl_tab, in fixed slots: a head of four MOVEs ($31
 ; V, $6E M0, $2F and $30 the X of line 0), then five instructions for each
 ; line y, at instruction 4 + 5y, and HALT after line 191:
@@ -1961,11 +1961,7 @@ rx_line:
 		inc a
 		ld (rx_nexti),a
 		ld e,(hl)		; H(y)
-		ld d,4
-		mul d,e
-		ld a,d
-		add a,255&(rx_tab>>8)
-		ld d,a			; DE = rx_tab entry of H(y)
+		ld d,255&(rx_tab>>8)	; DE = H(y)'s column in rx_tab
 		ld a,(de)
 		or a
 		jr z,rx_line__nosw
@@ -1985,11 +1981,11 @@ rx_line:
 		ld a,NR6E_M0
 		out (c),a
 		call rx_next
-		inc de
+		inc d
 		jr rx_line__lo
 rx_line__nosw:		ld a,$2F		; MOVE $2F,hi X(y)
 		out (c),a
-		inc de
+		inc d
 		ld a,(de)
 		out (c),a
 		xor a			; NOOP
@@ -2003,13 +1999,13 @@ rx_line__nosw:		ld a,$2F		; MOVE $2F,hi X(y)
 		out (c),a
 		ld a,(de)
 		out (c),a
-		inc de
+		inc d
 rx_line__lo:		ld a,$30		; MOVE $30,lo X(y+1)
 		out (c),a
 		ld a,(de)
 		out (c),a
 		ret
-; DE = the hi byte of the rx_tab entry of H(y+1) (line 191: of H(191))
+; DE = H(y+1)'s hi X in rx_tab (line 191: H(191)'s)
 rx_next:	ld a,l
 		cp 191
 		jr z,rx_next__e
@@ -2018,30 +2014,23 @@ rx_next:	ld a,l
 		dec l
 		jr rx_next__t
 rx_next__e:		ld e,(hl)
-rx_next__t:		ld d,4
-		mul d,e
-		ld a,d
-		add a,255&(rx_tab>>8)
-		ld d,a
-		inc de
+rx_next__t:		ld d,1+(255&(rx_tab>>8))
 		ret
 
-; rx_tab: for each register 8 value H, the switch column, hi X and lo X
-; (h2x), and a spare byte
+; rx_tab: three 256-byte tables indexed by the register 8 value H: the
+; switch column, then hi X, then lo X (h2x)
 rx_mktab:
 		ld hl,rx_tab
-		ld c,0
-rx_mktab__l:		ld a,c
+rx_mktab__l:		ld a,l
 		call h2x
 		ld (hl),b
-		inc hl
+		inc h
 		ld (hl),d
-		inc hl
+		inc h
 		ld (hl),e
-		inc hl
-		ld (hl),0
-		inc hl
-		inc c
+		dec h
+		dec h
+		inc l
 		jr nz,rx_mktab__l
 		ld a,1
 		ld (rx_tabok),a
@@ -2077,33 +2066,189 @@ h2x__sw:		ld a,b
 rx_full:	db 0
 rx_nexti:	db 0			; line whose slots the copper write index is at
 rx_tabok:	db 0
+
+; ----------------------------------------------------------------------
+; Sprite collision line, with the collline switch (fw_flags bit 6). The SMS
+; raises the status collision bit at the first line where two sprites meet;
+; the Next's sprite status (spr_coll) comes only from the once-a-frame work,
+; after the picture. With the switch, fw2_switches points vb_spr (fw2) at
+; cl_vbl and rs_hk (rd_status in fw.asm) at cl_rd: cl_scan works out that
+; line from the sprite table once a frame (cl_line, a Next line), and a
+; status read in the picture from that line on raises the bit (cl_read in
+; fw4), once a picture. Without the switch both calls keep their targets.
+; ----------------------------------------------------------------------
+; The first line where the boxes of two sprites meet (8 or 16 lines high,
+; 8 pixels wide, both doubled with zoom), from the sprite table in the VRAM
+; copy at $4000: SMS line max(Y1, Y2) + 1 of the pair with the lowest one,
+; as a Next line in cl_line (16 lower in 224-line mode, 0 for the 16 lines
+; above it), $FF for none. A box is not the sprite's pixels: two sprites
+; whose boxes meet only at transparent pixels count as a collision here.
+; Pairs are taken only while their line can beat the best one so far.
+cl_scan:	ld a,(vdp_regs+1)
+		ld bc,$0808		; B = height, C = width
+		bit 1,a
+		jr z,cl_scan__h
+		ld b,16
+cl_scan__h:	rra
+		jr nc,cl_scan__z
+		sla b
+		sla c
+cl_scan__z:	ld a,b
+		ld (cl_scan__hy+1),a
+		ld (cl_scan__hn+1),a
+		ld a,c
+		ld (cl_scan__wx+1),a
+		ld a,(sat_hi)
+		add a,$40
+		ld h,a
+		ld l,0			; HL = Y of sprite 0
+		ld a,(m224)
+		or a
+		ld a,64
+		jr nz,cl_scan__n
+		ld a,$D0		; 192-line mode: Y = $D0 ends the list
+		ld bc,64
+		cpir
+		ld a,l
+		jr nz,cl_scan__n
+		dec a
+cl_scan__n:	ld (cl_scan__ni+1),a
+		ld (cl_scan__nj+1),a
+		ld l,0
+		ld e,$F0		; E = the best line so far (SMS), none
+cl_scan__i:	ld a,l
+cl_scan__ni:	cp 64
+		jr nc,cl_scan__done
+		ld a,(hl)
+		inc a
+		cp e
+		jr nc,cl_scan__in	; no pair with this one beats E
+		ld d,a			; D = its first line
+		push hl
+		ld a,l
+		add a,a
+		or $80
+		ld l,a
+		ld c,(hl)		; C = its X
+		pop hl
+		push hl
+cl_scan__j:	inc l
+		ld a,l
+cl_scan__nj:	cp 64
+		jr nc,cl_scan__je
+		ld a,(hl)
+		inc a
+		sub d
+		jr c,cl_scan__up
+cl_scan__hy:	cp 8
+		jr nc,cl_scan__j
+		add a,d			; the line: the other one's first
+		jr cl_scan__x
+cl_scan__up:	neg
+cl_scan__hn:	cp 8
+		jr nc,cl_scan__j
+		ld a,d			; the line: this one's first
+cl_scan__x:	cp e
+		jr nc,cl_scan__j
+		ld b,a
+		push hl
+		ld a,l
+		add a,a
+		or $80
+		ld l,a
+		ld a,(hl)		; the other one's X
+		pop hl
+		sub c
+		jr nc,cl_scan__wx
+		neg
+cl_scan__wx:	cp 8
+		jr nc,cl_scan__j
+		ld e,b			; a better pair
+		jr cl_scan__j
+cl_scan__je:	pop hl
+cl_scan__in:	inc l
+		jr cl_scan__i
+cl_scan__done:	ld a,(m224)
+		or a
+		ld a,e
+		jr z,cl_scan__192
+		sub 16
+		jr nc,cl_scan__192
+		xor a			; the 16 lines above line 0: from line 0
+cl_scan__192:	ld hl,pic_end
+		cp (hl)
+		jr c,cl_scan__set
+		ld a,$FF
+cl_scan__set:	ld (cl_line),a
+		ret
 		align 256
 hl_tab:		ds 192			; H of every line, from the hook
+; In place of spr_update: the sprite update without the Next's collision
+; bit, then the bit for the picture just drawn if no status read in it
+; raised it, then the line for the new table.
+cl_vbl:		ld a,(vdp_status)
+		push af
+		call spr_update
+		pop bc			; B = the status before
+		ld hl,vdp_status
+		res 5,(hl)
+		ld a,b
+		and $20
+		or (hl)
+		ld (hl),a
+		ld a,(cl_arm)
+		or a
+		jr z,cl_vbl__arm
+		ld a,(cl_line)
+		inc a
+		jr z,cl_vbl__arm	; no collision
+		ld a,(vdp_regs+1)
+		and $40
+		jr z,cl_vbl__arm	; display off
+		set 5,(hl)
+cl_vbl__arm:	call cur_line		; run in the picture (workline): 2, armed from
+		ld hl,pic_end		; the next picture on (cl_read)
+		cp (hl)
+		ld a,1
+		jr nc,cl_vbl__a1
+		inc a
+cl_vbl__a1:	ld (cl_arm),a
+		jp cl_scan
+; (cl_vbl sits in the free bytes after hl_tab, cl_scan in those before it)
 		align 256
 hl_prev:	ds 192			; H of every line in the copper list
 		align 256
-rx_tab:		ds 1024
+rx_tab:		ds 768			; per H: column, hi X, lo X (rx_mktab)
 nibm:		ds 512			; per byte of a tile definition: the set of its two
 					; pixel values, low bytes then high bytes (fw2_init)
 ps_seen:	ds 512			; per SMS tile: the pal_scan pass that took it last
 ps_gen:		db 0			; pal_scan pass
 ps_acc:		dw 0
 
-; The copper list in 224-line mode: one X, one Y (V - 16; the 32-row map
-; wraps at 256 by itself) and, when K = -H > 64, the map switch pair on
-; each of the 224 lines (Next lines 0-207, then 16 lines for the 16 lines
-; above line 0, from cop_top: the last 16 lines of the frame, 295-310 of
-; the 311-line frame at 50 Hz and 248-263 of the 264-line frame at 60 Hz).
+; The copper list in 224-line mode: a head of one X, one Y (V - 16; the
+; 32-row map wraps at 256 by itself), the map and the ULA on, then the map
+; switch pair on each of the 224 lines (Next lines 0-207, then 16 lines for
+; the 16 lines above line 0, from cop_top: the last 16 lines of the frame,
+; 295-310 of the 311-line frame at 50 Hz and 248-263 of the 264-line frame
+; at 60 Hz), with the ULA off in the 32 border lines, then HALT. As in the
+; 192-line list, every line has a switch: for K = -H <= 64, and before the
+; first H write, at column 39 (SMS x 312, past the picture's right edge).
+; So the list is written whole only when it is not the 224-line list yet
+; (cop_mode 3); after that an H or V write rewrites the head's three MOVEs,
+; and a new column the first byte of each line's WAIT line,column (about 80
+; cycles a line, against about 230 for the whole list). cop_sw stays $FF, so
+; every H write marks the list (hscroll_set) and the head follows it.
 ; Per-line H scroll and the lock bits are not done here.
 COP_TOP50	equ 295
 COP_TOP60	equ 248
+C224_L0		equ 10			; list byte of line 0's WAIT line,column
+C224_L192	equ C224_L0+8*192+4	; line 192's, after the ULA-off pair
+C224_TOP	equ C224_L192+8*16+8	; line cop_top's, after the ULA on and off pairs
 cop_top:	dw COP_TOP50		; hz_setup
+c224_w:		db 0			; the first byte of each WAIT line,column now (bit 8 apart)
 cop_224:
 		xor a
 		ld (cop_dirty),a
-		ld a,$FF
-		ld (cop_mode),a
-		ld (cop_sw),a
 		nextreg $61,0
 		nextreg $62,%11000000
 		ld a,(vdp_regs+9)
@@ -2121,16 +2266,70 @@ cop_224:
 		ld a,c
 		nextreg $60,a
 		nextreg $31,a
+		ld a,(h_sw)		; the switch column, 0 before the first H write
+		or a
+		jr nz,cop_224__c
+		ld a,39
+cop_224__c:	add a,a
+		or $80
+		ld d,a			; D = the first byte of WAIT line,column
+		ld a,(cop_mode)
+		cp 3
+		jr nz,cop_224__full
+		ld a,(c224_w)
+		cp d
+		ret z			; the list stands: only the head changed
+		ld a,d
+		ld (c224_w),a
+		ld hl,C224_L0		; a new column: one byte a line
+		ld b,192
+		call cop_224__run
+		ld hl,C224_L192
+		ld b,16
+		call cop_224__run
+		ld a,(cop_top+1)
+		or a
+		ld a,(cop_top)
+		jr z,cop_224__lo
+		xor a
+cop_224__lo:	neg			; E = lines of the 16 below line 256 (8 at 60 Hz)
+		ld e,a
+		ld hl,C224_TOP
+		or a
+		jr z,cop_224__hi
+		ld b,a
+		call cop_224__run
+cop_224__hi:	ld a,16
+		sub e
+		ret z
+		ld b,a
+		inc d			; WAIT line bit 8
+; B = lines from list byte HL, D = the byte: the first byte of each line's
+; WAIT, 8 bytes apart. The copper keeps running.
+cop_224__run:	ld a,h
+		or %11000000
+		nextreg $62,a		; write index MSB, copper mode kept
+cop_224__rl:	ld a,l
+		nextreg $61,a
+		ld a,d
+		nextreg $60,a
+		ld a,l
+		add a,8
+		ld l,a
+		jr c,cop_224__rc
+		djnz cop_224__rl
+		ret
+cop_224__rc:	inc h
+		djnz cop_224__run
+		ret
+cop_224__full:	ld a,3			; the whole list
+		ld (cop_mode),a
+		ld a,d
+		ld (c224_w),a
 		nextreg $60,$6E
 		nextreg $60,NR6E_M0
 		nextreg $60,$68		; ULA on for lines 0-191 (its column 0 shows the backdrop)
 		nextreg $60,0
-		ld a,(vdp_regs+8)
-		neg
-		cp 65
-		jr c,cop_224__ns	; K <= 64: no switch needed
-		ld a,(h_sw)
-		ld d,a
 		ld bc,0
 cop_224__l1:		call cop_224__sw
 		inc bc
@@ -2151,14 +2350,7 @@ cop_224__l2:		call cop_224__sw
 		ld a,c
 cop_224__endl:	cp 255&(COP_TOP50+16)	; hz_setup
 		jr nz,cop_224__l2
-		jr cop_224__end
-cop_224__ns:		ld bc,192
-		call cop_224__uoff
-		ld c,208
-		call cop_224__uon
-		ld bc,(cop_top)
-		call cop_224__uoff
-cop_224__end:		nextreg $60,$FF		; HALT
+		nextreg $60,$FF		; HALT
 		nextreg $60,$FF
 		ret
 ; The 16 lines above and below the 192-line area are border to the ULA, and
@@ -2177,9 +2369,7 @@ cop_224__u:		ld a,$80
 		ld a,e
 		nextreg $60,a
 		ret
-cop_224__sw:		ld a,d			; BC = line, D = switch column
-		add a,a
-		or $80
+cop_224__sw:		ld a,d			; BC = line, D = the first byte of WAIT line,column
 		or b
 		nextreg $60,a		; WAIT line,column
 		ld a,c
@@ -2193,6 +2383,136 @@ cop_224__sw:		ld a,d			; BC = line, D = switch column
 		nextreg $60,a
 		nextreg $60,$6E
 		nextreg $60,NR6E_M0
+		ret
+
+; ----------------------------------------------------------------------
+; Segment H scroll in 224-line mode, with the rastseg switch (fw_flags bit
+; 7). The RASTER routine's table is then, in 224-line mode, a list of
+; segments: pairs of (first SMS line, H), the lines rising, ended by a line
+; of 224 or more (or one not above the one before), at most SG2_MAX; the
+; first segment starts at line 0 whatever its line byte says. In 192-line
+; mode the table is the per-line table, as without the switch.
+; fw2_switches points rf_new and rf_inc (rast_frame) at seg_new and
+; seg_inc; without the switch they keep their targets (cop_raster and
+; cop_raster__inc).
+; The list (cop_mode 4) is the 224-line list (cop_224) with an X for each
+; segment: the head's X is that of line 16's segment (Next line 0); a
+; segment that starts at another line has MOVE $2F, MOVE $30 after the
+; switch pair of the line above it, in that line's horizontal blank; and
+; the X of the segment of line 0 follows the ULA-on pair at Next line 208,
+; for the 16 lines above line 0 at the end of the list. Each line's switch
+; pair has its segment's column (39 for K <= 64). When the segments start
+; at the same lines as the list's, only the head and the bytes of the
+; segments whose H changed are written (the first byte of each WAIT
+; line,column and the X of the MOVEs); else the list is written whole. The
+; segment tables are kept in hl_prev, which cop_raster writes whole when it
+; takes over from this list.
+SG2_MAX		equ 32
+SG2_L		equ hl_prev		; per segment: its first SMS line
+SG2_H		equ hl_prev+32		; its H
+SG2_P		equ hl_prev+64		; its H in the list
+cs_n		equ hl_prev+96		; segments in the list
+cs_full		equ hl_prev+97		; not 0: the list is written whole
+cs_idx		equ hl_prev+98		; 2 bytes: the list byte the walk is at
+cs_col		equ hl_prev+100		; the segment's first byte of WAIT line,column
+cs_xh		equ hl_prev+101		; its X
+cs_xl		equ hl_prev+102
+cs_chg		equ hl_prev+103		; not 0: its H changed
+cs_k		equ hl_prev+104		; the segment
+cs_nx		equ hl_prev+105		; the next segment's first line, 224 for none
+cs_mode		equ hl_prev+106		; cop_mode at the call
+cs_s256		equ hl_prev+107		; the first of SMS lines 0-15 on Next line 256 or later
+
+seg_new:	ld a,(m224)
+		or a
+		jp z,cop_raster
+		jr cop_seg
+seg_inc:	ld a,(m224)
+		or a
+		jr nz,cop_seg
+		ld a,(cop_mode)
+		cp 4
+		jp z,cop_raster		; from the segment list: whole
+		jp cop_raster__inc
+; The list is written by cop_seg in part 4, mapped at $2000 in place of
+; part 2 for the call: the once-a-frame work runs with interrupts off, and
+; cop_seg uses only part 1 and this page. cop_mode is part 2's.
+cop_seg:	ld a,(cop_mode)
+		ld (cs_mode),a
+		nextreg $51,FW4_PAGE
+		call cop_seg4
+		nextreg $51,FW2_PAGE
+		ld a,4
+		ld (cop_mode),a
+		ret
+
+; ----------------------------------------------------------------------
+; Game start: the runtime state, the ULA clip and the tilemap X origin.
+; Called by fw2_start with this page at $0000, before fw2_switches.
+; ----------------------------------------------------------------------
+fw2_state:
+		call clip_update
+		; framework state
+		ld hl,vdp_regs
+		ld b,16
+fw2_state__zr:		ld (hl),0
+		inc hl
+		djnz fw2_state__zr
+		ld a,192
+		ld (pic_end),a
+		ld a,$FF
+		ld (vdp_regs+10),a
+		ld (cop_sw),a
+		ld (cop_v),a
+		ld (cop_mode),a
+		ld hl,$3800
+		ld (nt_base),hl
+		ld a,$3F
+		ld (sat_hi),a
+		call region_update
+		ld hl,dirty_pages
+		ld b,64
+fw2_state__zd:		ld (hl),0
+		inc l
+		djnz fw2_state__zd
+		xor a
+		ld (kn_any),a
+		ld a,(fw_flags)
+		and 4
+		jr z,fw2_state__nk
+		nextreg $56,TKC_PAGE	; tilecache: no tiles from cart ROM noted (fw_start
+		ld hl,KN_PAGES		; puts slot 6 back)
+		ld b,64
+fw2_state__zk:		ld (hl),0
+		inc l
+		djnz fw2_state__zk
+fw2_state__nk:	xor a
+		ld (tiles_dirty),a
+		ld (vbl_done),a
+		ld (vbl_poll),a
+		ld (quit_req),a
+		ld (pause_req),a
+		ld (vdp_status),a
+		ld (vdp_latch),a
+		ld (h_sw),a
+		ld (m224),a
+		ld (hl_on),a		; no hook table from an earlier game
+		inc a
+		ld (sat_dirty),a
+		ld (cop_dirty),a
+		ld hl,0
+		ld (fw_frames),hl
+		dec hl
+		ld (tr_free),hl
+		ld a,$FF
+		ld (bd_cur),a
+		nextreg $1C,%00000100	; ULA clip: SMS column 0 only
+		nextreg $1A,0
+		nextreg $1A,PIC_X+7
+		nextreg $1A,0
+		nextreg $1A,191
+		ld hl,286
+		ld (h_x),hl
 		ret
 
 ; ----------------------------------------------------------------------
@@ -2266,6 +2586,28 @@ fw2_switches__k:	ld (kn_hk+1),hl
 fw2_switches__h:	ld (r8_hk+1),hl
 		ld (vb_cop+1),de
 		ld (cf_hk+1),bc
+		; collline: vb_spr at cl_vbl, rs_hk at cl_rd (see cl_vbl)
+		ld hl,spr_update
+		ld de,cur_line
+		ld a,(fw_flags)
+		and $40
+		jr z,fw2_switches__cl
+		ld hl,cl_vbl
+		ld de,cl_rd
+fw2_switches__cl:	ld (vb_spr+1),hl
+		ld (rs_hk+1),de
+		ld a,$FF
+		ld (cl_line),a
+		; rastseg: rf_new and rf_inc at seg_new and seg_inc (see seg_new)
+		ld hl,cop_raster
+		ld de,cop_raster__inc
+		ld a,(fw_flags)
+		and $80
+		jr z,fw2_switches__rs
+		ld hl,seg_new
+		ld de,seg_inc
+fw2_switches__rs:	ld (rf_new+1),hl
+		ld (rf_inc+1),de
 		; Layer 2 (priority tiles): 256x192 from L2_BANK, above the sprites;
 		; its transparent colour is one the SMS palette never makes
 		ld a,(fw_flags)

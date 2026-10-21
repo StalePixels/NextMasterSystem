@@ -72,3 +72,32 @@ site 4CF5   ; OUT ($7F),A
 site 4D5B   ; OUT ($7F),A
 site 4D78   ; OTIR
 # CHECK indirect_unresolved at 357C: JP (HL) 
+# Each HALT waits in the runtime for the game's own frame interrupt, as on the
+# Master System, not for the runtime's interrupts too. The game writes a sound
+# command to $C000 and waits one frame with HALT. Two HALTs are followed by
+# other code: each becomes a call to a cave in the unused $FF bytes at the end
+# of the cart ($7EF1 up), where the wait and the instructions it replaced run.
+haltret 02135   ; HALT : RET
+haltret 0342F   ; HALT : RET
+label haltcave1 07EF1
+label haltcave2 07EF8
+asm 0180F 4    ; HALT : LD A,(HL) : CP $7A
+    call haltcave1
+endasm
+asm 03BEF 5    ; HALT : XOR A : LD ($C1F1),A
+    call haltcave2
+endasm
+asm 07EF1 7    ; unused $FF bytes: haltcave1
+    rst $00
+    db halt_io
+    ld a,(hl)
+    cp $7A
+    ret
+endasm
+asm 07EF8 8    ; unused $FF bytes: haltcave2
+    rst $00
+    db halt_io
+    xor a
+    ld ($C1F1),a
+    ret
+endasm

@@ -54,7 +54,7 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **Codemasters mapper.** A mapper used by some carts, for example Micro Machines. It switches banks by stores to `$0000`, `$4000` and `$8000`, not by the Sega registers at `$FFFC-$FFFF`. Spec line: `codem`. Read more: sitescan.md, "Running it" (`--mapper`).
 
-**`CONF`.** The chunk of settings in an `.nms` file: text lines of `key=value`. The keys the runtime acts on are `priority`, `toppal`, `tilecache` and `hz`. Read more: nms-format.md, "`CONF`: settings".
+**`CONF`.** The chunk of settings in an `.nms` file: text lines of `key=value`. The keys the runtime acts on are `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline` and `hz`. Read more: nms-format.md, "`CONF`: settings".
 
 **Confidence.** The rating of a row in `NAME.sites.tsv`: `high`, `medium`, `low` or `very-low`. `high` is reached by proven control flow from the vectors, an `--entry` address or a dynamic log. `medium` is reached through something the scanner inferred, such as a guessed table length or a harvested address. The byte scans have their own scale. Read more: sitescan.md, "`NAME.sites.tsv`" and "Byte scans".
 
@@ -64,11 +64,11 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **Copier header.** 512 extra bytes at the start of some cart files. A file whose size is 512 more than a multiple of 16K has one. The tools and the loader leave it out before they compute the CRC32 or use any cart offset. Read more: nms-format.md, "Conventions".
 
-**Copper.** The Next's coprocessor. It writes NextRegs at chosen screen positions. The runtime uses it for scroll changes in the middle of a picture and for the per-line horizontal scroll of a `RASTER` overlay. Code: `cop_update`, `cop_raster`, `cop_224` in `fw3.asm`. Read more: design.md, "The once-a-frame work".
+**Copper.** The Next's coprocessor. It writes NextRegs at chosen screen positions. The runtime uses it for scroll changes in the middle of a picture and for the per-line horizontal scroll of a `RASTER` overlay. Code: `cop_update`, `cop_raster`, `cop_224`, `cop_seg` in `fw3.asm`. Read more: design.md, "The once-a-frame work".
 
 **Copper list.** The program the copper runs, rewritten by the runtime once a frame. Read more: design.md, "The once-a-frame work".
 
-**CRAM.** Colour RAM of the VDP. It holds the palettes: first the background palette, then the sprite palette. The runtime keeps a copy at `cram` in the jump table's state area and applies each CRAM write to the Next palettes. `jt_vwrite` does not write CRAM; CRAM writes go through the I/O `RST`. Read more: nms-format.md, "Writing VRAM from page code".
+**CRAM.** Colour RAM of the VDP. It holds the palettes: first the background palette, then the sprite palette. The runtime keeps a copy at `cram` in the jump table's state area and applies each CRAM write to the Next palettes. `jt_vwrite` does not write CRAM; CRAM writes go through the I/O `RST`. Read more: design.md, "CRAM writes"; nms-format.md, "Writing VRAM from page code".
 
 **CRC32.** The checksum used to identify carts and to check files. It is the same CRC32 that zip and PNG use. Read more: nms-format.md, "Conventions".
 
@@ -109,6 +109,8 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 **`fw_resume`.** The jump table entry at `$E01B`: a `jp` whose target the shell sets before it starts a game. The runtime's quit routine jumps to it after it restores NextZXOS's pages and registers. Read more: design.md, "Coming back".
 
 **H scroll, V scroll.** The VDP's horizontal and vertical scroll values. A `RASTER` routine computes the value of VDP register 8 (H scroll) for each line. Read more: nms-format.md, "`RASTER`".
+
+**HALT pacing.** A game loop that waits for the next interrupt with `HALT`, so that it runs once a frame or counts frames. On the Next a native `HALT` also ends on the runtime's own interrupts, so an overlay patches each such `HALT` into a wait for the game's own interrupt. Spec lines `eihalt` and `haltret`; inline codes `$76`, `$FB`, `$C9`. Code: `op_halt`, `hw_loop`, `hw_irq`. Read more: design.md, "HALT"; overlays.md, "HALT".
 
 **Handler.** Two things. A runtime handler is the code that receives a patched instruction through an `RST`, such as `fw_io`. A game handler is the game's own interrupt routine, such as the routine at `$0038`. Read more: design.md, "While a game runs".
 
@@ -198,7 +200,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **`notrace`.** Spec line: no trace forms in this overlay. See "Trace". Read more: mknms.py spec lines (`python3 tools/mknms.py --help`).
 
-**Once-a-frame work.** The work the runtime does once in each frame: the copper list, keyboard, map rebuild, tile conversion, priority tiles and sprites. It runs from the ULA interrupt, from a V counter read in the vertical blank, or from a handler exit past the interrupt's line. Code: `vbl_work` in `fw.asm`, `fw2_vbl`. The game's own work in a frame, as in "frame work does not fit in a frame", is a different thing. Read more: design.md, "The once-a-frame work".
+**Once-a-frame work.** The work the runtime does once in each frame: the copper list, keyboard, map rebuild, tile conversion, priority tiles and sprites. It runs from the ULA interrupt, from a V counter read in the vertical blank, or from a handler exit past the interrupt's line; with the `workline` switch, from a line interrupt in the picture. Code: `vbl_work` in `fw.asm`, `fw2_vbl`. The game's own work in a frame, as in "frame work does not fit in a frame", is a different thing. Read more: design.md, "The once-a-frame work".
 
 **Operation (`PTCH`).** One entry in a `PTCH` chunk: `CHECK`, `PATCH`, `START`, `RAMSITES` or `RASTER`, ended by `END`. The loader reads them twice: the first pass checks, the second applies. Read more: nms-format.md, "`PTCH`: operations".
 
@@ -246,7 +248,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **`RAMSITES`.** A `PTCH` operation for games that build code in RAM, so its I/O instructions are not in the cart image. It lists RAM addresses, the original bytes (by the low 16 bits of their CRC32) and the new bytes. The runtime patches the RAM when the game reaches the continuation. Spec lines: `ramhook` and `ramsite`. Read more: nms-format.md, "`RAMSITES`".
 
-**`RASTER`.** A `PTCH` operation for games that set horizontal scroll on nearly every line. The file carries a routine, at most 1024 bytes, that works out the scroll value of each line from the game's RAM. The runtime calls it once a frame and builds a per-line copper list. Spec line: `rastercode FILE`. Code: `cop_raster`. Read more: nms-format.md, "`RASTER`".
+**`RASTER`.** A `PTCH` operation for games that set horizontal scroll on nearly every line. The file carries a routine, at most 1024 bytes, that works out the scroll value of each line from the game's RAM. The runtime calls it once a frame and builds a per-line copper list; with the `rastseg` switch, in 224-line mode, the routine gives segments and the list sets H only where it changes. Spec line: `rastercode FILE`. Code: `cop_raster`, `cop_seg`. Read more: nms-format.md, "`RASTER`".
 
 **Reached, unreached.** In `sitescan.py`, a byte is reached when a code path from a vector or entry point leads to it. A pattern in unreached bytes may be data. Read more: sitescan.md, "Byte scans".
 
@@ -292,7 +294,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **Streamer.** In `sitescan.py`, a loop that writes the VDP control port at least twice and the data port at least once in a pass and moves an address by `$40` (one name table row): a column or rectangle writer. Rule 3 of the pattern rules reports them. Read more: sitescan.md, "Rule 3: column and rectangle streamers".
 
-**Switch.** A spec line that turns on a runtime feature that costs time or memory and helps only some games: `priority`, `toppal`, `tilecache`, `hz`. `mknms.py` writes it into `CONF`. Measurement decides which overlays turn which on. Read more: overlays.md, "Switches".
+**Switch.** A spec line that turns on a runtime feature that costs time or memory and helps only some games: `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline`, `hz`. `mknms.py` writes it into `CONF`. Measurement decides which overlays turn which on. Read more: overlays.md, "Switches".
 
 **Task switch.** A `RET` that runs after the game loaded SP with a value the scanner does not know, so it returns to an address on another stack. Task schedulers do this. The scanner does not follow it. Read more: sitescan.md, "How it works".
 
@@ -318,7 +320,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **Trap.** What a patched I/O instruction does: it runs through an `RST` into the runtime, which does on the Next what the instruction did on the Master System. A trap takes hundreds to thousands of Next cycles, against a few T-states on a Master System. A site that runs alone through a trap, with no trace form, is a single output. Read more: sitescan.md, "Frame cost model"; design.md, "Runs of outputs".
 
-**ULA.** The Next's original Spectrum video chip. Its interrupt (line 248 at 50 Hz, line 224 at 60 Hz) starts the once-a-frame work. The browser and information screen use the ULA screen. Read more: design.md, "The video rate"; "The information screen".
+**ULA.** The Next's original Spectrum video chip. Its interrupt (line 248 at 50 Hz, line 224 at 60 Hz) starts the once-a-frame work, unless the overlay sets a work line. The browser and information screen use the ULA screen. Read more: design.md, "The video rate"; "The information screen".
 
 **`Unknown game`.** The message the shell shows when it has no overlay for the cart, or the file is a different dump from the one the overlay was made for. It names the file it looked for. Read more: readme.txt, "HOW TO START".
 
@@ -335,6 +337,8 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 **VRAM copy.** The runtime's copy of the Master System's 16K VRAM, kept in memory pages 28 and 29. Tile conversion reads from it. Code: `SHADOW_PAGE`. Read more: design.md, "Pages".
 
 **Walk.** The loader's first pass over an overlay file, from the start to `END `, in which every byte goes through a running CRC32 and each `PAGE` chunk is loaded where it is found. Read more: design.md, "Loading an overlay file".
+
+**Work line (`workline`).** The switch, with its spec line `workline N` and `CONF` key `workline=N`, that moves the once-a-frame work from the ULA interrupt below the picture to a line interrupt at SMS line N of the picture. For a game whose frame handler must reach a line of the next picture on time. Code: `wl_ula4`, `wl_line4`, `wl_setup` in `fw4.asm`. Read more: overlays.md, "Switches"; design.md, "The once-a-frame work".
 
 **Z80N.** The Next's CPU: a Z80 with extra instructions. The game's own code runs on it unchanged. Code pages may use any Z80N instruction. Read more: nms-format.md, "`PAGE`: code pages".
 

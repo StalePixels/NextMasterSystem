@@ -5,7 +5,13 @@
 #                 checks for test tools (src/runtime/vdpcheck.asm)
 #   make clean    remove build/
 #
-# Needs z88dk 2.4 (zcc and z88dk-z80asm on PATH), make, sh, awk and sed.
+# The z88dk tools (zcc, z88dk-z80asm) run in z88dk's Docker image, with this
+# folder mounted at its own path, so relative and absolute paths both work in
+# the container. The host needs Docker, make, sh, awk and sed.
+# Z88DK_IMAGE=... picks another image.
+
+# This file, so that every product below can depend on it.
+THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
 
 BUILD  := build
 RTDEFS :=
@@ -15,9 +21,14 @@ RTDEFS := -DTRACE_BUILD
 endif
 RT     := src/runtime
 SH     := src/shell
-ZCC    ?= zcc
-Z80ASM ?= z88dk-z80asm
 ABS    := $(CURDIR)
+
+# One container per tool call. The files it writes belong to the host user.
+Z88DK_IMAGE ?= z88dk/z88dk:latest
+Z88DK_RUN = docker run --rm --user $(shell id -u):$(shell id -g) -e HOME=/tmp \
+            -v $(ABS):$(ABS) -w $(1) $(Z88DK_IMAGE)
+ZCC    = $(call Z88DK_RUN,$(ABS)) zcc
+Z80ASM = $(call Z88DK_RUN,$(ABS)/$(RT)) z88dk-z80asm
 
 # ---- the banked C modules ------------------------------------------------
 # Each module is a directory under src/shell with its C and assembly files,
@@ -69,7 +80,7 @@ all: $(BUILD)/nms.nex
 
 $(BUILD)/rt/runtime.map: $(RT_SRC)
 	@mkdir -p $(BUILD)/rt
-	cd $(RT) && $(Z80ASM) -mz80n -b -m -s -split-bin $(RTDEFS) -O$(ABS)/$(BUILD)/rt runtime.asm
+	$(Z80ASM) -mz80n -b -m -s -split-bin $(RTDEFS) -O$(ABS)/$(BUILD)/rt runtime.asm
 
 $(RT_BINS): $(BUILD)/rt/runtime.map
 
@@ -113,6 +124,10 @@ $(BUILD)/nms.nex: $(RESIDENT_OBJ) $(BANK_OBJ) $(RT_BINS) tools/check-layout
 	    -create-app -subtype=nex -Cz"--main-fence 0xA000 --nex-border 0"
 	@rm -f $(BUILD)/nms
 	tools/check-layout $(BUILD)/rt/runtime.map $(BUILD)/nms.map
+
+# A change to the build rules rebuilds everything.
+$(RESIDENT_OBJ) $(BANK_OBJ) $(BUILD)/rt/runtime.map $(BUILD)/memplan.h \
+$(BUILD)/fwsyms.inc $(BUILD)/fwsyms.h $(BUILD)/nms.nex: $(THIS_MAKEFILE)
 
 clean:
 	rm -rf build

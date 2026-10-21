@@ -88,7 +88,7 @@ fw_jt:
 		jp fw_outi_run		; $E012 run of OUTIs to the end of an unrolled block (RST + inline count)
 		jp fw_io		; $E015 any I/O instruction (RST + inline op), ABI 2
 		jp fw_io0		; $E018 the same, as the RST $00 vector (ABI 3)
-FW_ABI		equ 8			; 6: code pages (far call, jt_far, jt_peek); 7: jt_vwrite; 8: hsplit
+FW_ABI		equ 12			; 6: code pages (far call, jt_far, jt_peek); 7: jt_vwrite; 8: hsplit; 9: HALT; 10: collline; 11: rastseg; 12: workline
 		public FW_ABI
 ; $E01B: a JP to the outer shell's resume entry. The shell writes its target
 ; (the two bytes at $E01C) before it starts a game. fw_quit jumps here.
@@ -153,8 +153,10 @@ tr_free:	dw $FFFF		; pixel values no sprite-palette tile on screen uses
 ; pri_frame), bit 1 line-0 palette (toppal: cram_x in fw2, pal_vbl here),
 ; bit 2 tiles from cart ROM (tilecache: kn_entry here, kn_block in fw2),
 ; bit 3 the game sets the video rate (hz=50 or hz=60), bit 4 60 Hz (hz_setup
-; in fw3), bit 5 mid-frame H scroll writes (hsplit: hs_reg8 here, sg_write
-; and sg_frame in fw3)
+; in fw3), bit 5 mid-frame H scroll writes (hsplit: hs_reg8 in fw2, sg_write
+; and sg_frame in fw3), bit 6 the sprite collision line (collline: cl_rd
+; here, cl_vbl in fw3, cl_read in fw4), bit 7 segment H scroll in 224-line
+; mode (rastseg: seg_new and cop_seg in fw3, cop_seg4 in fw4)
 fw_flags:	db 0
 pal43:		db %00000010		; NextReg $43 display bits: ULA second; bits 3 and 2
 					; (second sprite and Layer 2 palettes) while toppal shows them
@@ -285,7 +287,7 @@ vc_fast__blank:	cp 2			; the two lines after the picture: no vblank work
 		jr c,vc_fast__cnt
 		ld a,(vbl_done)
 		or a
-		jr nz,vc_fast__cnt
+vf_hk:		jr nz,vc_fast__cnt	; workline: JR, the work line runs the work
 vc_fast__gen:	pop af			; P/V = IFF2
 		pop bc
 		ret po
@@ -595,7 +597,9 @@ ed_dispatch:
 		jr z,ed_ldai
 		cp $80
 		jp z,op_far		; $80: far call into a code page (ABI 6)
-		jp fw_fatal
+		ld hl,op_halt		; $76, $FB, $C9: a HALT (ABI 9); any other
+		call fw4_call		; code stops the game
+		jp fw_exit
 ; LD I,A and LD A,I: the framework's IM 2 needs I, so the game's I is kept
 ; in shadow_i (Wonder Boy III keeps flags in it). LD A,I: S and Z from the
 ; value, P/V = the game's IFF2, H = N = 0, C kept.
@@ -914,8 +918,8 @@ fw_line_irq:
 		push af
 		push hl
 		push bc
-		ld a,(hl_on)		; per-line H scroll from a hook table: the game's
-		or a			; line interrupts are not delivered
+fl_hk:		ld a,(hl_on)		; per-line H scroll from a hook table: the game's
+		or a			; line interrupts are not delivered (workline: call wl_line)
 		jr z,fw_line_irq__ev
 		ld a,(ev_next)
 		cp 192
@@ -967,7 +971,7 @@ fw_line_irq__set:		call ev_program
 		add hl,sp		; in the vertical blank, before any line event):
 		ld (irq_s),hl		; the event waits for its end (isr_tramp)
 		push de
-		call frm_run
+frm_t1:		call frm_run		; frm_run__no while a patched HALT waits
 		pop de
 		jr z,fw_line_irq__callgame
 		ld a,1
@@ -1062,7 +1066,7 @@ irq_frame:	ld (irq_s),sp
 		push hl
 		push af
 		push de
-		call frm_run
+frm_t2:		call frm_run		; frm_run__no while a patched HALT waits
 		jr z,irq_back
 		ld a,(irq_pend)
 		or a
@@ -1258,6 +1262,41 @@ isr_tramp__di:		pop af
 		ex (sp),hl
 mx_itd:		ret
 
+; A patched HALT (inline codes $76, $FB, $C9; op_halt in fw4). On the Next a
+; native HALT also ends on the runtime's own interrupts: the ULA interrupt
+; of the once-a-frame work, line events the game does not get, events held
+; or flagged only. A patched HALT waits here instead, on the game's stack
+; with the game's registers and its return address on top, until the
+; runtime enters the game's interrupt handler: op_halt points irq_t1 and
+; irq_t2 at hw_irq, which turns hw_jr to hw_done and puts their targets
+; back before it goes on to the handler. The runtime's own interrupts
+; return to hw_loop and the wait goes on. EI then HALT is one instruction
+; for interrupts, so an event between the DI and the HALT still ends it.
+; While the wait runs, frm_t1 and frm_t2 call frm_run__no: no frame or line
+; event is held for a frame handler that still runs, because a handler that
+; waits in a HALT (Pit Pot runs its game in the handler) takes the next
+; event nested, as on the SMS.
+hw_loop:	di
+hw_jr:		jr hw_wait		; hw_hit: jr hw_done
+hw_wait:	ei
+		halt
+		jr hw_loop
+hw_done:	ei
+mx_hlt:		ret
+; The game's interrupt entry while a patched HALT waits (irq_t1, irq_t2):
+; the game's registers, interrupts off, the return slot at SP.
+hw_irq:		push af
+		push hl
+		ld hl,hw_hit
+		call fw4_call
+		pop hl
+		pop af
+mx_hirq:
+hw_irq_j:	jp $0038		; op_halt: the target irq_t1 and irq_t2 had
+; A patched HALT with the game's interrupts off: as a native HALT.
+hw_dead:	halt
+mx_hdead:	ret
+
 ; Line-0 palette (overlay flag 2, toppal). On the SMS the frame handler's
 ; palette writes land in the vertical blank; on the Next they can land in
 ; the first lines of the next picture. The second tilemap, sprite and Layer
@@ -1440,6 +1479,9 @@ cur_line__big:		ld a,255
 ; the same blank; reads in the picture, and frame and line events that come
 ; on time, clear it. Pause becomes the SMS NMI: the RETI goes to $0066 with
 ; the interrupted PC on the stack (interrupts on during the NMI handler).
+; With workline, wl_ula4 (fw4) decides in place of all this: the work runs
+; at the work line (wl_line comes in here from fw_line_irq), and this
+; interrupt only sets the line interrupt for it (vbl_poll 1).
 fw_ula_irq:
 		push af
 		push hl
@@ -1449,7 +1491,7 @@ fw_ula_irq:
 		push de
 		push ix
 		push iy
-		call cur_line		; held into the picture: arm vbl_chk
+ula_hk:		call cur_line		; held into the picture: arm vbl_chk (workline: wl_ula)
 		ld hl,pic_end
 		cp (hl)
 		jr nc,fw_ula_irq__w
@@ -1596,16 +1638,21 @@ fw2_call:
 		nextreg $51,a
 		pop af
 		ret
-; Register 8 = E with the hsplit switch, from vdp_reg_w (r8_hk) in fw2:
-; hscroll_set, then sg_write (fw3, mapped at $0000 for it; interrupts are off
-; in a handler), so that a write that moves the tilemap in the picture also
-; moves the map switch column of the lines still to come.
-hs_reg8:	call hscroll_set
-		nextreg $50,FW3_PAGE
-		call sg_write
-		ld a,(cur_mmu+0)
-		nextreg $50,a
-		ret
+; The work line (CONF workline, wl_setup in fw4 sets the hooks). wl_line is
+; fl_hk's call in fw_line_irq: wl_line4 tells the work line from the other
+; line interrupts (Z: another one, A = hl_on, as the instruction the hook
+; replaces). The work line goes on as the ULA interrupt, which runs the work.
+; wl_ula is ula_hk's call in fw_ula_irq (wl_ula4).
+wl_line:	ld hl,wl_line4
+		call fw4_call
+		ret z
+		pop hl			; the hook's return
+		pop bc			; as fw_line_irq found them
+		pop hl
+		pop af
+		jp fw_ula_irq
+wl_ula:		ld hl,wl_ula4
+		jp fw4_call
 
 ; The same for a routine in fw4 (FW4_PAGE). Keeps A and F from the routine.
 fw4_call:
@@ -1746,7 +1793,7 @@ rd_vcount:
 		jr c,vc_count
 rd_vcount__vbl:		ld a,(vbl_done)
 		or a
-		jr nz,vc_count
+rv_hk:		jr nz,vc_count		; workline: JR, the work line runs the work
 		push de
 		call vbl_run
 		pop de
@@ -1782,7 +1829,7 @@ rd_status:
 		xor a
 		ld (vdp_latch),a
 		ld (line_pend),a
-		call cur_line
+rs_hk:		call cur_line		; collline: cl_rd (fw2_switches)
 		ld hl,pic_end
 		cp (hl)
 		jr c,rd_status__active
@@ -1803,6 +1850,18 @@ rd_status__read:		ld a,(vdp_status)
 		ld (vdp_status),a
 		ld a,b
 		ret
+
+; collline (fw_flags bit 6): rs_hk calls this in place of cur_line, so that
+; a status read in the picture from the sprite collision line on gets bit 5,
+; as on the SMS (cl_read in fw4; cl_vbl and cl_scan in fw3).
+cl_rd:		ld hl,cl_read
+		call fw4_call
+		jp cur_line
+cl_line:	db $FF			; the first Next line where two sprites meet, $FF none
+cl_arm:		db 0			; 1: the picture's collision is not raised yet; 2: from the
+					; next picture on; 3: the same, cl_line to work out again
+sat_hi:		db $3F			; sprite attribute table address high byte (here for
+					; cl_scan from cl_read, with fw4 in slot 1)
 
 rd_vdata:
 		IFDEF TRACE_BUILD

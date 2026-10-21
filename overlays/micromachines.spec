@@ -228,10 +228,15 @@ site 07F09   ; OUT ($BF),A
 site 07F0D   ; OUT ($BF),A
 site 07F1D   ; OUT ($BF),A
 site 07F21   ; OUT ($BF),A
-site 07F2D   ; OUT ($BE),A
-site 07F30   ; OUT ($BE),A
-site 07F33   ; OUT ($BE),A
-site 07F36   ; OUT ($BE),A
+# The loop at $7F2C writes the race's tiles: 4 bytes a row, from $C000, $C800, $D000 and a 0,
+# up to row ($DF1C) * 256 - $C000 (2048 rows, 8K of VRAM, as a race loads). Through the I/O
+# traps a row took about 5,700 cycles, 21 frames of the race load. The page entry tile_up
+# writes the rows with jt_vwrite.
+asm 07F23 35   ; LD HL,$C000 ... the loop ... RET
+    rst $00
+    db far_io, pg_tile_up, ent_tile_up
+    ret
+endasm
 site 07F65   ; OUT ($BF),A
 site 07F69   ; OUT ($BF),A
 site 07F76   ; OUT ($BF),A
@@ -534,9 +539,11 @@ site 3BCB9   ; OUT ($BE),A
 site 3BCC1   ; OUT ($BF),A
 site 3BCC4   ; OUT ($BF),A
 site 3BCC8   ; OUT ($BF),A
-# not patched: 3BCCB (RAM $DB0B, OUT ($BF),A): in the race the game reads $DB07 on as data
-# (LD IY,$DB07 at $38C8); with RST io there the race crashed. The menus' VRAM address
-# set through $DB07 then loses its high byte on the Next.
+# RAM $DB0B, the second byte of the address set at $DB07 (CALL $DB07 at $BD49 and $BD8E). The
+# race uses $DB07 on as data (LD IY,$DB07 at $38C8, then LD (IY+n),A at $398E on), and the
+# copier at $B971 (bank 14) writes the block again. A full race with this site runs to the
+# result screen.
+site 3BCCB   ; OUT ($BF),A
 # RAM code at $DBC0 (copied from ROM $0075 by the start-up code at $010E,
 # reached by JP $DBC0 at $80BB as the race loads): maps banks 0 and 1.
 # Unpatched, its writes went into the cart copy and wrote $00 over the
@@ -664,6 +671,38 @@ codem 3BD0A   ; LD ($8000),A
 # between the two above, the same routine's third LD ($8000),A (RAM $DB41);
 # no run reached it (batch 5)
 codem 3BD01   ; LD ($8000),A
+# Sites in the mode handlers. The main loop ($808E) calls $80E6, which jumps through the
+# word table at $80BE, indexed by the byte at $D699 ($80F9 CALL $8100, JP (HL)). The
+# sites below are in code that the handler at the table entry named on each line reaches
+# by jumps and calls; the SMS reference runs did not reach them.
+# Entry $8FC4, by the jumps at $8FDC, $900B and $9019 (CALL $B35A sets the VRAM address).
+site 09021   ; OUT ($BE),A
+site 09024   ; OUT ($BE),A
+# Entry $8CE7, through the calls and jumps at $996E, $997B and $99D3 (the first two sites), and
+# $9A6D and $9AE9 (the other two).
+site 099EB   ; OUT ($BE),A
+site 099EF   ; OUT ($BE),A
+site 09B11   ; OUT ($BE),A
+site 09B15   ; OUT ($BE),A
+# Entry $B56D, by CALL $A0F0 (the loop at $A109 writes 12 cells).
+site 0A10B   ; OUT ($BE),A
+site 0A10E   ; OUT ($BE),A
+# Entry $8EF0, by CALL $A9C6 (a tile and its attribute byte).
+site 0A9E4   ; OUT ($BE),A
+site 0A9E8   ; OUT ($BE),A
+# Entry $8C35, by CALL $AFCD, CALL $BB95 and CALL $BD94 (at $BBDA).
+site 0BD9E   ; OTIR
+# Entry $8BAB (the word at $80C0 of the table), by CALL $AF10 at $8BAB and JR NZ,$AF6F at $AF1F:
+# the text write at $AF8F (CALL $B35A at $AF7F sets the VRAM address).
+site 0AF8F   ; OUT ($BE),A
+# RAM routines in the block that the game copies from ROM $3B97D to RAM $D7BD. The block
+# is entered at RAM $DA38 (ROM $3BBF8) by JP $DA38 at $9814 (entry $8CE7, by CALL $97EA
+# and the jump at $9804) and at RAM $DABD (ROM $3BC7D) by JP $DABD at $AECA (entry $8E15,
+# by CALL $AE94).
+site 3BBFF   ; OUT ($BE),A
+site 3BC03   ; OUT ($BE),A
+site 3BC83   ; OUT ($BE),A
+site 3BC87   ; OUT ($BE),A
 # CHECK ram_exec at 08018 ($8018 bank 2): CALL $C000 $C000
 # CHECK ram_exec at 080BB ($80BB bank 2): JP $DBC0 $DBC0
 # CHECK ram_exec at 0B031 ($B031 bank 2): JP $C000 $C000
@@ -765,109 +804,26 @@ codem 3BD01   ; LD ($8000),A
 # CHECK low: site 3FA05  IN A,($7E)  (v_counter)
 # CHECK low: site 3FA3B  OUT ($BE),A  (vdp_data)
 # CHECK low: site 3FA74  OUT ($BF),A  (vdp_control)
-# The game unpacks most of its code into RAM ($C000-$CFFF) with its routine
-# at $D7BD (copied from ROM $3B97D). Every unpack ends at JP $DB48 ($D7C6,
-# ROM $3B986): that jump runs the framework's RAM patch table first. The
-# sites are the I/O PCs in that RAM from two detector runs (a short run, and
-# a longer one through the menus and a race), with their bytes.
-ramhook 3B986
-ramsite C037 D3BF
-ramsite C03B D3BF
-ramsite C03F D3BE
-ramsite C042 D3BE
-ramsite C049 DB7E
-ramsite C052 DB7E
-ramsite C0D5 EDB3
-ramsite C0D8 D3BF
-ramsite C0DC D3BF
-ramsite C0E4 EDB3
-ramsite C0E8 D3BF
-ramsite C0EC D3BF
-ramsite C0F4 EDB3
-ramsite C0F7 D3BF
-ramsite C0FB D3BF
-ramsite C0FF D3BE
-ramsite C103 D3BE
-ramsite C108 D3BE
-ramsite C111 D3BE
-ramsite C115 D3BE
-ramsite C119 D3BE
-ramsite C11D D3BE
-ramsite C122 D3BE
-ramsite C127 D3BF
-ramsite C12B D3BF
-ramsite C134 D3BE
-ramsite C137 D3BE
-ramsite C139 D3BE
-ramsite C13B D3BE
-ramsite C14C EDA3
-ramsite C14E EDA3
-ramsite C150 ED51
-ramsite C152 ED51
-ramsite C161 ED51
-ramsite C163 EDA3
-ramsite C165 ED59
-ramsite C167 ED59
-ramsite C16F D3BF
-ramsite C173 D3BF
-ramsite C17B D3BE
-ramsite C17F D3BE
-ramsite C186 DBDC
-ramsite C18F D3BF
-ramsite C193 D3BF
-ramsite C199 D3BE
-ramsite C19C D3BE
-ramsite C1A4 D3BF
-ramsite C1A8 D3BF
-ramsite C1AE D3BE
-ramsite C1B1 D3BE
-ramsite C1B9 D3BF
-ramsite C1BD D3BF
-ramsite C1C3 D3BE
-ramsite C1C7 D3BE
-ramsite C1CE D3BF
-ramsite C1D2 D3BF
-ramsite C1D7 D3BE
-ramsite C1DB D3BE
-ramsite C1E2 D3BF
-ramsite C1E6 D3BF
-ramsite C1EA D3BE
-ramsite C1EE D3BE
-ramsite C1F2 D3BE
-ramsite C1F6 D3BE
-ramsite C1FC D3BF
-ramsite C200 D3BF
-ramsite C206 D3BE
-ramsite C209 D3BE
-ramsite C20F D3BF
-ramsite C213 D3BF
-ramsite C219 D3BE
-ramsite C21C D3BE
-ramsite C228 D3BE
-ramsite C22B D3BE
-ramsite C23C D3BE
-ramsite C23F D3BE
-ramsite C245 D3BE
-ramsite C248 D3BE
-ramsite C263 D3BF
-ramsite C267 D3BF
-ramsite C41C D3BF
-ramsite C420 D3BF
-ramsite C42B D3BE
-ramsite C42F D3BE
-ramsite C434 D3BE
-ramsite C437 D3BF
-ramsite C43A D3BF
-ramsite C43F EDB3
-ramsite CA9B D37E
-ramsite CA9F D37E
-ramsite CAA3 D37E
-ramsite CAA7 D37E
-ramsite CAB7 D37E
-ramsite CAC0 D37E
-ramsite CAC6 D37E
-ramsite CAE7 D37E
-ramsite CAEA D37E
+# At power-on the game unpacks code from bank 15 ($AD49) to RAM $C000 with its routine at
+# $D7BD (CALL $D7BD at $8015) and runs it once (CALL $C000 at $8018): the Codemasters logo
+# with its jingle, or the cart test when buttons 1 and 2 are held. No other code runs it,
+# and the next unpack writes over it. Page 1 replaces every routine of that code that does
+# I/O. The CALL $C000 goes through the cave at $BB63, where logo_patch checks the RAM image
+# and writes a far call at the start of each routine; the game's own code in RAM still runs
+# the logo's frame loop. The cave is the routine at $BB63 (register 1 = $70), which no CALL,
+# JP, JR or word reaches.
+# The code that $B02E unpacks from $B753 and jumps to (JP $C000 at $B031) runs only when
+# $DC3C is not 0, and the only store to $DC3C is LD ($DC3C),A with A = 0 at $8007: it is
+# never run (its ports $00-$05 are the Game Gear's).
+label logo_cave 0BB63
+asm 08018 3    ; CALL $C000
+    call logo_cave
+endasm
+asm 0BB63 9    ; the unused routine at $BB63
+    rst $00
+    db far_io, pg_logo_patch, ent_logo_patch
+    jp $C000
+endasm
 # Codemasters mapper stores the flow scan did not reach (byte scan):
 # 000B1 runs from RAM: the routine at $0173 (called from $0120) copies the
 # game's 18-byte restart routine at $00AE to $DC99 and runs it there; the routine
@@ -1065,4 +1021,818 @@ wr_buf: ld (pc_mode),a
 pc_mode: db 0
 rem:    dw 0
 buf:    ds 1024
+endpage
+
+page 1 logo_patch logo_init logo_end logo_out psg_off psg_vol psg_tone tile_up
+; The routines of the logo code that the game unpacks to RAM $C000 at power-on.
+; logo_patch writes the far calls into that code; each other entry does what the
+; game's routine at its RAM address does, with VRAM writes through jt_vwrite and
+; the other I/O through the runtime (RST $00). They run with interrupts off, as
+; the logo code does (DI at $C000), and leave them so.
+
+; logo_patch: from the cave at $BB63, after the unpack and before JP $C000.
+; Checks the 3680 bytes from $C000 (two 16-bit sums) and writes the far calls;
+; a different image stops the game (jt_fatal). Keeps BC, DE, HL, IX; A, F change.
+logo_patch:
+        push bc
+        push de
+        push hl
+        push ix
+        ld hl,$C000
+        ld bc,3680
+        ld de,0                 ; the sum of the bytes
+        ld ix,0                 ; the sum of those sums
+.ck:    ld a,(hl)
+        add a,e
+        ld e,a
+        jr nc,.ck1
+        inc d
+.ck1:   add ix,de
+        inc hl
+        dec bc
+        ld a,b
+        or c
+        jr nz,.ck
+        ld hl,$1514
+        or a
+        sbc hl,de
+        jr nz,.bad
+        push ix
+        pop hl
+        ld de,$F015
+        sbc hl,de
+        jr nz,.bad
+        ld hl,stubs
+.st:    ld e,(hl)
+        inc hl
+        ld d,(hl)
+        inc hl
+        ld a,d
+        or e
+        jr z,.done
+        ld c,(hl)
+        inc hl
+        ld b,0
+        ldir
+        jr .st
+.done:  pop ix
+        pop hl
+        pop de
+        pop bc
+        ret
+.bad:   jp jt_fatal
+
+; The far calls: RAM address, length, bytes. RST $00 is the io vector.
+stubs:  dw $C032                ; CALL $C051 ... RET: the end of the logo
+        db 5, $C7, far_io, pg_logo_end, ent_logo_end, $C9
+        dw $C0BF                ; the screen set-up, and the cart test
+        db 7, $C7, far_io, pg_logo_init, ent_logo_init
+        db $D0, $C1, $C9        ; RET NC; POP BC; RET (the test ends as JP $C050)
+        dw $C417                ; CALL $C051 ... OTIR; RET: a logo step's writes
+        db 5, $C7, far_io, pg_logo_out, ent_logo_out, $C9
+        dw $CA99                ; the PSG volumes off
+        db 5, $C7, far_io, pg_psg_off, ent_psg_off, $C9
+        dw $CAB1                ; three PSG volumes from the jingle data
+        db 5, $C7, far_io, pg_psg_vol, ent_psg_vol, $C9
+        dw $CACA                ; a PSG tone
+        db 5, $C7, far_io, pg_psg_tone, ent_psg_tone, $C9
+        dw 0
+
+; logo_init: the routine at $C0BF. The register, CRAM and VRAM set-up of the
+; logo screen; with buttons 1 and 2 held, the cart test (test) instead of the
+; logo's name table cells. Returns with carry clear after the set-up, and with
+; carry set after the test. AF, BC, DE, HL change, as in the game's routine;
+; its caller sets every register it uses.
+logo_init:
+        push ix
+        push iy
+        ld hl,$CAEE             ; the jingle's data
+        ld ($D7DD),hl
+        ld hl,$CB4F
+        ld ($D7DF),hl
+        xor a
+        ld ($D7DC),a
+        ld hl,$C0A9             ; VDP registers 0 to 10 (22 control bytes)
+        ld bc,$16BF
+        rst $00
+        db $B3                  ; OTIR
+        xor a                   ; CRAM 0 to 3
+        rst $00
+        db $05                  ; OUT ($BF),A
+        ld a,$C0
+        rst $00
+        db $05
+        ld hl,$C9C2
+        ld bc,$04BE
+        rst $00
+        db $B3
+        ld a,$10                ; CRAM 16 to 19, the same 4 bytes
+        rst $00
+        db $05
+        ld a,$C0
+        rst $00
+        db $05
+        ld hl,$C9C2
+        ld bc,$04BE
+        rst $00
+        db $B3
+        ld de,$3F00             ; the sprite table: Y of sprites 0 and 1, then 0
+        call vaddr
+        ld a,$6F
+        call vb
+        ld a,$77
+        call vb
+        ld b,$7E
+        xor a
+.s1:    call vb
+        djnz .s1
+        ld a,$1E                ; X and tile of sprites 0 and 1, then 0
+        ld ($D7D7),a
+        call vb
+        ld a,$5C
+        call vb
+        ld a,$28
+        call vb
+        ld a,$5C
+        call vb
+        ld b,$7F
+        xor a
+.s2:    call vb                 ; the last 3 go on at $0000
+        djnz .s2
+        ld de,$0000             ; tiles 0 to 40: rows $FF, 0, 0, 0
+        call vaddr
+        ld c,41
+.t1:    ld b,8
+.t1r:   ld a,$FF
+        call vb
+        xor a
+        call vb
+        call vb
+        call vb
+        djnz .t1r
+        dec c
+        jr nz,.t1
+        ld hl,$C512             ; tiles 41 to 91: rows of 2 bytes from $C512, 0, 0
+        ld c,51
+.t2:    ld b,8                  ; the game's B = 24 counts its OUTIs too
+.t2r:   ld a,(hl)
+        inc hl
+        call vb
+        ld a,(hl)
+        inc hl
+        call vb
+        xor a
+        call vb
+        call vb
+        djnz .t2r
+        dec c
+        jr nz,.t2
+        ld c,48                 ; tiles 92 to 139: rows of $FF, the next byte, 0, 0
+.t3:    ld b,8                  ; the game's B = 16 counts its OUTIs too
+.t3r:   ld a,$FF
+        call vb
+        ld a,(hl)
+        inc hl
+        call vb
+        xor a
+        call vb
+        call vb
+        djnz .t3r
+        dec c
+        jr nz,.t3
+        ld de,$3800             ; the name table: tile $28 in front of sprites
+        call vaddr
+        ld c,24
+.n1:    ld b,32
+.n1c:   ld a,$28
+        call vb
+        ld a,$10
+        call vb
+        djnz .n1c
+        dec c
+        jr nz,.n1
+        call vflush
+        rst $00
+        db $0E                  ; IN A,($DC)
+        and $30
+        jp z,test               ; buttons 1 and 2 held
+        ld de,$3A4C             ; "CODEMASTERS": tiles 0, 2 ... 36
+        call vaddr
+        ld bc,$1300
+.c1:    ld a,c
+        call vb
+        xor a
+        call vb
+        inc c
+        inc c
+        djnz .c1
+        ld de,$3A8C             ; the row below: tiles 1, 3 ... 37
+        call vaddr
+        ld bc,$1301
+.c2:    ld a,c
+        call vb
+        xor a
+        call vb
+        inc c
+        inc c
+        djnz .c2
+        ld de,$3B8C             ; tiles $2A on, in front of sprites
+        call vaddr
+        ld bc,$142A
+.c3:    ld a,c
+        call vb
+        ld a,$10
+        call vb
+        inc c
+        djnz .c3
+        ld de,$3BCC
+        call vaddr
+        ld b,$14
+.c4:    ld a,c
+        call vb
+        ld a,$10
+        call vb
+        inc c
+        djnz .c4
+        ld de,$3C1E
+        call vaddr
+        ld a,c
+        inc c
+        call vb
+        ld a,$10
+        call vb
+        ld a,c
+        inc c
+        call vb
+        ld a,$10
+        call vb
+        ld c,$5E                ; the copyright lines: tiles $5E on
+        ld de,$3D8C
+        call vaddr
+        ld b,$14
+.c5:    ld a,c
+        inc c
+        call vb
+        xor a
+        call vb
+        djnz .c5
+        ld de,$3DD2
+        call vaddr
+        ld b,$0A
+.c6:    ld a,c
+        inc c
+        call vb
+        xor a
+        call vb
+        djnz .c6
+        ld hl,$C510             ; two cells from $C510, then the digits of ($7FE3)
+        ld b,2
+.c7:    ld a,(hl)
+        inc hl
+        add a,c
+        call vb
+        xor a
+        call vb
+        djnz .c7
+        ld a,($7FE3)
+        ld b,a
+        srl a
+        srl a
+        srl a
+        srl a
+        add a,c
+        call vb
+        xor a
+        call vb
+        ld a,b
+        and $0F
+        add a,c
+        call vb
+        xor a
+        call vb
+        call vflush
+        ld hl,$D000             ; RAM $D000: 304 rows $FF, 0, 0, 0
+        ld bc,$0130
+.r:     ld (hl),$FF
+        inc hl
+        ld (hl),0
+        inc hl
+        ld (hl),0
+        inc hl
+        ld (hl),0
+        inc hl
+        dec bc
+        ld a,b
+        or c
+        jr nz,.r
+        ld a,$62                ; register 1 = $62: display on
+        rst $00
+        db $05
+        ld a,$81
+        rst $00
+        db $05
+        pop iy
+        pop ix
+        or a                    ; carry clear: the logo follows
+        ret
+
+; test: the cart test at $C26A. The game maps each bank into slot 2 and
+; checks that its last byte is its number (banks 2 on), and adds up the cart
+; in 16-bit words. On the Next the cart has the overlay's patches, so the sum
+; is not the cart's; the loader has checked the cart's CRC32, so the sum is the
+; header's ($7FE6), as the game finds for this dump. Then the screen: the sum,
+; the 5 bytes from $7FE1, a bad bank's number, a face; on success CRAM 1 and 17
+; = $0C, a wait for the buttons to come up and 256 frames, then the return as
+; the game's JP $C050 (carry set); on failure CRAM $03, a PSG tone and a hang.
+test:   xor a
+        ld ($D7DA),a
+        ld ($D7DB),a
+        ld h,a
+        ld l,a
+        ld ($D7D8),hl
+.bank:  ld a,($D7DA)
+        rst $00
+        db $2E, 0               ; LD ($8000),A: the bank into slot 2
+        ld hl,$D7DA
+        ld a,(hl)
+        cp 2
+        jr c,.nx
+        ld a,($BFFF)
+        cp (hl)
+        jr z,.nx
+        ld a,(hl)
+        ld ($D7DB),a
+        ld a,$FF
+        ld ($D7DC),a
+.nx:    inc (hl)
+        ld b,(hl)
+        ld a,($7FE0)            ; the number of banks
+        cp b
+        jr nz,.bank
+        ld hl,($7FE6)
+        ld ($D7D8),hl
+        ld de,$3950
+        call vaddr
+        ld a,$88                ; "C" and the sum
+        call vb
+        xor a
+        call vb
+        ld a,($D7D9)
+        call hexb
+        ld a,($D7D8)
+        call hex2
+        ld hl,($D7D8)
+        ld bc,($7FE6)
+        or a
+        sbc hl,bc
+        jr z,.sum
+        ld a,1
+        ld ($D7DC),a
+.sum:   ld de,$39D0
+        call vaddr
+        ld a,$89                ; "D" and the bytes from $7FE1
+        call vb
+        xor a
+        call vb
+        ld hl,$7FE1
+        ld b,5
+.d:     ld a,(hl)
+        inc hl
+        call hexb
+        djnz .d
+        ld a,($D7DB)
+        and a
+        jr z,.face
+        ld de,$3A50
+        call vaddr
+        ld a,$87                ; a bad bank's number
+        call vb
+        xor a
+        call vb
+        ld a,($D7DB)
+        call hexb
+.face:  ld de,$3B1E
+        call vaddr
+        ld c,$54
+        ld a,($D7DC)
+        and a
+        jr z,.f1
+        ld c,$58
+.f1:    ld a,c
+        inc c
+        call vb
+        xor a
+        call vb
+        ld a,c
+        inc c
+        call vb
+        xor a
+        call vb
+        ld de,$3B5E
+        call vaddr
+        ld a,c
+        inc c
+        call vb
+        xor a
+        call vb
+        ld a,c
+        call vb
+        xor a
+        call vb
+        call vflush
+        ld a,($D7DC)
+        and a
+        jr nz,.fail
+        ld b,$0C
+        call tcol
+.up:    rst $00
+        db $0E                  ; IN A,($DC)
+        or $C0
+        cp $FF
+        jr nz,.up
+        ld b,0
+.w:     call vwait
+        call v0wait
+        djnz .w
+        pop iy
+        pop ix
+        scf
+        ret
+.fail:  ld b,$03
+        call tcol
+        ld a,$8F
+        rst $00
+        db $02                  ; OUT ($7E),A
+        ld a,$3F
+        rst $00
+        db $02
+        ld a,$90
+        rst $00
+        db $02
+.hang:  jr .hang
+
+; CRAM 1 and 17 = B, then register 1 = $62.
+tcol:   ld a,$01
+        rst $00
+        db $05
+        ld a,$C0
+        rst $00
+        db $05
+        ld a,b
+        rst $00
+        db $04                  ; OUT ($BE),A
+        ld a,$11
+        rst $00
+        db $05
+        ld a,$C0
+        rst $00
+        db $05
+        ld a,b
+        rst $00
+        db $04
+        ld a,$62
+        rst $00
+        db $05
+        ld a,$81
+        rst $00
+        db $05
+        ret
+
+; hexb: the routine at $C084, a blank cell then hex2. hex2: the routine at
+; $C08E, two cells with the hex digits of A (tiles $7C on). Use AF and AF'.
+hexb:   ex af,af'
+        ld a,$28
+        call vb
+        ld a,$10
+        call vb
+        ex af,af'
+hex2:   push bc
+        ld c,a
+        and $F0
+        rra
+        rra
+        rra
+        rra
+        add a,$7C
+        call vb
+        ld a,$10
+        call vb
+        ld a,c
+        and $0F
+        add a,$7C
+        call vb
+        ld a,$10
+        call vb
+        pop bc
+        ret
+
+; logo_end: the code from $C032 to the RET at $C050. A frame wait, one name
+; table cell, then 150 frames. Returns A = 0, B = 0, Z set, as the game's loop;
+; C, DE, HL kept.
+logo_end:
+        call vwait
+        push de
+        push ix
+        push iy
+        ld de,$3A72
+        call vaddr
+        ld a,$29
+        call vb
+        xor a
+        call vb
+        call vflush
+        pop iy
+        pop ix
+        pop de
+        ld b,$96
+.w:     call vwait
+        call v0wait
+        djnz .w
+        ret
+
+; logo_out: the code from $C417 to the RET at $C441. In: HL = the 192 bytes of
+; pattern, DE = their VRAM address ($4000 set). A frame wait, sprites 0 and 1
+; one step on (the byte at $D7D7), then the 192 bytes. Returns as the game's
+; OTIR leaves it: HL past the bytes, B = 0, C = $BE, A = D, Z set; DE kept.
+logo_out:
+        call vwait
+        push hl
+        push de
+        ld a,($D7D7)
+        add a,2
+        ld ($D7D7),a
+        ld (spr),a
+        sub 2
+        ld (spr+2),a
+        ld a,$5C
+        ld (spr+1),a
+        ld hl,spr
+        ld de,$3F80
+        ld bc,$0301             ; 3 bytes, 1 run
+        ld a,1                  ; the source in this page
+        call jt_vwrite
+        pop de
+        pop hl
+        ld bc,$C001             ; 192 bytes, 1 run
+        xor a                   ; the source as the game sees it
+        call jt_vwrite
+        ld bc,$00C0
+        add hl,bc
+        ld c,$BE
+        ld b,0
+        ld a,d
+        cp a
+        ret
+
+; psg_off: the code from $CA99 to the RET at $CAA9: the four volumes off.
+psg_off:
+        ld a,$9F
+        rst $00
+        db $02
+        ld a,$BF
+        rst $00
+        db $02
+        ld a,$DF
+        rst $00
+        db $02
+        ld a,$FF
+        rst $00
+        db $02
+        ret
+
+; psg_vol: the code from $CAB1 to the RET at $CAC9: three volumes from the
+; jingle data at ($D7DF).
+psg_vol:
+        ld hl,($D7DF)
+        ld a,(hl)
+        or $90
+        rst $00
+        db $02
+        inc hl
+        ld ($D7DF),hl
+        ld a,(hl)
+        or $B0
+        rst $00
+        db $02
+        inc hl
+        ld a,(hl)
+        or $D0
+        rst $00
+        db $02
+        inc hl
+        ret
+
+; psg_tone: the routine at $CACA. A = the note, E = the channel's latch bits;
+; the tone from the table at $CBB1.
+psg_tone:
+        push hl
+        add a,a
+        ld c,a
+        ld b,0
+        ld hl,$CBB1
+        add hl,bc
+        ld a,(hl)
+        ld b,a
+        inc hl
+        ld c,(hl)
+        rla
+        rl c
+        rla
+        rl c
+        rla
+        rl c
+        rla
+        rl c
+        ld a,b
+        and $0F
+        or e
+        rst $00
+        db $02
+        ld a,c
+        rst $00
+        db $02
+        pop hl
+        ret
+
+; tile_up: the code from $7F23 to its RET at $7F45. Rows of 4 bytes from the VDP
+; address: the bytes at $C000, $C800 and $D000 on, and a 0, until HL reaches
+; ($DF1C) * 256. One jt_vwrite call for each of the 4 bytes of 256 rows. Returns
+; as the game's loop leaves it: HL = $C000, BC = $C800, DE = $D000, each plus the
+; rows, A = 0, Z set. Interrupts stay as they are.
+tile_up:
+        push ix
+        push iy
+        ld hl,(vdp_addr)
+        ld a,h
+        and $3F
+        ld h,a
+        ld (tu_v),hl            ; the VRAM address of the first row
+        ld a,($DF1C)
+        sub $C0
+        ld (tu_n),a             ; chunks of 256 rows
+        ld hl,$C000
+.ch:    push hl
+        ld bc,$0100             ; 1 byte a run, 256 runs
+        ld iy,4                 ; the next row's byte, 4 VRAM bytes on
+        ld ix,1
+        ld de,(tu_v)
+        xor a                   ; the source as the game sees it
+        call jt_vwrite          ; the bytes from $C000
+        ld a,h
+        add a,8
+        ld h,a
+        inc de
+        xor a
+        call jt_vwrite          ; from $C800
+        ld a,h
+        add a,8
+        ld h,a
+        inc de
+        xor a
+        call jt_vwrite          ; from $D000
+        ld hl,tu_z
+        ld ix,0
+        inc de
+        ld a,1                  ; the 0 in this page
+        call jt_vwrite
+        ld hl,(tu_v)            ; the next 256 rows: 1K of VRAM on
+        ld a,h
+        add a,4
+        and $3F
+        ld h,a
+        ld (tu_v),hl
+        pop hl
+        inc h
+        ld a,(tu_n)
+        dec a
+        ld (tu_n),a
+        jr nz,.ch
+        ld b,h                  ; HL = $C000 + rows
+        ld c,l
+        ld a,b
+        add a,8
+        ld b,a                  ; BC = $C800 + rows
+        ld d,h
+        ld e,l
+        ld a,d
+        add a,$10
+        ld d,a                  ; DE = $D000 + rows
+        pop iy
+        pop ix
+        xor a                   ; A = 0, Z set
+        ret
+tu_v:   dw 0
+tu_n:   db 0
+tu_z:   db 0
+
+; A frame wait: the routine at $C051, the V counter in $C0-$CF. Keeps AF.
+vwait:  push af
+.l:     rst $00
+        db $0A                  ; IN A,($7E)
+        cp $C0
+        jr c,.l
+        cp $D0
+        jr nc,.l
+        pop af
+        ret
+
+; The V counter at 0. Returns A = 0, Z set.
+v0wait: rst $00
+        db $0A
+        and a
+        jr nz,v0wait
+        ret
+
+; VRAM writes collect in vbuf and go out through jt_vwrite. vaddr: DE = the
+; VRAM address of the next byte (bits 14 and 15 ignored). vb: A = the next data
+; byte. vflush: writes what has collected. All keep every register but F.
+vaddr:  call vflush
+        push af
+        ld a,d
+        and $3F
+        ld (vadr+1),a
+        ld a,e
+        ld (vadr),a
+        pop af
+        ret
+
+vb:     push af
+        push hl
+        push de
+        ld hl,(vcnt)
+        ld de,vbuf
+        add hl,de
+        ld (hl),a
+        ld hl,(vcnt)
+        inc hl
+        ld (vcnt),hl
+        ld de,(vadr)
+        add hl,de               ; the VRAM address past this byte
+        bit 6,h
+        jr nz,.fl               ; $4000: write now, then go on at $0000
+        ld a,(vcnt+1)
+        cp 4                    ; 1024 bytes
+        jr c,.ok
+.fl:    call vflush
+.ok:    pop de
+        pop hl
+        pop af
+        ret
+
+vflush: push af
+        push bc
+        push de
+        push hl
+        push ix
+        push iy
+        ld hl,(vcnt)
+        ld a,h
+        or l
+        jr z,.x
+        ld de,(vadr)
+        ld c,h                  ; whole runs of 256
+        ld b,0
+        ld hl,vbuf
+        ld ix,256
+        ld iy,256
+        ld a,c
+        or a
+        jr z,.part
+        ld a,1                  ; the source in this page
+        call jt_vwrite          ; keeps BC, DE, HL, IX, IY
+        ld a,h
+        add a,c
+        ld h,a
+        ld a,d
+        add a,c
+        and $3F
+        ld d,a
+.part:  ld a,(vcnt)             ; the bytes left
+        or a
+        jr z,.adv
+        ld b,a
+        ld c,1
+        ld a,1
+        call jt_vwrite
+.adv:   ld hl,(vadr)
+        ld de,(vcnt)
+        add hl,de
+        ld a,h
+        and $3F
+        ld h,a
+        ld (vadr),hl
+        ld hl,0
+        ld (vcnt),hl
+.x:     pop iy
+        pop ix
+        pop hl
+        pop de
+        pop bc
+        pop af
+        ret
+
+spr:    ds 3
+vadr:   dw 0
+vcnt:   dw 0
+vbuf:   ds 1024
 endpage

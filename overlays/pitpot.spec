@@ -94,3 +94,13 @@ site 03174   ; OUT ($BE),A
 site 049B4   ; OUT ($7F),A
 site 049D2   ; OTIR
 
+# The game runs in its frame handler and waits there with HALT for the next
+# frame interrupt, nested. Each patched HALT waits in the runtime for the
+# game's own interrupt, as on the Master System, not for the runtime's
+# interrupts too. The HALTs at $257F, $3346, $33AA and $3425 are followed by
+# code with no byte to spare and the cart has no unused bytes for a cave:
+# they still end on the runtime's interrupts. The HALT at $0139 is the main
+# loop's idle HALT (HALT : JR $0139), which any interrupt may end.
+eihalt 02567   ; EI : HALT
+haltret 02784   ; HALT : RET
+eihalt 03203   ; EI : HALT

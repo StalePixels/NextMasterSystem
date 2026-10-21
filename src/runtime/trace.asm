@@ -25,7 +25,7 @@
 ; single output.
 
 		IFDEF TRACE_BUILD
-TR_CODE		equ $FB80		; the trace build's checks (vdpcheck.asm) end the framework code
+TR_CODE		equ $FBC0		; the trace build's checks (vdpcheck.asm) end the framework code
 		ELSE
 TR_CODE		equ $FB00		; trace code: TR_CODE-$FCFF, below the IM2 table,
 		ENDIF

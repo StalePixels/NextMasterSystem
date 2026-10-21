@@ -468,3 +468,24 @@ mapld 06409   ; loads HL with $FFFF, then stores $10 through it
 mapld 06452   ; loads HL with $FFFF, then stores $11 through it
 mapld 07CA6   ; loads HL with $FFFF, then stores $03 through it
 # not patched (data): mapst 45ECD  LD ($FFFF),A  (no evidence)
+# Frame handler screen routine at $025F. The handler at $0136 indexes the table at $018F
+# with ($C208 and $1F) and runs JP (HL) at $0142. Table entry $019F holds $025F; the entries
+# $019D ($0235) and $01A1 ($029F) are the same routine shape and are patched above.
+site 00262   ; OUT ($BF),A
+site 00266   ; OUT ($BF),A
+site 0026B   ; OUT ($BF),A
+site 0026F   ; OUT ($BF),A
+site 00284   ; OUT ($BF),A
+site 00288   ; OUT ($BF),A
+otir 00290   ; OUTI
+# Bank 1 animation routines. The frame handler entry $01AD (table $018F entry $0197) calls $63A5,
+# which ends with LD HL,$63B6; JP $00E6 (the table jump routine, with a JP instead of the
+# CALL the scanner follows). The table at $63B6 holds $63CF, $63F6, $6442 and $64CF (the
+# other entries are $63CE, a RET). $63CF and $63F6 call $64A3 and continue at $641B.
+# These routines also hold the mapld lines at 063E2, 06409 and 06452 above.
+otir 06438   ; OUTI
+otir 06479   ; OUTI
+otir 06499   ; OUTI
+otir 064C9   ; OUTI
+otir 064F5   ; OUTI
+otir 06500   ; OUTI

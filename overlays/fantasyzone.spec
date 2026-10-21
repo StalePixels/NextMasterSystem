@@ -145,3 +145,7 @@ mapst 07E70   ; LD ($FFFF),A
 site 1E3EC   ; OUT ($7F),A
 site 1E3F1   ; OUT ($7F),A
 # the other low-confidence byte patterns are data or instruction operands
+# Each EI : HALT waits in the runtime for the game's own frame interrupt, as
+# on the Master System, not for the runtime's interrupts too.
+eihalt 00A17   ; EI : HALT
+eihalt 013CC   ; EI : HALT

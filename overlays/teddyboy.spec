@@ -289,3 +289,17 @@ fill:   ld a,i
 cell:   dw 0
 buf:    ds 256
 endpage
+# The HALT at $150D waits in the runtime for the game's own frame interrupt, as
+# on the Master System, not for the runtime's interrupts too. It becomes a call
+# to a cave in the unused $FF bytes at $7BB8, where the wait and the
+# LD BC,$C049 after it run.
+label haltcave 07BB8
+asm 0150D 4    ; HALT : LD BC,$C049
+    call haltcave
+endasm
+asm 07BB8 6    ; unused $FF bytes: haltcave
+    rst $00
+    db halt_io
+    ld bc,$C049
+    ret
+endasm

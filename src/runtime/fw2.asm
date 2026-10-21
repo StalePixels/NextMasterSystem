@@ -24,7 +24,6 @@ kn_any:		db 0			; some page in kn_pages is set (kn_block, tile_flushk)
 pause_prev:	db 0
 pal_vm:		ds 4			; toppal: CRAM entries written in the last vblank phase
 cram_top:	ds 32			; toppal: CRAM as the second palettes hold it
-sat_hi:		db $3F			; sprite attribute table address high byte
 cop_dirty:	db 1			; copper list must be rebuilt
 nt_dirty:	db 0			; name table base changed: maps rebuilt
 h_x:		dw 0			; tilemap X offset for the current H scroll
@@ -169,69 +168,8 @@ vb_end:		ld hl,(fw_frames)
 ; first pages in cur_mmu. fw_start then maps them and starts the game.
 ; ----------------------------------------------------------------------
 fw2_start:
-		call clip_update
-		; framework state
-		ld hl,vdp_regs
-		ld b,16
-fw2_start__zr:		ld (hl),0
-		inc hl
-		djnz fw2_start__zr
-		ld a,192
-		ld (pic_end),a
-		ld a,$FF
-		ld (vdp_regs+10),a
-		ld (cop_sw),a
-		ld (cop_v),a
-		ld (cop_mode),a
-		ld hl,$3800
-		ld (nt_base),hl
-		ld a,$3F
-		ld (sat_hi),a
-		call region_update
-		ld hl,dirty_pages
-		ld b,64
-fw2_start__zd:		ld (hl),0
-		inc l
-		djnz fw2_start__zd
-		xor a
-		ld (kn_any),a
-		ld a,(fw_flags)
-		and 4
-		jr z,fw2_start__nk
-		nextreg $56,TKC_PAGE	; tilecache: no tiles from cart ROM noted (fw_start
-		ld hl,KN_PAGES		; puts slot 6 back)
-		ld b,64
-fw2_start__zk:		ld (hl),0
-		inc l
-		djnz fw2_start__zk
-fw2_start__nk:	xor a
-		ld (tiles_dirty),a
-		ld (vbl_done),a
-		ld (vbl_poll),a
-		ld (quit_req),a
-		ld (pause_req),a
-		ld (vdp_status),a
-		ld (vdp_latch),a
-		ld (h_sw),a
-		ld (m224),a
-		ld (hl_on),a		; no hook table from an earlier game
-		inc a
-		ld (sat_dirty),a
-		ld (cop_dirty),a
-		ld hl,0
-		ld (fw_frames),hl
-		dec hl
-		ld (tr_free),hl
-		ld a,$FF
-		ld (bd_cur),a
-		nextreg $1C,%00000100	; ULA clip: SMS column 0 only
-		nextreg $1A,0
-		nextreg $1A,PIC_X+7
-		nextreg $1A,0
-		nextreg $1A,191
-		ld hl,286
-		ld (h_x),hl
-		nextreg $50,FW3_PAGE	; fw2_switches is there, fw2_init clears tm_mask there
+		nextreg $50,FW3_PAGE	; fw2_state and fw2_switches are there, fw2_init
+		call fw2_state		; clears tm_mask there
 		call fw2_switches
 		call fw2_init
 		call fw2_init3
@@ -281,6 +219,7 @@ fw2_start__map:		ld a,b
 		ld ($DFFC),hl
 		ld hl,$0201
 		ld ($DFFE),hl
+		call fallback2		; the fallback for the start state (cram all 0)
 		ld a,8
 		ld (fw_status),a
 		ret
@@ -805,7 +744,7 @@ vdp_reg_w:
 		dec a
 		jp z,fallback2		; 7
 		dec a
-r8_hk:		jp z,hscroll_set	; 8 (hsplit: hs_reg8 in fw.asm, fw2_switches)
+r8_hk:		jp z,hscroll_set	; 8 (hsplit: hs_reg8, fw2_switches)
 		dec a
 		jp z,vdp_reg_w__r9
 		dec a
@@ -972,7 +911,7 @@ hscroll_set__nodir:
 		; With K <= 64 no switch is needed; the list has one all the same,
 		; at column 39 (SMS x 312, past the picture's right edge), so a
 		; scroll across K = 64 changes only the first byte of each line's
-		; WAIT (cop_switches, fw3). cop_224 has no switch then.
+		; WAIT (cop_switches and cop_224, fw3).
 		ld a,(vdp_regs+8)
 		neg
 		cp 65
@@ -993,6 +932,16 @@ hscroll_set__sw:				ld a,b
 		ret z
 		ld a,1
 		ld (cop_dirty),a
+		ret
+; Register 8 = E with the hsplit switch (r8_hk above): hscroll_set, then
+; sg_write (fw3, mapped at $0000 for it; interrupts are off in a handler), so
+; that a write that moves the tilemap in the picture also moves the map
+; switch column of the lines still to come.
+hs_reg8:	call hscroll_set
+		nextreg $50,FW3_PAGE
+		call sg_write
+		ld a,(cur_mmu+0)
+		nextreg $50,a
 		ret
 
 ; The tilemap always treats one 4-bit pixel value as transparent (NextReg

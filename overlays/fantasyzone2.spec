@@ -63,7 +63,6 @@ site 00791   ; OUT ($BE),A
 site 007D2   ; OUT ($BE),A
 site 00852   ; OUT ($BE),A
 site 0085B   ; OUT ($BE),A
-site 01010   ; IN A,($C1)
 site 01BB0   ; IN A,($BE)
 site 021EE   ; IN A,($BE)
 site 021FA   ; OUT ($BE),A
@@ -124,6 +123,63 @@ site 1CC5A   ; OUT (C),D
 site 1CC60   ; OUT ($F1),A
 site 1CC6C   ; OUT ($7F),A
 site 1CC70   ; OUT ($7F),A
+# Sound driver (bank 7, $8000-$8D75). The update routine $817F (called from $02C1) runs CALL $829E at $8188, which
+# picks a start handler from the table at $8354 (FM) or $843E (PSG only) with JP (HL) at $82CA; the handlers return to
+# $818B, where the track loops call $8602 and $8700. The command byte of a track picks one of 16 routines from the
+# table at $8A6F (JP (HL) at $8A6A).
+# Track update, FM on ($8602, called from $81B2 and $81D7):
+site 1C627   ; OUT ($F0),A
+site 1C62D   ; OUT ($F1),A
+# Track update, other tracks ($8700, called from $81A2 and $81C7):
+site 1C6F6   ; OUT ($F0),A
+site 1C6FD   ; OUT ($F1),A
+# Command $FF routine at $8A8F (table $8A6F, last entry): writes FM register pairs with OUTI:
+site 1CA96   ; OUTI
+site 1CA9D   ; OUTI
+# PSG silence: the command routine at $8B51 (table $8A6F) reaches $8B82 with JR Z at $8B66:
+site 1CB89   ; OUT ($7F),A
+site 1CB8D   ; OUT ($7F),A
+# FM voice write routine at $8D29 (entered with JP NZ at $8851 in the track update):
+site 1CD32   ; OUT ($F0),A
+site 1CD39   ; OUT ($F1),A
+site 1CD45   ; OUT ($F0),A
+site 1CD5C   ; OUT ($F1),A
+site 1CD66   ; OUT ($F0),A
+site 1CD70   ; OUT ($F1),A
+# Palette cycling routines of the table at $211F (entries $041F, $0443, $0465; $041F is run in attract mode, its
+# OUT ($BE) at $0440 is above). The routine at $0465 writes two colours:
+site 00483   ; OUT ($BE),A
+site 0049A   ; OUT ($BE),A
+# Object handlers (bank 1). The dispatcher at $0ABB and $0BE3 reads handler addresses from the table at ($C018) plus
+# twice the object type (JP (HL) at $0AD2 and $0BFA); the tables are at $0C89 and, for each stage, at the bases listed
+# in the stage table at $1F7E (stored to ($C01C) at $1E6E).
+# Table entry $0CEB ($4EB4); the routines reached from it jump to $53E2 (JP at $4F37) and $540D (JP at $4F62), whose
+# CALL $544D at $5402 and $541E runs the name table copy loop:
+site 0545D   ; OUT ($BE),A
+site 05463   ; OUT ($BE),A
+# Table entries $0D53 and $0D55 ($5687, $577A), VRAM data writes after AND (HL):
+site 05875   ; OUT ($BE),A
+site 0587A   ; OUT ($BE),A
+site 0587F   ; OUT ($BE),A
+site 05884   ; OUT ($BE),A
+# Table entry $0DB3 ($5892), VRAM data writes after RST $28:
+site 05960   ; OUT ($BE),A
+site 05965   ; OUT ($BE),A
+# Table entry $0E1B ($687B), VRAM data writes after RST $28:
+site 06913   ; OUT ($BE),A
+site 0691A   ; OUT ($BE),A
+# Table entry $0E1D ($6972), VRAM data writes after the switch to bank 4 at $6A37:
+site 06A43   ; OUT ($BE),A
+# Table entry $0FC7 ($7C02):
+site 07C3C   ; OUT ($BE),A
+# Table entry $0FD1 ($7C40):
+site 07CEF   ; OUT ($BE),A
+site 07CFE   ; OUT ($BE),A
+# Table entry $0FD7 ($7E5C): the handler stores the line interrupt routine $7E46 to ($C033), which the interrupt
+# handler runs with JP (HL) at $0043:
+site 07E46   ; IN A,($7E)
+site 07E52   ; OUT ($BF),A
+site 07E56   ; OUT ($BF),A
 # not patched (data, read as code through a table): site 1F3BE
 mapst 00030   ; LD ($FFFF),A
 mapst 002C7   ; LD ($FFFF),A

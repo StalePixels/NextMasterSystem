@@ -92,6 +92,11 @@ fw4_start__pal:		nextreg $44,0
 		call pal_l2
 		ld a,%01010010
 		call pal_l2
+		ld hl,cram		; the CRAM copy as the palettes now are: all 0
+		ld b,32			; (page code that reads cram)
+fw4_start__cz:		ld (hl),0
+		inc hl
+		djnz fw4_start__cz
 		call spr_hide
 		; clear tile definitions, maps, VRAM shadow, SMS RAM
 		ld a,TILE_PAGE
@@ -137,6 +142,7 @@ fw4_start__cr:		push af
 		pop af
 		inc a
 		djnz fw4_start__cr
+		call wl_setup
 		ld a,(fw_flags)		; tilecache: the converted cart
 		and 4
 		call nz,tc_build
@@ -532,8 +538,11 @@ tone_period:
 		call tone_ptr
 		ld a,(hl)
 		inc hl
-		ld b,(hl)		; N high
-		ld d,a
+		ld h,(hl)
+		ld l,a
+; HL = SN period N: DE = AY period, N * 250 / 256 rounded. Uses A, C.
+n_period:
+		ld d,l
 		ld e,250
 		mul d,e
 		ld a,e
@@ -541,7 +550,7 @@ tone_period:
 		ld a,d
 		adc a,0
 		ld c,a			; (N low * 250 + 128) >> 8
-		ld d,b
+		ld d,h
 		ld e,250
 		mul d,e			; N high * 250
 		ld a,e
@@ -585,28 +594,25 @@ noise_upd:
 		and 3
 		cp 3
 		jr z,noise_upd__t2
-		; rates 0-2: the same as tone periods 16, 32, 64
+		; rates 0-2: the shift rate of tone periods 16, 32, 64
 		ld b,a
 		ld hl,16
 		inc b
 noise_upd__sh:		dec b
-		jr z,noise_upd__got
+		jr z,noise_upd__have
 		add hl,hl
 		jr noise_upd__sh
-noise_upd__got:		ex de,hl
-		ld a,e			; N
-		ld d,a
-		ld e,250
-		mul d,e
-		ld e,d
-		ld d,0			; AY-equivalent period P
-		jr noise_upd__have
-noise_upd__t2:		ld a,2
-		call tone_period	; DE = P of tone 2
-noise_upd__have:		ld a,(psg_noise)
+noise_upd__t2:		ld a,2			; rate 3: tone 2's period
+		call tone_ptr
+		ld a,(hl)
+		inc hl
+		ld h,(hl)
+		ld l,a
+noise_upd__have:		ld a,(psg_noise)	; HL = N: the LFSR shifts at tone period N's rate
 		and 4
 		jr z,noise_upd__periodic
-		; white: AY noise period = P, 1..31
+		; white: AY noise period = P, the AY period of N, 1..31
+		call n_period
 		ld a,d
 		or a
 		ld a,31
@@ -624,12 +630,26 @@ noise_upd__np:		ld d,a
 		call ay_write
 		ld d,%00110111		; noise A on, tones off
 		jr noise_upd__mix
-noise_upd__periodic:	; tone at 1/16 of the shift rate: AY period 16 * P, at most 4095
-		ex de,hl
+noise_upd__periodic:	; tone at 1/16 of the shift rate: AY period 16 * N * 250 / 256
+		ld b,h			; = 16N - 3N/8, at most 4095
+		ld c,l
+		add hl,hl
+		add hl,bc
+		srl h
+		rr l
+		srl h
+		rr l
+		srl h
+		rr l
+		ex de,hl		; DE = 3N/8
+		ld h,b
+		ld l,c
 		add hl,hl
 		add hl,hl
 		add hl,hl
-		add hl,hl
+		add hl,hl		; 16N (N < 1024)
+		or a
+		sbc hl,de
 		ld a,h
 		cp $10
 		jr c,noise_upd__pok
@@ -820,9 +840,578 @@ ay_write__same:		out (c),e
 		out (c),d
 		ret
 
+; The segment list of the rastseg switch in 224-line mode, called by
+; cop_seg in fw3 with this page at $2000 in place of part 2 (see cop_seg
+; there for the list).
+cop_seg4:	ld a,(rx_tabok)
+		or a
+		call z,rx_mktab
+		ld a,(cs_mode)
+		sub 4
+		ld c,a			; C not 0: whole
+		ld hl,hl_tab
+		ld de,SG2_L		; E = segment
+		ld b,0			; B = the line before
+cop_seg__rd:	ld a,(hl)
+		inc l
+		inc e
+		dec e
+		jr z,cop_seg__r0
+		cp b
+		jr c,cop_seg__rx
+		jr z,cop_seg__rx
+		cp 224
+		jr nc,cop_seg__rx
+		jr cop_seg__r2
+cop_seg__r0:	xor a			; the first segment: line 0
+cop_seg__r2:	ld b,a
+		ex de,hl
+		cp (hl)
+		jr z,cop_seg__r3
+		ld (hl),a		; SG2_L: another line than in the list
+		ld c,1
+cop_seg__r3:	ex de,hl
+		ld a,(hl)
+		inc l
+		set 5,e
+		ld (de),a		; SG2_H
+		res 5,e
+		inc e
+		ld a,e
+		cp SG2_MAX
+		jr c,cop_seg__rd
+cop_seg__rx:	ld a,(cs_n)
+		cp e
+		jr z,cop_seg__nn
+		ld c,1
+cop_seg__nn:	ld a,e
+		ld (cs_n),a
+		ld a,c
+		ld (cs_full),a
+		; the head: X of line 16's segment, Y (also straight into $31), and
+		; for a whole list the map and the ULA
+		ld de,SG2_L
+cop_seg__f:	ld a,e
+		inc a
+		ld hl,cs_n
+		cp (hl)
+		jr nc,cop_seg__f1
+		inc e
+		ld a,(de)
+		cp 17
+		jr c,cop_seg__f
+		dec e
+cop_seg__f1:	ld a,e
+		call cs_seg
+		nextreg $61,0
+		nextreg $62,%11000000
+		nextreg $60,$2F
+		ld a,(cs_xh)
+		nextreg $60,a
+		nextreg $60,$30
+		ld a,(cs_xl)
+		nextreg $60,a
+		nextreg $60,$31
+		ld a,(vdp_regs+9)
+		add a,240
+		nextreg $60,a
+		nextreg $31,a
+		ld a,(cs_full)
+		or a
+		jr z,cop_seg__h
+		nextreg $60,$6E
+		nextreg $60,NR6E_M0
+		nextreg $60,$68
+		nextreg $60,0
+cop_seg__h:	ld hl,10
+		ld (cs_idx),hl
+		ld b,16			; B = SMS line: 16-223 are Next lines 0-207
+cop_seg__l1:	ld a,(cs_nx)
+		cp b
+		call z,cs_next
+		ld a,b
+		cp 208
+		jr nz,cop_seg__l1b
+		ld de,192
+		ld a,$80
+		call cs_u		; ULA off from Next line 192
+cop_seg__l1b:	ld c,224		; the run ends at the next segment, line 208 or 224
+		ld a,b
+		cp 208
+		jr nc,cop_seg__l1c
+		ld c,208
+cop_seg__l1c:	ld a,(cs_nx)
+		cp c
+		jr nc,cop_seg__l1d
+		ld c,a
+cop_seg__l1d:	ld a,c
+		sub b
+		ld c,a			; C = lines
+		ld a,b
+		sub 16
+		ld e,a
+		ld d,0
+		push bc
+		call cs_run
+		pop bc
+		ld a,b
+		add a,c
+		ld b,a
+		cp 224
+		jr nz,cop_seg__l1
+		ld de,208
+		xor a
+		call cs_u		; ULA on from Next line 208
+		xor a
+		call cs_seg
+		call cs_xmv		; X for the lines above line 0
+		call cur_line
+		ld hl,pic_end
+		cp (hl)
+		jr c,cop_seg__nd	; the copper has not passed that MOVE yet
+		ld a,(cs_xh)
+		nextreg $2F,a
+		ld a,(cs_xl)
+		nextreg $30,a
+cop_seg__nd:	ld de,(cop_top)
+		ld a,$80
+		call cs_u		; ULA off from cop_top
+		ld hl,(cop_top)		; cs_s256: the first of SMS lines 0-15 on Next line 256 or later
+		ld a,h
+		or a
+		ld a,0
+		jr nz,cop_seg__s
+		sub l
+cop_seg__s:	ld (cs_s256),a
+		ld b,0			; SMS lines 0-15 are Next lines cop_top on
+cop_seg__l2:	ld a,b
+		or a
+		jr z,cop_seg__l2a
+		ld a,(cs_nx)
+		cp b
+		call z,cs_next
+cop_seg__l2a:	ld c,16			; the run ends at the next segment, line 16, or cs_s256
+		ld a,(cs_s256)
+		cp b
+		jr c,cop_seg__l2b
+		jr z,cop_seg__l2b
+		cp c
+		jr nc,cop_seg__l2b
+		ld c,a
+cop_seg__l2b:	ld a,(cs_nx)
+		cp c
+		jr nc,cop_seg__l2c
+		ld c,a
+cop_seg__l2c:	ld a,c
+		sub b
+		ld c,a			; C = lines
+		ld hl,(cop_top)
+		ld a,b
+		add hl,a
+		ex de,hl		; DE = its first Next line
+		push bc
+		call cs_run
+		pop bc
+		ld a,b
+		add a,c
+		ld b,a
+		cp 16
+		jr nz,cop_seg__l2
+		ld a,(cs_full)
+		or a
+		jr z,cop_seg__e
+		nextreg $60,$FF		; HALT
+		nextreg $60,$FF
+cop_seg__e:	ld hl,SG2_H		; the H now in the list
+		ld de,SG2_P
+		ld bc,SG2_MAX
+		ldir
+		ret
+; the next segment and its X MOVEs. Keeps B.
+cs_next:	ld a,(cs_k)
+		inc a
+		call cs_seg
+; MOVE $2F,X hi; MOVE $30,X lo of the segment
+cs_xmv:		ld a,(cs_full)
+		or a
+		jr z,cs_xmv__i
+		nextreg $60,$2F
+		ld a,(cs_xh)
+		nextreg $60,a
+		nextreg $60,$30
+		ld a,(cs_xl)
+		nextreg $60,a
+		jr cs_adv4
+cs_xmv__i:	ld a,(cs_chg)
+		or a
+		jr z,cs_adv4
+		ld hl,(cs_idx)
+		inc hl
+		call cs_at
+		ld a,(cs_xh)
+		nextreg $60,a
+		inc hl
+		inc hl
+		call cs_at
+		ld a,(cs_xl)
+		nextreg $60,a
+cs_adv4:	ld a,4
+cs_adv:		ld hl,(cs_idx)
+		add hl,a
+		ld (cs_idx),hl
+		ret
+; DE = Next line, A = the ULA's NextReg $68 value: WAIT line,0; MOVE $68,A
+cs_u:		ld c,a
+		ld a,(cs_full)
+		or a
+		jr z,cs_adv4
+		ld a,$80
+		or d
+		nextreg $60,a
+		ld a,e
+		nextreg $60,a
+		nextreg $60,$68
+		ld a,c
+		nextreg $60,a
+		jr cs_adv4
+; C lines from Next line DE, all of the segment and on the same side of
+; line 256: their switch pairs, whole, or for a segment whose H changed the
+; first byte of each WAIT (cop_224__run in fw3), or none
+cs_run:		ld a,(cs_full)
+		or a
+		jr z,cs_run__i
+cs_run__f:	call cs_pair
+		inc de
+		dec c
+		jr nz,cs_run__f
+		ret
+cs_run__i:	ld a,(cs_chg)
+		or a
+		jr nz,cs_run__w
+		ld e,c			; the list stands: past its pairs
+		ld d,8
+		mul d,e
+		ld hl,(cs_idx)
+		add hl,de
+		ld (cs_idx),hl
+		ret
+cs_run__w:	ld a,(cs_col)
+		or d
+		ld d,a
+		ld b,c
+		ld hl,(cs_idx)
+		call cop_224__run
+		ld (cs_idx),hl
+		ret
+; DE = Next line: its switch pair with the segment's column. Keeps B, C, DE.
+cs_pair:	ld a,(cs_full)
+		or a
+		jr z,cs_pair__i
+		ld a,(cs_col)
+		or d
+		nextreg $60,a		; WAIT line,column
+		ld a,e
+		nextreg $60,a
+		nextreg $60,$6E
+		nextreg $60,NR6E_A8
+		ld a,$80 + (END_H << 1)
+		or d
+		nextreg $60,a		; WAIT line,40
+		ld a,e
+		nextreg $60,a
+		nextreg $60,$6E
+		nextreg $60,NR6E_M0
+		jr cs_adv8
+cs_pair__i:	ld a,(cs_chg)
+		or a
+		jr z,cs_adv8
+		ld hl,(cs_idx)
+		call cs_at
+		ld a,(cs_col)
+		or d
+		nextreg $60,a
+cs_adv8:	ld a,8
+		jp cs_adv
+; HL = list byte: the copper write index (the copper keeps running)
+cs_at:		ld a,l
+		nextreg $61,a
+		ld a,h
+		or %11000000
+		nextreg $62,a
+		ret
+; A = segment: cs_k, cs_nx, cs_chg, cs_col, cs_xh, cs_xl (rx_tab)
+cs_seg:		ld (cs_k),a
+		ld e,a
+		ld d,255&(SG2_L>>8)
+		inc a
+		ld hl,cs_n
+		cp (hl)
+		ld a,224
+		jr nc,cs_seg__l
+		inc e
+		ld a,(de)
+		dec e
+cs_seg__l:	ld (cs_nx),a
+		set 5,e
+		ld a,(de)		; H
+		ld c,a
+		res 5,e
+		set 6,e
+		ld a,(de)		; its H in the list
+		sub c
+		ld (cs_chg),a
+		ld l,c
+		ld h,255&(rx_tab>>8)
+		ld a,(hl)
+		or a
+		jr nz,cs_seg__c
+		ld a,39
+cs_seg__c:	add a,a
+		or $80
+		ld (cs_col),a
+		inc h
+		ld a,(hl)
+		ld (cs_xh),a
+		inc h
+		ld a,(hl)
+		ld (cs_xl),a
+		ret
+
+; collline, from a status read (cl_rd, fw.asm, through fw4_call): in the
+; picture, from the collision line on (cl_line, worked out by cl_scan in
+; fw3), with the display on, the first read of each picture gets bit 5.
+; cl_vbl (fw3) arms it again once a frame: 1, or 2 when the once-a-frame
+; work ran in the picture (workline). With 2 the reads in the rest of that
+; picture do not get the bit, and the sprite table that cl_scan read may be
+; older than the next picture's: a read below the picture (the frame
+; handler's) makes it 3, and the first read in the next picture works out
+; cl_line again from the sprite table as the frame handler left it
+; (cl_fresh), then goes on as with 1.
+cl_read:	ld a,(cl_arm)
+		or a
+		ret z
+		call cur_line
+		ld hl,pic_end
+		cp (hl)
+		jr nc,cl_read__b	; not in the picture
+		ld a,(cl_arm)
+		cp 2
+		ret z			; armed in this picture: from the next one on
+		cp 3
+		call z,cl_fresh
+		call cur_line
+		ld hl,cl_line
+		cp (hl)
+		ret c			; above the collision line
+		ld a,(vdp_regs+1)
+		and $40
+		ret z			; display off: the SMS draws no sprites
+		xor a
+		ld (cl_arm),a
+		ld hl,vdp_status
+		set 5,(hl)
+		ret
+cl_read__b:	ld hl,cl_arm		; below the picture: 2 becomes 3
+		ld a,(hl)
+		cp 2
+		ret nz
+		inc (hl)
+		ret
+; cl_scan (fw3 at $0000) with the VRAM copy at $4000, as in the once-a-frame
+; work; the game's pages back after it. Keeps BC and DE. About 5,000 cycles.
+cl_fresh:	ld a,1
+		ld (cl_arm),a
+		nextreg $50,FW3_PAGE
+		nextreg $52,SHADOW_PAGE
+		nextreg $53,SHADOW_PAGE+1
+		push bc
+		push de
+		call cl_scan
+		pop de
+		pop bc
+		ld a,(cur_mmu+0)
+		nextreg $50,a
+		ld a,(cur_mmu+2)
+		nextreg $52,a
+		ld a,(cur_mmu+3)
+		nextreg $53,a
+		ret
+
+; ----------------------------------------------------------------------
+; The work line (CONF workline=N). The once-a-frame work runs from a line
+; interrupt at SMS line N of the picture, not from the ULA interrupt below
+; the picture: a game whose frame handler must reach a line in the next
+; picture on time (Fantastic Dizzy's status bar split) then has the time
+; from the frame event to that line for itself. The ULA interrupt sets the
+; line interrupt for line N (wl_ula4); the work line goes through
+; fw_ula_irq, which runs the work (wl_line, wl_line4). The frame event and
+; the SMS line events keep the line interrupt; with a line event set at the
+; ULA interrupt the work runs there, as without the switch. A work line that
+; did not come by the next ULA interrupt (the game kept interrupts off past
+; the frame event, or set a line event) has the work run there. V counter
+; reads below the picture do not run the work (rv_hk, vf_hk), and the ULA
+; interrupt does not arm vbl_chk.
+; ----------------------------------------------------------------------
+wl_n		equ nr_keep+43		; N, 0 = off: the loader writes it after its
+					; NextReg list (struct nm_launch: wline after nr)
+wl_pend:	db 0			; 1: the line interrupt is set for the work line;
+					; 2: the work line came, fw_ula_irq runs the work
+
+; Game start (fw4_start): the four hooks on with the switch, off without
+; it, so that a game loaded after another one starts clean.
+wl_setup:	xor a
+		ld (wl_pend),a
+		ld hl,cur_line
+		ld de,hl_on
+		ld bc,$3A20		; B = LD A,(nn), C = JR NZ,e
+		ld a,(wl_n)
+		or a
+		jr z,wl_setup__w
+		ld hl,wl_ula
+		ld de,wl_line
+		ld bc,$CD18		; CALL nn, JR e
+wl_setup__w:	ld (ula_hk+1),hl
+		ld a,b
+		ld (fl_hk),a
+		ld (fl_hk+1),de
+		ld a,c
+		ld (rv_hk),a
+		ld (vf_hk),a
+		ret
+
+; Each line interrupt (fl_hk, through wl_line). NZ: the work line (the line
+; interrupt was set for it, the beam is in the picture and no SMS line event
+; is set), and wl_pend 2 for wl_ula4. Else Z and A = hl_on.
+wl_line4:	ld a,(wl_pend)
+		dec a
+		jr nz,wl_line4__n
+		call cur_line
+		ld hl,pic_end
+		cp (hl)
+		jr nc,wl_line4__n	; below the picture: the frame event
+		ld a,(ev_next)
+		cp 192
+		jr nz,wl_line4__n	; an SMS line event
+		ld a,2
+		ld (wl_pend),a
+		or a
+		ret
+wl_line4__n:	ld a,(hl_on)
+		cp a
+		ret
+
+; fw_ula_irq (ula_hk, through wl_ula), at the ULA interrupt and at the work
+; line. vbl_poll 0: the work runs now; 1: it waits for the work line. Returns
+; A = 255, so that fw_ula_irq does not arm vbl_chk. Uses B, C, HL.
+wl_ula4:	ld a,(wl_pend)
+		or a
+		jr z,wl_ula4__arm
+		xor a			; the work line came (2), or did not come since the
+		ld (wl_pend),a		; last ULA interrupt (1): the work now, and the
+		ld a,(ev_next)		; next event back in the line interrupt
+		call ev_program
+		jr wl_ula4__now
+wl_ula4__arm:	ld a,(ev_next)
+		cp 192
+		jr nz,wl_ula4__now	; a line event is set: the work now
+		ld a,(pic_end)
+		sub 192
+		ld b,a			; 16 in 224-line mode
+		ld a,(wl_n)
+		sub b
+		jr nc,wl_ula4__t
+		xor a			; N in the 16 lines above line 0: Next line 0
+wl_ula4__t:	ld c,a			; C = the Next line of SMS line N
+		call cur_line
+		ld hl,pic_end
+		cp (hl)
+		jr nc,wl_ula4__set	; below the picture
+		cp c
+		jr nc,wl_ula4__now	; held into the picture past the line
+wl_ula4__set:	ld a,c
+		nextreg $23,a
+		ld a,1
+		ld (wl_pend),a
+		jr wl_ula4__x
+wl_ula4__now:	xor a
+wl_ula4__x:	ld (vbl_poll),a
+		ld a,255
+		ret
+
 		IFDEF TRACE_BUILD
 		include "vdpcheck4.asm"
 		ENDIF
+
+; From ed_dispatch (fw.asm, through fw4_call), A = an inline code it does not know. $76 is a
+; HALT, $FB an EI then a HALT, $C9 a HALT then a RET (ABI 9); any other code
+; stops the game. fw_exit then returns to hw_loop (fw.asm), which waits for
+; the game's own interrupt, or with the game's interrupts off to hw_dead.
+; The return address the wait ends with is on the game's stack: for $76
+; and $FB the byte after the site, in a word below the RST's slot (the
+; trap's game AF and HL move down one word); for $C9 the slot is the one
+; fw_exit takes, so the wait returns to the game's own caller.
+op_halt:	cp $C9
+		jr z,op_halt__arm
+		cp $76
+		jr z,op_halt__site
+		cp $FB
+		jp nz,fw_fatal
+		ld (exit_ei),a		; EI then HALT: the game's interrupts on
+op_halt__site:	ld hl,(fw_sp)
+		ld e,(hl)
+		inc hl
+		ld d,(hl)		; DE = game AF
+		inc hl
+		ld c,(hl)
+		inc hl
+		ld b,(hl)		; BC = game HL, from the RST's slot
+		ld a,(fw_ret+1)
+		ld (hl),a
+		dec hl
+		ld a,(fw_ret)
+		ld (hl),a		; the slot = the byte after the site
+		dec hl
+		ld (hl),b
+		dec hl
+		ld (hl),c
+		dec hl
+		ld (hl),d
+		dec hl
+		ld (hl),e
+		ld (fw_sp),hl
+op_halt__arm:	ld a,(exit_ei)
+		or a
+		ld hl,hw_dead
+		jr z,op_halt__go	; interrupts off: NOP in exit_ei
+		ld hl,(irq_t1+1)
+		ld de,hw_irq
+		or a
+		sbc hl,de
+		jr z,op_halt__on	; already waiting
+		add hl,de
+		ld (hw_irq_j+1),hl
+		ex de,hl
+		ld (irq_t1+1),hl
+		ld (irq_t2+1),hl
+		ld hl,frm_run__no	; no event held while the game waits
+		ld (frm_t1+1),hl
+		ld (frm_t2+1),hl
+op_halt__on:	xor a			; jr hw_wait
+		ld (hw_jr+1),a
+		ld hl,hw_loop
+op_halt__go:	ld (fw_ret),hl
+		ret
+; From hw_irq (fw.asm, through fw4_call): the game's interrupt has come, so
+; the wait ends, and irq_t1, irq_t2, frm_t1 and frm_t2 get their targets back.
+hw_hit:		ld a,hw_done-hw_wait
+		ld (hw_jr+1),a
+		ld hl,(hw_irq_j+1)
+		ld (irq_t1+1),hl
+		ld (irq_t2+1),hl
+		ld hl,frm_run
+		ld (frm_t1+1),hl
+		ld (frm_t2+1),hl
+		ret
 
 fw4_end:
 ; assert fw4_end <= $4000 (an overflow is an assembler error in runtime.asm)

@@ -192,7 +192,7 @@ L_HOOK		equ 13
 L_HOOK2		equ 15
 L_FLAGS		equ 17
 L_NR		equ 18
-L_NR_LEN	equ 43
+L_NR_LEN	equ 44			; nr[43], then wline (wl_n in the runtime's fw4)
 
 _nm_launch:
 		di

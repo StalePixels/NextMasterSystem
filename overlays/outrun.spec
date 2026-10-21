@@ -34,6 +34,11 @@ site 0027D   ; OUT ($BF),A
 site 0028B   ; IN A,($7E)
 site 00293   ; OUT ($BF),A
 site 00297   ; OUT ($BF),A
+# Frame-interrupt handler, entry 14 of the table at $01D0 (the interrupt code at $01B4 reads it
+# with the byte offset $1C that $1E15 passes to $0056, the game mode $13 routine). It sets the
+# horizontal scroll (VDP register 8) to 0.
+site 002C6   ; OUT ($BF),A
+site 002CA   ; OUT ($BF),A
 site 002EC   ; OUT ($BF),A
 site 002F0   ; OUT ($BF),A
 site 00346   ; OUT ($BF),A
@@ -533,8 +538,6 @@ mapld 05104   # loads HL with $FFFF, then stores $05 through it
 # CHECK bank_unresolved at 05F64 ($5F64 bank 1): JP P,$A802 $A802
 # CHECK bank_unresolved at 05FC4 ($5FC4 bank 1): JP P,$A803 $A803
 # CHECK bank_unresolved at 06086 ($6086 bank 1): JP P,$A280 $A280
-# CHECK low: site 002C6  OUT ($BF),A  (vdp_control)
-# CHECK low: site 002CA  OUT ($BF),A  (vdp_control)
 site 00A3E   ; OUT ($BE),A
 # CHECK low: site 01E51  OUT ($BE),A  (vdp_data)
 # CHECK low: site 1B080  IN L,(C)  (port in C)
@@ -1052,3 +1055,7 @@ mapld 01E62   ; loads HL with $FFFF, then stores $0F through it
 mapld 01E8A   ; loads HL with $FFFF, then stores $0D through it
 mapld 04393   ; loads HL with $FFFF, then stores $0C through it
 # not patched (data): mapst 302AF  LD ($FFFE),A  (no evidence)
+# Game mode routine $1E29 (entry 19 of the 20-word mode table that the RST $10 call at $0154 reads; the
+# mapper loads at $1E54, $1E62 and $1E8A in the same routine are patched above). It sets the VRAM address
+# to $3F00 with RST $08 and writes $D0 there: the Y of the first sprite, which ends the sprite list.
+site 01E51   ; OUT ($BE),A

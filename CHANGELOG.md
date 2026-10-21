@@ -4,11 +4,16 @@
 
 - Added compatibility with Asterix.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
+- Added compatibility with Fantastic Dizzy.
+- Added compatibility with Super Monaco GP.
 
 - Improved compatibility with Alien Syndrome.
 - Improved compatibility with Bubble Bobble.
 - Improved compatibility with Choplifter.
 - Improved compatibility with Fantasy Zone II.
+- Improved compatibility with Micro Machines.
+- Improved compatibility with OutRun.
+- Improved compatibility with Phantasy Star.
 - Improved compatibility with R-Type.
 - Improved compatibility with Space Harrier.
 

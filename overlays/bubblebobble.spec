@@ -1102,3 +1102,201 @@ mapst 1F0A1   ; LD ($FFFE),A
 mapst 1F0B2   ; LD ($FFFE),A
 mapst 1F79E   ; LD ($FFFE),A
 mapst 1F7AF   ; LD ($FFFE),A
+# Spec gaps judged from the scanner's list. Each group below is code: a static path leads to it from an
+# instruction the reference logs ran in bank 0 (a mapper store or a bank 0 task). The paths use five
+# things the scanner does not follow by itself:
+#  - the state dispatch: JP (HL) at $304F reads a word table at $312B indexed by $DBBB, entries 1 to
+#    73 are bank 1 routines (entry 0 is $003F);
+#  - the task table at $03E4: CALL $0041 with a task number in A starts the task at that entry
+#    ($15EE, $1F2F, $23B6, $240D, $3A0E, $4573);
+#  - the text routines $0003, $0006, $0015, $00B7 and $0526, which move the return address past a
+#    zero-terminated string, so the code after the string is the next instruction;
+#  - handler addresses stored with LD HL,nn; LD ($DBCD),HL;
+#  - constant bank stores ($FFFE, $FFFF) just before a CALL into a banked slot.
+# Bank 0: logged $1799 LD ($FFFF),A, then ... $1835 JR NC,$183B > $183E JR C,$1842 > $1854 CALL NZ,$186C:
+site 01886   ; OUT ($BE),A
+site 0189F   ; OUT ($BE),A
+# Bank 0: logged $1FA4 LD ($FFFF),A, then ... $3503 CALL $3513 > $351D JP Z,$36E8 > $36F9 JP Z,$371E:
+site 03768   ; OUT ($BF),A
+site 0376F   ; OUT ($BF),A
+site 03774   ; OUT ($BE),A
+# Bank 0: logged $220A LD ($FFFF),A, then ... $2314 CALL $3C6B > $3C75 JP NC,$3D11 > $3D1A JP $3D2A:
+site 03D3C   ; OUT ($BF),A
+site 03D43   ; OUT ($BF),A
+site 03D4D   ; OUT ($BE),A
+site 03D53   ; OUT ($BE),A
+site 03D59   ; OUT ($BE),A
+site 03D62   ; OUT ($BE),A
+# Bank 0: logged $220A LD ($FFFF),A, then ... $3C75 JP NC,$3D11 > $3D1A JP $3D2A > $3D72 JR NC,$3D7A:
+site 03D7B   ; OUT ($BE),A
+site 03D81   ; OUT ($BE),A
+site 03D87   ; OUT ($BE),A
+site 03D90   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $475D JP $4776 > $479A CALL $4810 > $4819 JR NZ,$4821:
+site 0482E   ; IN A,($BE)
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $47E9 JR NZ,$4807 > $480C CALL $4841 > $484A JR NZ,$4852:
+site 04861   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $2F9C JR C,$2FAA > $2FF3 JR C,$3040 > $304F JP (HL):
+# $4D0C is entry 20 of the dispatch table.
+site 04D4B   ; OUT ($BE),A
+site 04D51   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $4D8E JR NC,$4DA0 > $4DA7 JR NZ,$4DAB > $4DD3 JR NZ,$4DD6:
+# $4D80 stores $4D87 in $DBCD, the handler address.
+site 04DD7   ; OUT ($BE),A
+site 04DDD   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $4DA7 JR NZ,$4DAB > $4DB3 JR Z,$4DE1 > $4E0B JR NZ,$4E0E:
+site 04E0F   ; OUT ($BE),A
+site 04E15   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $47CB CALL $5744 > $574A JR NZ,$5752 > $575C JR NZ,$5765:
+site 0576F   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $575C JR NZ,$5765 > $5778 JR NC,$577C > $577F JR NC,$5783:
+site 05784   ; OUT ($BE),A
+# Bank 1: logged $21AA LD ($FFFF),A, then ... $5ED0 JR NZ,$5EDF > $5EE1 CALL $5EE8 > $5EF8 JR Z,$5EFC:
+site 05F01   ; OUT ($BE),A
+site 05F07   ; OUT ($BE),A
+site 05F0E   ; OUT ($BE),A
+site 05F14   ; OUT ($BE),A
+# Bank 1: logged $1799 LD ($FFFF),A, then ... $188E CALL $636A > $6386 CALL $667E > $6700 CALL $665B:
+site 06663   ; OUT ($BE),A
+site 06668   ; OUT ($BE),A
+# Bank 1: logged $1799 LD ($FFFF),A, then ... $188E CALL $636A > $6386 CALL $667E > $66AF CALL $6671:
+site 06674   ; OUT ($BE),A
+site 06679   ; OUT ($BE),A
+# Bank 1: logged $1799 LD ($FFFF),A, then ... $6498 JR NZ,$649D > $64AC CALL $656E > $6571 CALL $6775:
+site 0677D   ; OUT ($BE),A
+site 06782   ; OUT ($BE),A
+site 06789   ; OUT ($BE),A
+site 0678E   ; OUT ($BE),A
+site 0679A   ; OUT ($BE),A
+site 0679F   ; OUT ($BE),A
+site 067A6   ; OUT ($BE),A
+site 067AB   ; OUT ($BE),A
+# Bank 2: logged $21AA LD ($FFFF),A, then ... $8B5E JR C,$8B62 > $8B64 JR C,$8B6D > $8B70 JR $8B75:
+site 08B84   ; OUT ($BE),A
+site 08B8A   ; OUT ($BE),A
+# Bank 2: logged $1799 LD ($FFFF),A, then ... $6597 JR Z,$659C > $65A8 CALL $9187 > $918F CALL $91CF:
+site 091E2   ; OUT ($BE),A
+site 091E7   ; OUT ($BE),A
+# Bank 2: logged $1799 LD ($FFFF),A, then ... $637B CALL $91F5 > $91FB CALL $9225 > $9228 CALL $927C:
+site 09284   ; OUT ($BE),A
+site 09289   ; OUT ($BE),A
+# Bank 2: logged $21AA LD ($FFFF),A, then ... $95FB JP C,$96BC > $96C8 CALL NZ,$9827 > $983E CALL $987F:
+# $4BE3 stores $4BEA in $DBCD after the text at $4BCE; $4BEA calls $952A (bank 2) and $4C08 jumps to $95EB.
+site 09881   ; OUT ($BE),A
+site 09887   ; OUT ($BE),A
+# Bank 2: logged $21AA LD ($FFFF),A, then ... $963B CALL $988A > $9891 JR NZ,$9895 > $98B7 JR NZ,$98BA:
+site 098BB   ; OUT ($BE),A
+site 098C1   ; OUT ($BE),A
+# Bank 2: logged $21AA LD ($FFFF),A, then ... $95F6 JP Z,$9653 > $9659 CALL $98FC > $9905 CALL $9912:
+site 0991A   ; OUT ($BE),A
+site 09920   ; OUT ($BE),A
+site 09931   ; OUT ($BE),A
+site 09937   ; OUT ($BE),A
+site 0993E   ; OUT ($BE),A
+site 09944   ; OUT ($BE),A
+site 0994B   ; OUT ($BE),A
+site 09951   ; OUT ($BE),A
+site 09961   ; OUT ($BE),A
+site 09967   ; OUT ($BE),A
+# Bank 2: logged $21AA LD ($FFFF),A, then ... $95F6 JP Z,$9653 > $9659 CALL $98FC > $98FD CALL $996C:
+site 09982   ; OUT ($BE),A
+site 09987   ; OUT ($BE),A
+site 0998C   ; OUT ($BE),A
+site 09991   ; OUT ($BE),A
+site 0999C   ; OUT ($BE),A
+site 099A0   ; OUT ($BE),A
+site 099A5   ; OUT ($BE),A
+site 099AA   ; OUT ($BE),A
+# Bank 2: logged $21AA LD ($FFFF),A, then ... $4BF5 CALL $952A > $953F CALL $99E5 > $99EB CALL $99F4:
+site 09A07   ; OUT ($BE),A
+site 09A0D   ; OUT ($BE),A
+site 09A14   ; OUT ($BE),A
+site 09A1A   ; OUT ($BE),A
+site 09A28   ; OUT ($BE),A
+site 09A2E   ; OUT ($BE),A
+site 09A35   ; OUT ($BE),A
+site 09A3B   ; OUT ($BE),A
+# Bank 2: logged $260D LD ($FFFF),A, then ... $A98D JR Z,$A991 > $A998 CALL $A9FF > $AA04 JR NZ,$AA09:
+site 0AA12   ; OUT ($BE),A
+# Bank 3: logged $21AA LD ($FFFF),A, then ... $304F JP (HL) > $5814 CALL $9A54 > $9A67 JR Z,$9A7B:
+site 0DA95   ; OUT ($BE),A
+site 0DA9B   ; OUT ($BE),A
+# Bank 3: logged $2414 LD ($FFFF),A, then ... $A4C7 JR $A4D6 > $A510 JR NZ,$A527 > $A52A JR NZ,$A538:
+site 0E56F   ; OUT ($BE),A
+site 0E575   ; OUT ($BE),A
+# Bank 3: logged $2414 LD ($FFFF),A, then ... $A5B1 JR NZ,$A5C6 > $A5DE JR Z,$A5EB > $A5FC JR $A60F:
+site 0E617   ; OUT ($BE),A
+site 0E61D   ; OUT ($BE),A
+# Bank 3: logged $2414 LD ($FFFF),A, then ... $834E JP Z,$A7B7 > $A7BD JP NC,$A7CD > $A7E0 JR Z,$A7F8:
+site 0E80C   ; OUT ($BE),A
+site 0E812   ; OUT ($BE),A
+# Bank 3: logged $2414 LD ($FFFF),A, then ... $2449 CALL Z,$832A > $834E JP Z,$A7B7 > $A7C1 JP Z,$A816:
+site 0E847   ; OUT ($BE),A
+site 0E84D   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $6014 CALL $B358 > $B365 JR Z,$B36A > $B3AA CALL $B400:
+site 13408   ; OUT ($BE),A
+site 1340E   ; OUT ($BE),A
+site 13413   ; OUT ($BE),A
+site 13417   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $7F92 CALL $7D18 > $7D6F CALL $B421 > $B432 CALL $B44F:
+site 13456   ; OUT ($BE),A
+site 1345C   ; OUT ($BE),A
+site 13461   ; OUT ($BE),A
+site 13466   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $5DDB CALL $B46F > $B487 JR C,$B4A6 > $B4AF CALL $B4D9:
+site 134EF   ; OUT ($BE),A
+site 134F4   ; OUT ($BE),A
+site 134FC   ; OUT ($BE),A
+site 13502   ; OUT ($BE),A
+site 13507   ; OUT ($BE),A
+site 1350D   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $B998 JR C,$B99E > $BA12 JR C,$BA18 > $BA54 CALL $B8C9:
+site 138E0   ; OUT ($BE),A
+site 138E4   ; OUT ($BE),A
+site 138E8   ; OUT ($BE),A
+site 138ED   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $6020 CALL $B8FB > $B911 JR C,$B915 > $B935 CALL $BA73:
+site 13AA0   ; OUT ($BE),A
+site 13AA5   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $5D6F CALL $5FEF > $5FFE JR Z,$6030 > $6035 CALL $BB0A:
+site 13B36   ; OUT ($BE),A
+site 13B3C   ; OUT ($BE),A
+site 13B42   ; OUT ($BE),A
+site 13B48   ; OUT ($BE),A
+site 13B56   ; OUT ($BE),A
+site 13B5C   ; OUT ($BE),A
+site 13B62   ; OUT ($BE),A
+site 13B68   ; OUT ($BE),A
+site 13B9C   ; OUT ($BE),A
+site 13BA2   ; OUT ($BE),A
+# Bank 4: logged $21AA LD ($FFFF),A, then ... $6035 CALL $BB0A > $BB71 CALL $BC3D > $BC6B CALL $BC78:
+site 13C7C   ; OUT ($BE),A
+site 13C82   ; OUT ($BE),A
+# Bank 5: logged $21AA LD ($FFFF),A, then ... $B734 CALL $BD53 > $BD68 CALL $BDAE > $BDB1 CALL $BDC0:
+site 17DC3   ; OUT ($BE),A
+site 17DC8   ; OUT ($BE),A
+# Bank 7: logged $21AA LD ($FFFF),A, then ... $A815 JR NZ,$A82A > $A82A CALL $A84B > $A84F CALL $A855:
+site 1E858   ; OUT ($BE),A
+site 1E85D   ; OUT ($BE),A
+# Bank 7: logged $21AA LD ($FFFF),A, then ... $7FB0 CALL $B09F > $B0C6 CALL $B0F5 > $B0F9 CALL $B0FF:
+site 1F102   ; OUT ($BE),A
+site 1F107   ; OUT ($BE),A
+# Bank 7: logged $21AA LD ($FFFF),A, then ... $B41A JR C,$B425 > $B431 CALL $B49E > $B4A2 CALL $B4AA:
+site 1F4AD   ; OUT ($BE),A
+site 1F4B2   ; OUT ($BE),A
+# Bank 7: logged $21AA LD ($FFFF),A, then ... $7978 JP Z,$7B15 > $7B1A CALL $7F8F > $7FAD CALL $B79C:
+site 1F7BF   ; OUT ($BE),A
+site 1F7C5   ; OUT ($BE),A
+site 1F7D7   ; OUT ($BE),A
+site 1F7DD   ; OUT ($BE),A
+# Bank 11: logged $21AA LD ($FFFF),A, then ... $7FCE CALL $0041 > $458F CALL $BA48 > $BA68 CALL $B9E0:
+# $4573 is task 5, started by CALL $0041 at $7FCE.
+site 2FA0B   ; IN A,($BE)
+# Bank 11: logged $21AA LD ($FFFF),A, then ... $7FCE CALL $0041 > $458F CALL $BA48 > $BA95 CALL $BA1C:
+site 2FA39   ; OUT ($BE),A
+# Bank 11: logged $21AA LD ($FFFF),A, then ... $BAB6 JR Z,$BAC0 > $BAC7 JR Z,$BAD4 > $BB10 CALL $BCE7:
+site 2FCEE   ; OUT ($BE),A
+site 2FCF3   ; OUT ($BE),A
+# Bank 11: logged $21AA LD ($FFFF),A, then ... $BDF9 JR NZ,$BE0B > $BE0D JR NZ,$BE15 > $BE1A CALL $BCF8:
+site 2FCFE   ; OUT ($BE),A
+site 2FD03   ; OUT ($BE),A

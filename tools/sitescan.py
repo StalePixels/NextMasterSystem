@@ -319,11 +319,19 @@ def _decode(nb, pc, raw):
 #   ('arg', R)        the value R had when the current routine was entered
 #   ('hi', X) ('lo', X)  a half of the 16-bit symbol X
 #   ('tb', B)         a byte read from a table based at B
+#   ('tb', K, span, iv)  a byte read from int base K plus an index known to be 0..span
+#   ('rng', lo, hi, v)   an unknown byte known to lie in lo..hi (mod 256; lo may be
+#                     negative after a SUB, for a range that wraps past 0), and, when v is
+#                     not None, equal to var * mul + add with v = (var, mul, add): var is
+#                     ('ram', nn), ('fld', d) (a field (IX+d) or (IY+d)) or ('arg', 'A')
 # 16-bit symbols:
 #   ('off', B, k)     base B plus the constant k
 #   ('idx', B)        base B plus an unknown index
 #   ('idx', K, span)  int base K plus an index known to be 0..span
+#   ('idx', K, span, iv)  the same, with the index (var * mul + add) * k, iv = (var, mul, add, k)
+#   ('ix16', span, iv)    an unknown 16-bit index 0..span (H or B zero, the low byte a 'rng')
 #   ('word', B)       a word read from a table based at B
+#   ('word', K, span, iv) a word read from int base K at an index 0..span
 # Bases B: an int, 'RET' (the routine's return address) or ('argpair', P).
 
 REG8 = ['A', 'B', 'C', 'D', 'E', 'H', 'L', 'IXH', 'IXL', 'IYH', 'IYL',
@@ -332,6 +340,114 @@ STATE_KEYS = REG8 + ['bank1', 'bank2']
 PAIRS = {'BC': ('B', 'C'), 'DE': ('D', 'E'), 'HL': ('H', 'L'), 'IX': ('IXH', 'IXL'), 'IY': ('IYH', 'IYL')}
 ARGPAIR = {v: k for k, v in PAIRS.items()}
 RET0 = ('off', 'RET', 0)
+
+
+def rng_of(v, arg_ok=False):
+    """An unknown byte as (lo, hi, var): its range and the variable it is an affine function
+    of (see 'rng' above), or None when nothing is known of it. A field byte (IX+d) is the
+    variable ('fld', d); with arg_ok, the caller's A is the variable ('arg', 'A')."""
+    if isinstance(v, tuple):
+        if v[0] == 'rng':
+            return v[1:]
+        if v[0] == 'mb':
+            return (0, 255, (('fld', v[2]), 1, 0))
+        if arg_ok and v == ('arg', 'A'):
+            return (0, 255, (('arg', 'A'), 1, 0))
+    return None
+
+
+def mk_rng(lo, hi, var):
+    """The 'rng' value for lo..hi and var, or None when it says nothing."""
+    if hi - lo >= 255:
+        lo, hi = 0, 255
+    else:
+        while hi < 0:
+            lo, hi = lo + 256, hi + 256
+        while lo >= 256:
+            lo, hi = lo - 256, hi - 256
+        if hi >= 256:
+            # a run that wraps past $FF: kept with a negative lo
+            lo, hi = lo - 256, hi - 256
+    if (lo, hi) == (0, 255) and var is None:
+        return None
+    return ('rng', lo, hi, var)
+
+
+def rng_affine(r, mul, add):
+    """Range r times mul plus add (8-bit, mod 256), with its variable relation."""
+    lo, hi, var = r
+    if mul != 1 and lo < 0:
+        lo, hi = 0, 255
+    nlo, nhi = lo * mul + add, hi * mul + add
+    nvar = None if var is None else (var[0], var[1] * mul, var[2] * mul + add)
+    return mk_rng(nlo, nhi, nvar)
+
+
+def rng_set(lo, hi):
+    """The byte values of range lo..hi."""
+    return set(x & 0xFF for x in range(lo, hi + 1))
+
+
+def rng_from_set(vals, var):
+    """A range that covers exactly the byte values vals, or None when they are not one run."""
+    if not vals:
+        return None
+    vs = sorted(vals)
+    if vs[-1] - vs[0] + 1 == len(vs):
+        return mk_rng(vs[0], vs[-1], var)
+    # a run that wraps past $FF to $00
+    gaps = [i for i in range(1, len(vs)) if vs[i] != vs[i - 1] + 1]
+    if len(gaps) == 1 and vs[0] == 0 and vs[-1] == 255:
+        i = gaps[0]
+        return mk_rng(vs[i] - 256, vs[i - 1], var)
+    return None
+
+
+FLAG_RECS = ('cmp', 'bit7', 'sign', 'sub', 'add')
+
+
+def refine_a(s, cond, taken):
+    """State s on the path where condition cond is true (taken) or false, with A narrowed by the
+    flag record in F: ('cmp', n) after CP n (carry: A < n), ('sub', n) after SUB n (carry: A was
+    below n), ('add', n) after ADD A,n (carry: the sum passed $FF), ('bit7',) after BIT 7,A,
+    ('sign',) after another instruction that sets the sign flag from A. The sign flag (P, M) is
+    A's bit 7 after every record but 'cmp' and 'bit7'. Other conditions leave s unchanged.
+    With A a constant the condition is decided: None when the path cannot be taken."""
+    f = s['F']
+    if not (isinstance(f, tuple) and f[0] in FLAG_RECS) or cond is None:
+        return s
+    a = s['A']
+    want = None
+    if f[0] == 'cmp' and cond in ('C', 'NC'):
+        low = (cond == 'C') == taken
+        want = set(range(0, f[1])) if low else set(range(f[1], 256))
+    elif f[0] == 'bit7' and cond in ('Z', 'NZ'):
+        clear = (cond == 'Z') == taken
+        want = set(range(0, 128)) if clear else set(range(128, 256))
+    elif f[0] == 'sub' and cond in ('C', 'NC'):
+        borrow = (cond == 'C') == taken
+        want = set(range(256 - f[1], 256)) if borrow else set(range(0, 256 - f[1]))
+    elif f[0] == 'add' and cond in ('C', 'NC'):
+        carry = (cond == 'C') == taken
+        want = set(range(0, f[1])) if carry else set(range(f[1], 256))
+    elif f[0] in ('sign', 'sub', 'add') and cond in ('P', 'M'):
+        plus = (cond == 'P') == taken
+        want = set(range(0, 128)) if plus else set(range(128, 256))
+    if want is None:
+        return s
+    if isinstance(a, int):
+        return s if a in want else None
+    r = rng_of(a) or (0, 255, None)
+    if a is not None and rng_of(a) is None:
+        return s            # a symbol (a table byte, an argument) is kept as it is
+    lo, hi, var = r
+    vals = rng_set(lo, hi)
+    nv = rng_from_set(vals & want, var)
+    if nv is None or nv == a:
+        return s
+    s = dict(s)
+    s['A'] = nv
+    return s
 
 
 def halves(v):
@@ -345,12 +461,17 @@ def halves(v):
 def combine(h, lo):
     if isinstance(h, int) and isinstance(lo, int):
         return (h << 8) | lo
+    if h == 0 and isinstance(lo, tuple):
+        r = rng_of(lo)
+        if r is not None and r[0] >= 0:
+            # a byte index of known range or source widened to a pair: LD L,A / LD H,0
+            return ('ix16', r[1], r[2] and r[2] + (1,))
     if isinstance(h, tuple) and isinstance(lo, tuple):
         if h[0] == 'hi' and lo[0] == 'lo' and h[1] == lo[1]:
             return h[1]
         if h[0] == 'tb' and lo[0] == 'tb' and (h[1] == lo[1] if not isinstance(lo[1], int)
                                                else h[1] == (lo[1] + 1) & 0xFFFF):
-            return ('word', lo[1])
+            return ('word',) + lo[1:]
         if h[0] == 'sarg' and lo[0] == 'sarg' and h[1] == lo[1] + 1:
             return ('sargw', lo[1])
         if h[0] == 'mb' and lo[0] == 'mb' and h[1] == lo[1] and h[2] == lo[2] + 1:
@@ -448,14 +569,23 @@ def add_const(v, d):
     return None
 
 
-def add_bounded(a, off, span):
-    """a + off + (0..span): the high byte of the index is known, the low byte is not."""
+def add_bounded(a, off, span, iv=None):
+    """a + off + (0..span): the high byte of the index is known, the low byte is not.
+    iv: the index as a function of a variable, (var, mul, add, k) (see 'idx' above)."""
     if isinstance(a, int):
-        return ('idx', (a + off) & 0xFFFF, span)
+        return ('idx', (a + off) & 0xFFFF, span) + ((iv,) if iv else ())
+    if isinstance(a, tuple) and a[0] == 'idx' and len(a) >= 3:
+        # base plus a known index, plus another: the spans add, and the variable's multiples
+        # add when both are the same function of the same variable
+        a_iv = a[3] if len(a) > 3 else None
+        n_iv = a_iv[:3] + (a_iv[3] + iv[3],) if a_iv and iv and a_iv[:3] == iv[:3] else None
+        base = (a[1] + off) & 0xFFFF if isinstance(a[1], int) else a[1]
+        return ('idx', base, a[2] + span) + ((n_iv,) if n_iv else ())
     if isinstance(a, tuple) and a[0] == 'idx' and isinstance(a[1], int):
-        if len(a) == 3:
-            return ('idx', (a[1] + off) & 0xFFFF, a[2] + span)
         return ('idx', (a[1] + off) & 0xFFFF)
+    if iv and off == 0 and isinstance(a, tuple) and a[0] == 'off' and not isinstance(a[1], int):
+        # a table address the caller passes, plus an index made from the caller's A
+        return ('idx', a[1], span, iv)
     return add16(a, None)
 
 
@@ -465,6 +595,12 @@ def add16(a, b):
     for x, y in ((a, b), (b, a)):
         if isinstance(x, tuple) and x[0] == 'sp':
             return add_const(x, y) if isinstance(y, int) else None
+    for x, y in ((a, b), (b, a)):
+        if isinstance(x, tuple) and x[0] == 'ix16':
+            # a table address plus a 16-bit index of known range
+            if isinstance(y, int) or is_addr_sym(y):
+                return add_bounded(y, 0, x[1], x[2])
+            return None
     if isinstance(b, int):
         a, b = b, a
     if isinstance(a, int):
@@ -587,9 +723,39 @@ def subst(v, cs):
             return ('idx', b)
         return ('idx', b[1]) if is_addr_sym(b) else None
     if t == 'word':
-        return ('word', b) if isinstance(b, int) else None
+        return ('word', b) + index_in_caller(v, cs) if isinstance(b, int) else None
     if t == 'tb':
-        return ('tb', ('fromint', b)) if isinstance(b, int) else None
+        return ('tb', ('fromint', b)) + index_in_caller(v, cs) if isinstance(b, int) else None
+    return None
+
+
+def index_in_caller(v, cs):
+    """The index range and variable of a table read v ('tb' or 'word') made in a helper, seen
+    from the caller's state cs: () or (span, iv). When the helper's index is made from the
+    caller's A, the caller's range and variable for A bound it."""
+    if len(v) < 4:
+        return ()
+    if not v[3] or v[3][0] != ('arg', 'A'):
+        return (v[2], v[3])
+    _var, mul, add, k = v[3]
+    ra = rng_of(cs['A'])
+    if not ra or ra[0] < 0 or add < 0:
+        return (v[2], None)
+    hi8 = ra[1] * mul + add
+    civ = ra[2] and (ra[2][0], ra[2][1] * mul, ra[2][2] * mul + add, k)
+    return ((hi8 if hi8 <= 255 else 255) * k, civ)
+
+
+def table_base_of(v):
+    """The constant base of a table read that value v comes from, or None."""
+    while isinstance(v, tuple) and v[0] in ('hi', 'lo'):
+        v = v[1]
+    if isinstance(v, tuple) and v[0] in ('tb', 'word'):
+        b = v[1]
+        if isinstance(b, tuple) and b[0] == 'fromint':
+            b = b[1]
+        if isinstance(b, int):
+            return b
     return None
 
 
@@ -618,7 +784,7 @@ def initial_state(bank1, bank2):
 
 
 def describe(v):
-    if v is None:
+    if v is None or (isinstance(v, tuple) and v[0] in ('rng', 'ix16')):
         return 'unknown'
     if isinstance(v, int):
         return h4(v)
@@ -635,6 +801,8 @@ def describe(v):
             bs = h4(b)
         elif b == 'RET':
             bs = 'return address'
+        elif b[0] == 'ramw':
+            bs = 'the word at %s' % h4(b[1])
         else:
             bs = "caller's %s" % b[1]
         if t == 'off':
@@ -682,7 +850,7 @@ class Routine:
         self.entry = entry
         self.kinds = set()
         self.exits = []          # (kind, state)
-        self.dispatch = None     # 'inline' or ('arg', pair)
+        self.dispatch = None     # 'inline', ('arg', pair, index form) or ('jparg', pair, offset)
         self.nodes = set()
         self.edges = {}          # node -> [(successor, tag)] inside the routine
 
@@ -714,6 +882,7 @@ class Scanner:
         self.callers_prev = {}
         self.copies_prev = []
         self.code_starts_prev = set()
+        self.ram_bases_prev = {}
         self.harvest_src = {}
         self.bank_calls = set()
         self.bank_headers = set()
@@ -724,11 +893,20 @@ class Scanner:
         self.slot1_banked_cur = False
         self.bank_values = {1: set(), 2: set()}
         self.resolve_cache = {}
+        self.table_bases_prev = set()
+        self.table_bases_cur = set()
+        self.index_stores_prev = {}
 
     # ---- memory
 
+    def bank_number(self, v):
+        """The bank that a bank register value v selects. The mapper decodes only the bank
+        bits that the cart size needs and ignores the others, so $8F selects bank 15 of a
+        16-bank cart. A value that is not a constant is returned as it is."""
+        return v % self.nb if isinstance(v, int) else v
+
     def region_for(self, slot, bank):
-        return ('rom', slot, bank % self.nb)
+        return ('rom', slot, self.bank_number(bank))
 
     def off_of(self, region, addr):
         """ROM file offset of the byte at cpu addr, seen from region."""
@@ -785,6 +963,11 @@ class Scanner:
             off = self.cpu_off(a, s['bank2'], s['bank1'])
             return self.rom[off] if off is not None else None
         if is_addr_sym(a):
+            if a[0] == 'idx' and len(a) >= 3:
+                if isinstance(a[1], int):
+                    # a read from a constant base plus an index of known range: a table starts there
+                    self.note_table_base(a[1], s)
+                return ('tb',) + a[1:3] + ((a[3] if len(a) > 3 else None),)
             return ('tb', a[1])
         if isinstance(a, tuple) and a[0] == 'sp':
             return stack_byte(s, a[1])
@@ -819,31 +1002,71 @@ class Scanner:
             return
         if not isinstance(addr, int):
             return
+        # the state holds the bank the slot shows, not the value written (bank_number())
+        v = self.bank_number(v)
         if self.mapper == 'codemasters':
             if addr == 0x8000:
                 s['bank2'] = v
             elif addr == 0x4000:
                 s['bank1'] = v
-                self.slot1_banked_cur |= v != 1
+                self.slot1_banked_cur |= v != 1 % self.nb
         elif addr == 0xFFFF:
             s['bank2'] = v
             if isinstance(v, int):
-                self.bank_values[2].add(v % self.nb)
+                self.bank_values[2].add(v)
         elif addr == 0xFFFE:
             s['bank1'] = v
-            self.slot1_banked_cur |= v != 1
+            self.slot1_banked_cur |= v != 1 % self.nb
             if isinstance(v, int):
-                self.bank_values[1].add(v % self.nb)
+                self.bank_values[1].add(v)
 
     # ---- transfer function (everything except control flow)
 
     def step(self, s, ins):
+        s = self._step(s, ins)
+        self.index_flags(s, ins)
+        return s
+
+    def index_flags(self, s, ins):
+        """Keep F's flag record (see refine_a) only across instructions that change neither A
+        nor the flags; set it after CP n, SUB n, ADD A,n, BIT 7,A and the other instructions
+        that set the sign flag from A."""
+        sem = ins.sem
+        t = sem[0]
+        f = s['F']
+        if isinstance(f, tuple) and f[0] in FLAG_RECS and not (
+                t in ('ld16', 'st16', 'inc16', 'dec16', 'push', 'exde', 'exsp', 'exx', 'nop', 'outn', 'outC',
+                      'jp', 'jr', 'call', 'rst', 'ret', 'reti', 'djnz', 'jpind', 'halt')
+                or (t == 'ld8' and sem[1] != 'A') or (t == 'pop' and sem[1] != 'AF')):
+            s['F'] = None
+        if t == 'alu' and sem[1] == 'CP' and isinstance(sem[2], tuple) and sem[2][0] == 'imm':
+            s['F'] = ('cmp', sem[2][1])
+        elif t == 'cb' and sem[1] == 'BIT' and sem[2] == 7 and sem[3] == 'A':
+            s['F'] = ('bit7',)
+        elif t == 'alu' and sem[1] in ('ADD', 'SUB') and isinstance(sem[2], tuple) and sem[2][0] == 'imm' \
+                and sem[2][1]:
+            s['F'] = (sem[1].lower(), sem[2][1])
+        elif (t == 'alu' and sem[1] in ('ADD', 'SUB', 'AND', 'OR', 'XOR')) or (t in ('inc8', 'dec8') and sem[1] == 'A'):
+            s['F'] = ('sign',)
+
+    def _step(self, s, ins):
         sem = ins.sem
         t = sem[0]
         s = dict(s)
         if t == 'ld8':
             dst, src = sem[1], sem[2]
             v = self.g8(s, src)
+            if dst == 'A' and isinstance(src, tuple) and src[0] in ('abs', 'mem'):
+                # a byte variable in RAM, or a field of a structure: an index whose largest
+                # stored value may bound a table
+                a = self.addr_of(s, src)
+                ram = isinstance(a, int) and a >= 0xC000 or (isinstance(a, tuple) and a[0] == 'idx'
+                                                             and isinstance(a[1], int) and a[1] >= 0xC000)
+                if src[0] == 'mem' and src[1] in ('IX', 'IY') and (v is None and isinstance(a, int) or
+                                                                   ram and isinstance(v, tuple) and v[0] == 'tb'):
+                    v = ('rng', 0, 255, (('fld', src[2]), 1, 0))
+                elif v is None and isinstance(a, int) and a >= 0xC000:
+                    v = ('rng', 0, 255, (('ram', a), 1, 0))
             if isinstance(dst, str):
                 s[dst] = v
             else:
@@ -856,6 +1079,9 @@ class Scanner:
                 v = src[1]
             else:
                 v = self.read16(src[1], s)
+                if v is None and isinstance(src[1], int) and src[1] >= 0xC000:
+                    # the word held in a RAM variable: a table base kept in RAM is followed through it
+                    v = ('off', ('ramw', src[1]), 0)
             pset(s, dst, v)
         elif t == 'st16':
             nn, src = sem[1], sem[2]
@@ -870,6 +1096,8 @@ class Scanner:
             if isinstance(o, str):
                 v = s[o]
                 s[o] = (v + d) & 0xFF if isinstance(v, int) else None
+                if o == 'A' and rng_of(v):
+                    s[o] = rng_affine(rng_of(v), 1, d)
             else:
                 self.store8(s, self.addr_of(s, o), None)
         elif t in ('inc16', 'dec16'):
@@ -900,7 +1128,35 @@ class Scanner:
             pset(s, sem[1], None)
         elif t == 'alu':
             op, src = sem[1], sem[2]
-            s['A'] = alu8(op, s['A'], self.g8(s, src), src == 'A')
+            a = s['A']
+            r = alu8(op, a, self.g8(s, src), src == 'A')
+            if r is None and not isinstance(a, int):
+                # the 8-bit form of "HL = table + index" with the table address a constant in HL:
+                # ADD A,L / LD L,A / ADC A,H / SUB L / LD H,A, as a table helper entered by JP
+                # or written inline does it
+                hl = pget(s, 'HL')
+                ra = rng_of(a, op == 'ADD' and src == 'A')
+                n = src[1] if isinstance(src, tuple) and src[0] == 'imm' else None
+                if op == 'ADD' and src == 'L' and isinstance(hl, int):
+                    r = ('lo', ('idx', hl))
+                    if ra and ra[0] >= 0:
+                        # the index's range and variable go with it
+                        r = ('lo', ('idx', hl, ra[1]) + ((ra[2] + (1,),) if ra[2] else ()))
+                elif (op == 'ADC' and src == 'H' and isinstance(a, tuple) and a[0] == 'lo'
+                      and isinstance(a[1], tuple) and a[1][0] == 'idx' and isinstance(a[1][1], int)
+                      and s['H'] == a[1][1] >> 8):
+                    r = ('hi', a[1])
+                elif op == 'ADD' and src == 'A' and ra:
+                    r = rng_affine(ra, 2, 0)
+                elif op in ('ADD', 'SUB') and n is not None and ra:
+                    r = rng_affine(ra, 1, n if op == 'ADD' else -n)
+                elif op == 'AND' and n is not None and n & (n + 1) == 0:
+                    # a mask of the low bits, as an index is masked: the result is 0..n
+                    if ra and 0 <= ra[0] and ra[1] <= n:
+                        r = a           # a mask that keeps every value of the range
+                    else:
+                        r = mk_rng(0, min(n, ra[1]) if ra and ra[0] >= 0 else n, None)
+            s['A'] = r
         elif t == 'acc':
             name, a = sem[1], s['A']
             ia = isinstance(a, int)
@@ -910,6 +1166,9 @@ class Scanner:
                 s['A'] = (-a) & 0xFF if ia else None
             elif name == 'RLCA':
                 s['A'] = ((a << 1) | (a >> 7)) & 0xFF if ia else None
+                ra = rng_of(a)
+                if ra and 0 <= ra[0] and ra[1] < 0x80:
+                    s['A'] = rng_affine(ra, 2, 0)     # bit 7 clear: a rotate is a doubling
             elif name == 'RRCA':
                 s['A'] = ((a >> 1) | (a << 7)) & 0xFF if ia else None
             elif name in ('SCF', 'CCF'):
@@ -1133,15 +1392,18 @@ class Scanner:
             a = (a + len(ins.raw)) & 0xFFFF
         return True
 
-    def table_targets(self, rt, n, region, start, s):
-        """Read a jump table at cpu address start. Returns (entries, byte count)."""
+    def table_targets(self, rt, n, region, start, s, most=256):
+        """Read a jump table at cpu address start, at most MOST words. Returns (entries, byte count)."""
         entries, pos, limit = [], start, None
         size = 2
         skipped = False
-        for _ in range(256):
+        for _ in range(most):
             if limit is not None and pos >= limit:
                 break
             if pos != start and self.off_of(region, pos) in self.code_starts_prev:
+                break
+            if pos != start and self.off_of(region, pos) in self.table_bases_prev:
+                # another table that the code reads starts here
                 break
             offs = [self.off_of(region, pos + i) for i in range(size)]
             if None in offs:
@@ -1292,9 +1554,20 @@ class Scanner:
                 new[k] = o[1]
             elif o[0] == 'sym':
                 new[k] = subst(o[1], s)
+                b = table_base_of(new[k])
+                if b is not None:
+                    # a helper read a table at the base its caller passed
+                    self.note_table_base(b, s)
             else:
                 new[k] = s[o[1]]
         return new
+
+    def note_table_base(self, base, s):
+        """Record the cart offset of a ROM table that the code reads (see table_targets)."""
+        if base < 0xC000:
+            o = self.cpu_off(base, s['bank2'], s['bank1'])
+            if o is not None:
+                self.table_bases_cur.add(o)
 
     def flow(self, R, n, ins, s, final):
         region, addr = n
@@ -1329,9 +1602,13 @@ class Scanner:
                 self.unresolved.append((n, why_ctx, target, why))
 
         if t in ('jp', 'jr'):
-            go(sem[1], s1)
-            if sem[2]:
-                go(nxt, s1)
+            # a conditional jump narrows A on each path by the flags a CP or a sign test set
+            st = refine_a(s1, sem[2], True)
+            if st is not None:
+                go(sem[1], st)
+            st = refine_a(s1, sem[2], False)
+            if sem[2] and st is not None:
+                go(nxt, st)
         elif t == 'djnz':
             b = s1['B']
             st_t = dict(s1)
@@ -1345,6 +1622,13 @@ class Scanner:
         elif t in ('call', 'rst'):
             target = sem[1]
             cond = sem[2] if t == 'call' else None
+            s_not = refine_a(s1, cond, False)
+            s1 = refine_a(s1, cond, True)
+            if s1 is None:
+                # the condition cannot hold in this state: only the path past the call
+                if s_not is not None:
+                    go(nxt, s_not)
+                return out
             nodes, why = self.resolve_target(R.entry, n, target, s1)
             if not nodes:
                 if final:
@@ -1386,7 +1670,8 @@ class Scanner:
                 elif isinstance(summ.dispatch, tuple):
                     base = pget(s1, summ.dispatch[1])
                     if isinstance(base, int):
-                        ents, nbytes = self.table_targets(R.entry, n, region, base, s1)
+                        cap = self.arg_table_cap(summ.dispatch, s1)
+                        ents, nbytes = self.table_targets(R.entry, n, region, base, s1, cap or 256)
                         if final:
                             self.tables.append((n, 'arg-' + summ.dispatch[1], base, [e[0] for e in ents], nbytes,
                                                 ents[0][1][0][0][0] if ents else region))
@@ -1397,7 +1682,17 @@ class Scanner:
                         self.unresolved.append((n, 'dispatch-table', target, describe(base)))
                     go(nxt, cs, tag)
                 elif summ.returns:
-                    if summ.skip == 'var':
+                    zend = self.zstr_end(region, nxt) if summ.skip == 'zstr' else None
+                    if zend is not None:
+                        # the routine returns past a zero-terminated string after the call
+                        if final:
+                            for a in range(nxt, zend):
+                                o = self.off_of(region, a & 0xFFFF)
+                                if o is not None:
+                                    self.table_bytes.add(o)
+                            self.strcalls.append((n, target, zend - nxt))
+                        go(zend, cs, tag)
+                    elif summ.skip in ('var', 'zstr'):
                         if final:
                             self.unresolved.append((n, 'inline-data', target, 'routine skips a variable number of bytes after the call'))
                     else:
@@ -1406,14 +1701,19 @@ class Scanner:
                                 o = self.off_of(region, nxt + i)
                                 if o is not None:
                                     self.table_bytes.add(o)
-                        go(nxt + summ.skip, cs, tag)
-            if cond:
-                go(nxt, s1)
+                        # the code after a call that returns with no inline bytes is reached as
+                        # surely as the call, whichever bank the callee was resolved in
+                        go(nxt + summ.skip, cs, tag if summ.skip else 'd')
+            if cond and s_not is not None:
+                go(nxt, s_not)
         elif t in ('ret', 'reti'):
             cond = sem[1] if t == 'ret' else None
-            self.do_return(R, n, s1, final, out, go)
-            if cond:
-                go(nxt, s1)
+            st = refine_a(s1, cond, True)
+            if st is not None:
+                self.do_return(R, n, st, final, out, go)
+            st = refine_a(s1, cond, False)
+            if cond and st is not None:
+                go(nxt, st)
         elif t == 'jpind':
             self.do_indirect(R, n, pget(s1, sem[1]), s1, final, out, go, 'JP (%s)' % sem[1])
         else:
@@ -1476,7 +1776,8 @@ class Scanner:
             if isinstance(b, tuple) and b[0] == 'fromint':
                 b = b[1]
             if isinstance(b, int):
-                ents, nbytes = self.table_targets(R.entry, n, region, b, s)
+                cap = self.table_cap(v)
+                ents, nbytes = self.table_targets(R.entry, n, region, b, s, cap or 256)
                 if final:
                     self.tables.append((n, 'word', b, [e[0] for e in ents], nbytes, region))
                 for (w, wnodes) in ents:
@@ -1494,8 +1795,25 @@ class Scanner:
                 return
             elif isinstance(b, tuple) and b[0] == 'argpair':
                 if final:
-                    R.dispatch = ('arg', b[1])
+                    # the index form goes with it, so a caller that bounds the index bounds the read
+                    R.dispatch = ('arg', b[1], v[3] if len(v) > 3 else None)
                 return
+            elif isinstance(b, tuple) and b[0] == 'ramw' and self.ram_bases_prev.get(b[1]):
+                # a word from a table whose base the code keeps in a RAM variable: read the table
+                # at every constant base that the code stores into that variable
+                found = False
+                for base in sorted(self.ram_bases_prev[b[1]]):
+                    # the tables for each value of the variable can lie in one run, so the read
+                    # is not capped at 256 words: it ends by the usual rules
+                    ents, nbytes = self.table_targets(R.entry, n, region, base, s, 0x2000)
+                    if final:
+                        self.tables.append((n, 'ram-' + h4(b[1]), base, [e[0] for e in ents], nbytes, region))
+                    for (w, wnodes) in ents:
+                        for (m, _h) in wnodes:
+                            out.append((m, s, 'h'))
+                    found = found or bool(ents)
+                if found:
+                    return
         if isinstance(v, tuple) and v[0] == 'mword':
             # jump through a pointer field of a structure: the harvest uses the field offset
             self.struct_dispatch.add((v[1], v[2]))
@@ -1573,6 +1891,8 @@ class Scanner:
         self.bad_nodes = set()
         self.bad_why = {}
         self.stack_switch = set()
+        self.strcalls = []
+        self.table_bases_cur = set()
 
     def end_round(self):
         summ = {}
@@ -1602,6 +1922,8 @@ class Scanner:
                 else:
                     ks = set(k[1] if isinstance(k, tuple) else 0 for k in kinds)
                     skip = ks.pop() if len(ks) == 1 else 'var'
+                if skip == 'var' and self.zstr_skipper(R):
+                    skip = 'zstr'
             summ[e] = Summary(bool(exits) or isinstance(R.dispatch, tuple), skip, out, R.dispatch)
         self.summ_new = summ
         copies = []
@@ -1625,7 +1947,181 @@ class Scanner:
         sig = sig + (self.slot1_banked_cur,)
         self.copies_prev = copies
         self.code_starts_prev = starts
+        self.table_bases_prev = self.table_bases_cur
+        self.index_stores_prev = self.index_stores()
+        self.ram_bases_prev = self.ram_bases()
         return sig
+
+    def index_stores(self):
+        """Index variable -> (smallest, largest) byte the code stores into it, or None when some
+        store writes a value of unknown range. Variables are ('ram', nn) and ('fld', d), a field
+        (IX+d) or (IY+d) of any structure. Stores counted: LD (nn),A, LD (rr),r and LD (IX+d),r
+        with a constant address or a field, LD (nn),rr; INC, DEC, the shifts and SET or RES on
+        such a byte make it unknown. A block copy (LDIR) or a store through a pointer the scanner
+        cannot resolve is not seen."""
+        out = {}
+
+        def put(key, v):
+            if key in out and out[key] is None:
+                return
+            if isinstance(v, int):
+                lo, hi = v, v
+            else:
+                r = rng_of(v) if not (isinstance(v, tuple) and v[0] == 'mb') else None
+                if not r or r[0] < 0:
+                    out[key] = None
+                    return
+                lo, hi = r[0], r[1]
+            old = out.get(key)
+            out[key] = (lo, hi) if old is None else (min(old[0], lo), max(old[1], hi))
+
+        def keys(st, o):
+            ks = []
+            if isinstance(o, tuple) and o[0] in ('abs', 'mem'):
+                a = self.addr_of(st, o)
+                if isinstance(a, int) and a >= 0xC000:
+                    ks.append(('ram', a))
+                if o[0] == 'mem' and o[1] in ('IX', 'IY'):
+                    ks.append(('fld', o[2]))
+            return ks
+        for n, ctxs in self.ctx.items():
+            ins = self.decode_node(n)
+            sem = ins.sem
+            t = sem[0]
+            for (_rt, st, _h) in ctxs:
+                if t == 'ld8' and not isinstance(sem[1], str):
+                    v = self.g8(st, sem[2])
+                    for k in keys(st, sem[1]):
+                        put(k, v)
+                elif t == 'st16' and sem[1] >= 0xC000:
+                    hv = pget(st, sem[2]) if sem[2] != 'SP' else None
+                    h, lo = (st[PAIRS[sem[2]][0]], st[PAIRS[sem[2]][1]]) if sem[2] in PAIRS else halves(hv)
+                    put(('ram', sem[1]), lo)
+                    put(('ram', (sem[1] + 1) & 0xFFFF), h)
+                elif t in ('inc8', 'dec8') and not isinstance(sem[1], str):
+                    for k in keys(st, sem[1]):
+                        out[k] = None
+                elif t == 'cb' and sem[1] != 'BIT' and not isinstance(sem[3], str):
+                    for k in keys(st, sem[3]):
+                        out[k] = None
+                elif t == 'rxd':
+                    for k in keys(st, ('mem', 'HL', 0)):
+                        out[k] = None
+        return out
+
+    def table_cap(self, v):
+        """The most entries a word table read through value v can have, from the index's range
+        (a compare or mask in the code) and from the largest value the code stores into the
+        index variable, or None when neither is known."""
+        if not (isinstance(v, tuple) and len(v) > 3):
+            return None
+        span, iv = v[2], v[3]
+        cap = span // 2 + 1
+        if iv:
+            var, mul, add, k = iv
+            st = self.index_stores_prev.get(var)
+            if st and mul > 0:
+                lo8, hi8 = st[0] * mul + add, st[1] * mul + add
+                if 0 <= lo8 and hi8 <= 255:
+                    cap = min(cap, hi8 * k // 2 + 1)
+        return cap if cap < 256 else None
+
+    def arg_table_cap(self, d, s):
+        """The most entries a table dispatcher reads for one call, when the dispatcher takes the
+        table address in a register pair and the index in a register (d = ('arg', pair, index
+        form), from do_indirect()) and the caller bounds that register with a mask or a compare
+        (a range in the caller's state s). A constant index is not used: it names the entry this
+        call takes, not the size of the table, and other calls can take the later entries.
+        None when the index is not bounded."""
+        iv = d[2] if len(d) > 2 else None
+        if not iv or not (isinstance(iv[0], tuple) and iv[0][0] == 'arg' and iv[0][1] in REG8):
+            return None
+        var, mul, add, k = iv
+        x = s[var[1]]
+        r = rng_of(x) if isinstance(x, tuple) and x[0] == 'rng' else None
+        if r is None or mul <= 0:
+            return None
+        lo8, hi8 = r[0] * mul + add, r[1] * mul + add
+        if not (0 <= lo8 and hi8 <= 255):
+            return None
+        cap = hi8 * k // 2 + 1
+        return cap if cap < 256 else None
+
+    def ram_bases(self):
+        """RAM variable -> the constant words the code stores into it (LD (nn),rr), including the
+        constants stored into another variable whose word is copied into it."""
+        consts, links = {}, {}
+        for n, ctxs in self.ctx.items():
+            ins = self.decode_node(n)
+            sem = ins.sem
+            if sem[0] != 'st16' or sem[1] < 0xC000 or sem[2] not in PAIRS:
+                continue
+            for (_rt, st, _h) in ctxs:
+                v = pget(st, sem[2])
+                if isinstance(v, int):
+                    consts.setdefault(sem[1], set()).add(v)
+                elif isinstance(v, tuple) and v[0] == 'off' and v[2] == 0 and isinstance(v[1], tuple) \
+                        and v[1][0] == 'ramw':
+                    links.setdefault(sem[1], set()).add(v[1][1])
+        changed = True
+        while changed:
+            changed = False
+            for a, srcs in links.items():
+                for b in srcs:
+                    add = consts.get(b, set()) - consts.get(a, set())
+                    if add:
+                        consts.setdefault(a, set()).update(add)
+                        changed = True
+        return consts
+
+    def zstr_skipper(self, R):
+        """True when routine R returns past a zero-terminated string that follows its call.
+
+        The routine reads a byte through HL while HL holds its return address plus a count,
+        steps HL past it and leaves the loop when the byte is zero: LD A,(HL); INC HL; OR A
+        (or AND A); JR Z or JP Z to an exit that puts HL back as the return address
+        (EX (SP),HL then RET, with DI or EI around them) or jumps to it (JP (HL)).
+        """
+        for n in R.nodes:
+            region, a = n
+            bs = []
+            for i in range(5):
+                o = self.off_of(region, (a + i) & 0xFFFF)
+                bs.append(None if o is None else self.rom[o])
+            if bs[0] != 0x7E or bs[1] != 0x23 or bs[2] not in (0xB7, 0xA7):
+                continue
+            if bs[3] == 0x28:
+                x = (a + 5 + s8(bs[4])) & 0xFFFF
+            elif bs[3] == 0xCA:
+                o = self.off_of(region, (a + 5) & 0xFFFF)
+                if o is None:
+                    continue
+                x = bs[4] | self.rom[o] << 8
+            else:
+                continue
+            if not any(e == R.entry and isinstance(pget(st, 'HL'), tuple) and pget(st, 'HL')[:2] == ('off', 'RET')
+                       for (e, st, _h) in self.ctx.get(n, [])):
+                continue
+            ops = []
+            for i in range(6):
+                o = self.off_of(region, (x + i) & 0xFFFF)
+                if o is None:
+                    break
+                ops.append(self.rom[o])
+            ops = [b for b in ops if b not in (0xF3, 0xFB)][:2]
+            if ops[:1] == [0xE9] or ops == [0xE3, 0xC9]:
+                return True
+        return False
+
+    def zstr_end(self, region, a):
+        """Address after the first zero byte from a, within 256 bytes, or None."""
+        for i in range(256):
+            o = self.off_of(region, (a + i) & 0xFFFF)
+            if o is None:
+                return None
+            if self.rom[o] == 0:
+                return a + i + 1
+        return None
 
     def copy_of(self, rt, n, s, name):
         """Copies ROM -> RAM made by an LDIR/LDDR: (dest, src_off, length, node)."""
@@ -1686,10 +2182,14 @@ class Scanner:
 # ------------------------------------------------------------------ inputs
 
 def parse_addr(text, scanner):
-    """ADDR or BANK:ADDR (hex) -> node."""
+    """ADDR or BANK:ADDR, both hex (bank 10 is A) -> node. A bank beyond the cart's last
+    bank is refused: it is almost always a bank number written in decimal."""
     if ':' in text:
         b, a = text.split(':')
         b, a = int(b, 16), int(a, 16)
+        if b >= scanner.nb:
+            sys.exit('%s: bank $%X is beyond the last bank of this cart, $%X (%d banks); BANK is hex, '
+                     'so bank 10 is A:' % (text, b, scanner.nb - 1, scanner.nb))
         return ((scanner.region_for(a >> 14, b)), a)
     a = int(text, 16)
     slot = a >> 14
@@ -1774,7 +2274,7 @@ def read_cdl(path, rom):
 def main():
     ap = argparse.ArgumentParser(description='Static patch-site scanner for SMS carts (NextMasterSystem).')
     ap.add_argument('cart')
-    ap.add_argument('--entry', action='append', default=[], help='extra entry point, hex ADDR or BANK:ADDR (repeatable)')
+    ap.add_argument('--entry', action='append', default=[], help='extra entry point, ADDR or BANK:ADDR, both hex (bank 10 is A:8000); a bank beyond the cart\'s last bank is refused (repeatable)')
     ap.add_argument('--log', action='append', default=[], help='dynamic log: *.io.tsv, *.mapper.tsv or *.features.json (repeatable)')
     ap.add_argument('--logdir', action='append', default=[], help='directory holding dynamic log files (repeatable)')
     ap.add_argument('--cdl', help='Mesen2 CDLv2 file')
@@ -1786,7 +2286,7 @@ def main():
     ap.add_argument('--no-tracedef', action='store_true',
                     help='run without tools/tracedef.py: the trace and run forms are not costed and the costs differ from the overlay builder\'s (printed in the summary)')
     ap.add_argument('--handler', action='append', default=[],
-                    help='frame cost model: the game\'s own interrupt handler entry, hex ADDR or BANK:ADDR (repeatable)')
+                    help='frame cost model: the game\'s own interrupt handler entry, ADDR or BANK:ADDR, both hex (repeatable)')
     args = ap.parse_args()
     TRACEDEF_OFF[0] = args.no_tracedef
     load_tracedef()         # fail now, not after the scan
@@ -2220,14 +2720,15 @@ def bank_calls(sc, covered):
     The bytes are LD A,n, then optionally LD (nn),A to RAM (a copy of the bank
     number), then LD ($FFFF),A and CALL nn or JP nn with nn in $8000-$BFFF, all
     in slot 0 or slot 1. Games start objects this way from a handler that is
-    reached only through RAM. The target in bank n is the entry: (node, store node).
+    reached only through RAM. The target in the bank that n selects (Scanner.bank_number(),
+    so $8A is bank 10 of a 16-bank cart) is the entry: (node, store node).
     """
     out = []
     if sc.mapper == 'codemasters':
         return out
     rom = sc.rom
     for o in range(min(len(rom), 0x8000) - 10):
-        if rom[o] != 0x3E or rom[o + 1] >= sc.nb:
+        if rom[o] != 0x3E:
             continue
         p = o + 2
         if rom[p] == 0x32 and rom[p + 2] >= 0xC0 and not (rom[p + 2] == 0xFF and rom[p + 1] >= 0xFC):
@@ -2243,11 +2744,12 @@ def bank_calls(sc, covered):
     return out
 
 
-def starts_without_handlers(sc):
-    """Cart offsets of the instructions that routines reach from every seed but the object
-    handler entries. Code that only a handler entry reaches stays open to the dynamic logs,
-    so a logged PC there is still a log seed (high confidence)."""
-    seeds = {'vector', 'cmdline', 'harvest', 'bankcall', 'bankhead'}
+def static_starts_of(sc):
+    """Cart offsets of the instructions that routines reach from the vectors and the
+    command-line entries. Code that only harvested addresses, bank calls, bank headers or
+    object handler entries reach stays open to the dynamic logs, so a logged PC there is
+    still a log seed (high confidence)."""
+    seeds = STRONG_SEEDS
     adj = {}
     for (a, b, _h) in sc.rt_edges:
         adj.setdefault(a, []).append(b)
@@ -2263,6 +2765,30 @@ def starts_without_handlers(sc):
         for n in sc.routines[e].nodes:
             out.add(sc.off_of(n[0], n[1]))
     return out
+
+
+def log_confirmed(sc):
+    """Nodes that proven flow reaches from a logged PC that was not made a log seed because
+    the static pass already reached it. They are high confidence (how gets +log-reached),
+    as code a log seed reaches is: evidence adds up, it never lowers a rating. Only plain
+    flow is followed (no table entry), and calls go into their callees."""
+    edges, calls = {}, {}
+    for R in sc.routines.values():
+        for n, es in R.edges.items():
+            edges.setdefault(n, set()).update(m for (m, tag) in es if tag == 'd')
+    for callee, cl in sc.callers_prev.items():
+        for (_crt, cnode, _cs) in cl:
+            calls.setdefault(cnode, set()).add(callee)
+    seen = set()
+    todo = [n for n in getattr(sc, 'log_reached', []) if n in sc.ctx]
+    while todo:
+        n = todo.pop()
+        if n in seen:
+            continue
+        seen.add(n)
+        todo.extend(edges.get(n, ()))
+        todo.extend(calls.get(n, ()))
+    return seen
 
 
 def scan(rom, mapper, args):
@@ -2294,7 +2820,7 @@ def scan(rom, mapper, args):
             harvested += new
             sc.run(seeds + [(k, seed_kind(sc, k)) for k in harvested])
         seeds = seeds + [(k, seed_kind(sc, k)) for k in harvested]
-        static_starts = starts_without_handlers(sc)
+        static_starts = static_starts_of(sc)
     sc.harvest_rejected = rejected
 
     # dynamic seeds: only the PCs that static analysis did not reach
@@ -2355,8 +2881,11 @@ def scan(rom, mapper, args):
                 n = (sc.region_for(2, o >> 14), 0x8000 + (o & 0x3FFF))
             dyn.append((n, 'cdl', os.path.basename(args.cdl)))
     extra = []
+    sc.log_reached = []
     for n, kind, src in dyn:
         o = sc.off_of(n[0], n[1])
+        if o is not None and o in static_starts and kind != 'cdl':
+            sc.log_reached.append(n)
         if o is None or o in static_starts:
             continue
         k = 'cdl' if kind == 'cdl' else 'log'
@@ -2417,6 +2946,8 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
             elif not 0x8000 <= pc < 0xC000:
                 seen_pcs.add(pc)
 
+    confirmed = log_confirmed(sc)
+
     def provenance(n):
         best = None
         for (rt, s, heur) in sc.ctx[n]:
@@ -2425,6 +2956,8 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
                 r, how = max(r, 2), (how if how.endswith('+table') else how + '+table')
             if best is None or r < best[0]:
                 best = (r, how)
+        if best[0] > 1 and n in confirmed:
+            best = (1, best[1] + '+log-reached')
         return best
 
     def conf(r):
@@ -2441,7 +2974,9 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
     def add_site(n, ins, kind, target, pclass, note=''):
         r, how = provenance(n)
         if node_off(n) in seen_offs or (n[1] in seen_pcs and not 0x8000 <= n[1] < 0xC000):
+            # the reference ran this instruction: it is code whatever path reached it
             how += '+seen-in-log'
+            r = min(r, 1)
         o = node_off(n)
         sites.append({'addr': n[1], 'bank': node_bank(n), 'offset': o, 'bytes': ins.hexbytes(), 'insn': ins.text,
                       'kind': kind, 'target': target, 'class': pclass, 'confidence': conf(r), 'how': how, 'note': note})
@@ -2547,6 +3082,10 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
             add_site(n, ins, 'target_unresolved', h4(target) if target is not None else '', 'unresolved', str(why))
         else:
             add_site(n, ins, 'indirect_unresolved', '', 'unresolved', '%s with target %s' % (via, why))
+    for (n, target, length) in sc.strcalls:
+        if n in sc.ctx and not any(x['kind'] == 'inline_string' and x['addr'] == n[1] for x in sites):
+            add_site(n, sc.decode_node(n), 'inline_string', h4(target), 'flow',
+                     'the routine returns past a zero-terminated string of %d bytes after the call' % length)
     for (n, via, v) in sc.indirect_resolved:
         if n in sc.ctx and not any(x['kind'] == 'indirect_resolved' and x['addr'] == n[1] and x['target'] == h4(v) for x in sites):
             add_site(n, sc.decode_node(n), 'indirect_resolved', h4(v), 'flow', via + ' with a constant target')
@@ -2616,6 +3155,10 @@ def collect(sc, rom, logs, log_notes, ram_pcs, cdl_warn, static_rounds, n_extra,
                  if r['confidence'] == 'high'}
         for x in weak:
             r = rated.get((x['offset'], x['insn']))
+            if r is None and x['kind'] == 'mapper' and x['insn'].startswith('LD (HL),'):
+                # the byte scan rates LD HL,$FFnn; LD (HL),n at the LD HL, 3 bytes before
+                r = next((y for (o, t), y in rated.items() if o == x['offset'] - 3
+                          and t.startswith('LD HL,$FF') and t.endswith('; ' + x['insn'])), None)
             if r is not None:
                 x['confidence'] = 'high'
                 x['how'] += ' + byte pattern'
@@ -5408,7 +5951,7 @@ def write_outputs(res, rom, crc, header, name, args):
     order = {'out': 0, 'in': 0, 'out_c': 0, 'in_c': 0, 'block_out': 0, 'block_in': 0, 'mapper': 1, 'codem_store': 2,
              'cartarea_store': 3, 'rst': 4, 'rst_vector': 5, 'ram_copy': 6, 'ram_exec': 7, 'jump_table': 8,
              'indirect_resolved': 9, 'indirect_unresolved': 10, 'bank_unresolved': 11, 'target_unresolved': 12,
-             'inline_unresolved': 13, 'inline_table': 14, 'mailbox_race': 16, 'streamer': 17, 'rle_decoder': 18,
+             'inline_unresolved': 13, 'inline_string': 13, 'inline_table': 14, 'mailbox_race': 16, 'streamer': 17, 'rle_decoder': 18,
              'raster_hscroll': 19, 'mapper_unreached': 20, 'io_unreached': 21}
     rows = res['sites'] + res['unreached'] + res.get('rules', {}).get('rows', [])
     rows.sort(key=lambda r: (order.get(r['kind'], 15), r['offset'] if r['offset'] is not None else 1 << 30, r['addr']))
@@ -5519,7 +6062,8 @@ def write_outputs(res, rom, crc, header, name, args):
                         ('indirect_unresolved', 'Indirect jumps not resolved (add entry points by hand)'),
                         ('bank_unresolved', 'Transfers into a banked slot with an unknown bank'),
                         ('target_unresolved', 'Other unresolved transfers'),
-                        ('inline_unresolved', 'Calls to routines that skip a variable amount of inline data')):
+                        ('inline_unresolved', 'Calls to routines that skip a variable amount of inline data'),
+                        ('inline_string', 'Calls to routines that return past a zero-terminated string after the call')):
         rs = [r for r in res['sites'] if r['kind'] == kind]
         w('%s: %d' % (title, len(rs)))
         for r in rs:

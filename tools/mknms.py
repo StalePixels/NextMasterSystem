@@ -50,6 +50,12 @@ first 32K it is also the Z80 address.
                      each ED A3 becomes RST + the count of OUTIs left
   otir ADDR          OUTI followed by JR NZ,-2 or JP NZ,ADDR (a loop that
                      is OTIR): the OUTI becomes an OTIR site, the jump stays
+  eihalt ADDR        EI; HALT (FB 76) -> RST io, $FB: the runtime waits for
+                     the game's own interrupt, as the HALT does on the SMS
+  haltret ADDR       HALT; RET (76 C9) -> RST io, $C9: the same wait, then
+                     the RET. A HALT laid out otherwise is an asm block that
+                     makes room for "rst <io vector> : db halt_io" (also
+                     eihalt_io, haltret_io); all three need ABI 9
   poke ADDR OLD NEW  replace hex bytes OLD with NEW at ADDR
   asm ADDR LEN       Z80 assembly instead of hex. The lines up to a line
   ...                "endasm" are assembled with sjasmplus, as if at the Z80
@@ -106,6 +112,16 @@ first 32K it is also the Z80 address.
   hsplit             CONF hsplit=1: a horizontal scroll write in the picture
                      (a line interrupt split) also moves the copper's map
                      switch column for the lines below it; needs ABI 8
+  collline           CONF collline=1: a status read in the picture gets the
+                     sprite collision bit from the first line where two
+                     sprites' boxes meet, as on the SMS; needs ABI 10
+  rastseg            CONF rastseg=1: in 224-line mode the rastercode
+                     routine's table is a list of (first line, H) segments,
+                     ended by a line of 224 or more; needs rastercode and
+                     ABI 11
+  workline N         CONF workline=N: the runtime's once-a-frame work runs
+                     from SMS line N (1 to 191) of the picture, not below the
+                     picture; needs ABI 12
 
 Names that every asm block knows (the framework's jump table and the fixed
 state at $E000-$E07A, from src/runtime/fw.asm). Jump table entries:
@@ -131,7 +147,9 @@ three or more outputs, which the framework copies and runs in one call.
 The framework ABI the file needs is worked out from what it uses: 1 without
 an io vector, 2 with one, 3 with trace forms, fw_io0 or mapsthl, 4 with
 RAMSITES, RASTER or the ABI 4 mapper lines, 5 with LD I,A, LD A,I or a CONF
-switch, 6 with a page, 7 with a block that calls jt_vwrite, 8 with hsplit.
+switch, 6 with a page, 7 with a block that calls jt_vwrite, 8 with hsplit,
+9 with a patched HALT (eihalt, haltret, or halt_io and its kin in a block),
+10 with collline, 11 with rastseg, 12 with workline.
 """
 import argparse
 import csv
@@ -151,6 +169,8 @@ RASTER_ORG, RASTER_MAX = 0x3C00, 0x400   # rast_code in src/runtime/fw2.asm
 PAGE_ORG, PAGE_MAX = 0x2000, 0x2000      # a code page runs at $2000-$3FFF
 PAGE_COUNT, PAGE_ENTS = 8, 64            # CODE_MAX, CODE_ENTS in src/runtime/memplan.inc
 FAR_IO = 0x80                            # the far call's inline code
+# The inline codes of a patched HALT (ABI 9): HALT, EI then HALT, HALT then RET.
+HALT_IO = {'halt_io': 0x76, 'eihalt_io': 0xFB, 'haltret_io': 0xC9}
 ENTRY = {'out_n': 0xE000, 'in_n': 0xE003, 'ed': 0xE006, 'ld_de_a': 0xE009, 'outi_run': 0xE012, 'io': 0xE015}
 # Names every asm block can use. The addresses are fixed by src/runtime/fw.asm
 # (the jump table, then "state that tools read from outside"). The jt_ names
@@ -232,7 +252,7 @@ def spec_labels(spec):
     labels = {}
 
     def add(n, name, v):
-        if name in ASM_NAMES or name in labels or name == 'far_io':
+        if name in ASM_NAMES or name in labels or name == 'far_io' or name in HALT_IO:
             raise SystemExit(f'{spec}:{n}: {name} is already defined')
         labels[name] = v
     it = enumerate(open(spec), 1)
@@ -262,7 +282,7 @@ def spec_labels(spec):
 def assemble_block(sjasmplus, spec, n, body, org, labels, sym=False):
     """Assemble the asm or page block that starts on spec line N at Z80
     address ORG. Returns the code, and with SYM also its labels."""
-    names = dict(ASM_NAMES, far_io=FAR_IO, **labels)
+    names = dict(ASM_NAMES, far_io=FAR_IO, **HALT_IO, **labels)
     with tempfile.TemporaryDirectory() as td:
         with open(os.path.join(td, 'names.i'), 'w') as f:
             f.write(''.join(f'{k} equ 0x{v:04X}\n' for k, v in names.items()))
@@ -319,10 +339,10 @@ def chunk(tag, data):
 def parse(spec, cart, sjasmplus):
     """Run the spec over the cart. Returns a dict of what the file needs."""
     r = dict(name='', crc=None, ops=[], start=None, rcode=None, ramsites=[], ramcont=None,
-             priority=False, toppal=False, tilecache=False, hsplit=False, hz='any', abi=1, pages={}, libpages={})
+             priority=False, toppal=False, tilecache=False, hsplit=False, collline=False, rastseg=False, workline=0, hz='any', abi=1, pages={}, libpages={})
     rst = {}
     outs = {}
-    notrace, plain, io0, abi4, abi5, abi7 = False, set(), False, False, False, False
+    notrace, plain, io0, abi4, abi5, abi7, abi9 = False, set(), False, False, False, False, False
     ops = r['ops']
     nsites = 0
 
@@ -350,6 +370,7 @@ def parse(spec, cart, sjasmplus):
                 raise SystemExit(f'{spec}:{lineno}: asm {a:05X} {n}: crosses an 8K page of the cart')
             code = assemble_block(sjasmplus, spec, lineno, body, cpu(a), labels)
             abi7 = abi7 or uses_names(body, ABI7_NAMES)
+            abi9 = abi9 or uses_names(body, HALT_IO)
             if len(code) > n:
                 raise SystemExit(f'{spec}:{lineno}: asm {a:05X}: the code is {len(code)} bytes, '
                                  f'more than the {n} it replaces')
@@ -366,6 +387,7 @@ def parse(spec, cart, sjasmplus):
                 raise SystemExit(f'{spec}:{lineno}: page {num} is already defined')
             code, syms = assemble_block(sjasmplus, src, n0, body, PAGE_ORG, labels, sym=True)
             abi7 = abi7 or uses_names(body, ABI7_NAMES)
+            abi9 = abi9 or uses_names(body, HALT_IO)
             if len(code) > PAGE_MAX:
                 raise SystemExit(f'{spec}:{lineno}: page {num} is {len(code)} bytes, more than {PAGE_MAX}')
             ents = []
@@ -434,6 +456,15 @@ def parse(spec, cart, sjasmplus):
             r['tilecache'] = True
         elif word == 'hsplit':
             r['hsplit'] = True
+        elif word == 'collline':
+            r['collline'] = True
+        elif word == 'rastseg':
+            r['rastseg'] = True
+        elif word == 'workline':
+            rest = rest.strip()
+            if not rest.isdigit() or not 1 <= int(rest) <= 191:
+                raise SystemExit(f'workline {rest}: not an SMS line from 1 to 191')
+            r['workline'] = int(rest)
         elif word == 'hz':
             rest = rest.strip()
             if rest not in ('50', '60', 'any'):
@@ -528,6 +559,15 @@ def parse(spec, cart, sjasmplus):
                 if cart[p:p + 2] != b'\xed\xa3':
                     raise SystemExit(f'{p:04X}: not OUTI')
                 patch(p, [rst['outi_run'], (end - p) // 2])
+        elif word in ('eihalt', 'haltret'):
+            a = int(rest, 16)
+            want = b'\xfb\x76' if word == 'eihalt' else b'\x76\xc9'
+            if cart[a:a + 2] != want:
+                raise SystemExit(f'{word} {a:05X}: cart has {cart[a:a + 2].hex()}, not {want.hex()}')
+            if 'io' not in rst:
+                raise SystemExit(f'{spec}:{lineno}: {word} needs an io vector')
+            patch(a, [rst['io'], HALT_IO[word + '_io']])
+            abi9 = True
         elif word == 'poke':
             a, old, new = rest.split()
             a, old, new = int(a, 16), bytes.fromhex(old), bytes.fromhex(new)
@@ -583,6 +623,16 @@ def parse(spec, cart, sjasmplus):
         r['abi'] = max(r['abi'], 7)
     if r['hsplit']:
         r['abi'] = max(r['abi'], 8)
+    if abi9:
+        r['abi'] = max(r['abi'], 9)
+    if r['collline']:
+        r['abi'] = max(r['abi'], 10)
+    if r['rastseg']:
+        if r['rcode'] is None:
+            raise SystemExit('rastseg needs rastercode')
+        r['abi'] = max(r['abi'], 11)
+    if r['workline']:
+        r['abi'] = max(r['abi'], 12)
     r['ntrace'] = ntrace
     return r
 
@@ -691,7 +741,10 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
 
     conf = (f'priority={int(r["priority"])}\ntoppal={int(r["toppal"])}\n'
             f'tilecache={int(r["tilecache"])}\nhz={r["hz"]}\n'
-            + ('hsplit=1\n' if r['hsplit'] else '')).encode('ascii')
+            + ('hsplit=1\n' if r['hsplit'] else '')
+            + ('collline=1\n' if r['collline'] else '')
+            + ('rastseg=1\n' if r['rastseg'] else '')
+            + (f'workline={r["workline"]}\n' if r['workline'] else '')).encode('ascii')
     meta = load_meta(crc, r['name'], compat, titles)
     metab = ''.join(f'{k}={v}\n' for k, v in meta.items()).encode('ascii')
 

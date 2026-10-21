@@ -117,6 +117,8 @@ Some games set the horizontal scroll on nearly every line from a line interrupt.
 
 The runtime calls the routine once a frame with HL pointing to a table of 192 bytes, one per line, IX pointing to the runtime's copy of VDP registers 0 to 10, and the game's RAM at `$C000`. The routine fills the table with the value of VDP register 8 for each line, and returns with carry set when the table is valid for this frame. With carry clear, the runtime uses its normal scroll handling.
 
+With `rastseg=1` in `CONF`, a table the routine returns while the VDP is in 224-line mode is a list of segments instead: pairs of bytes, the segment's first SMS line (0 to 223) and its register 8 value, with the lines rising, ended by a line of 224 or more. The first segment starts at line 0 whatever its line byte says. A line that is not above the one before also ends the list, and so does the 32nd pair. The routine reads IX to know the mode (register 0 bit 1 and register 1 bit 4). In 192-line mode the table is the per-line table, as without the key.
+
 ## `CONF`: settings
 
 The section is text, with one `key=value` per line. The reader ignores unknown keys.
@@ -129,9 +131,12 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 | `toppal` | `0`, `1` | show the palette the frame handler leaves from line 0 of the picture |
 | `tilecache` | `0`, `1` | copy the tiles that block writes take whole from cart ROM from the converted cart (the cart as Next tile rows, made at game start), and do not convert them again |
 | `hsplit` | `0`, `1` | a horizontal scroll write in the picture (a line interrupt split) also moves the copper's map switch column for the lines below it. A file with `hsplit=1` needs runtime ABI 8. |
+| `collline` | `0`, `1` | a status read in the picture gets the sprite collision bit from the first line where two sprites' boxes meet, once a picture. A file with `collline=1` needs runtime ABI 10. |
+| `rastseg` | `0`, `1` | in 224-line mode the `RASTER` routine's table is a list of (first line, H) segments (see `RASTER`). A file with `rastseg=1` needs runtime ABI 11. |
+| `workline` | `1` to `191` | the runtime's once-a-frame work runs from a line interrupt at this SMS line of the picture, not from the ULA interrupt below the picture. Without the key, or with another value, the work runs as before. A file with `workline` needs runtime ABI 12. |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
 
-NextMasterSystem acts on `priority`, `toppal`, `tilecache`, `hsplit` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
+NextMasterSystem acts on `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
 
 ## `META`: the game's details
 
@@ -244,8 +249,13 @@ Most changes in `PTCH` replace an instruction in the game with an `RST` to the r
 | `$81 + 8r` | `OUT (C),r`, as the first of a run | none |
 | `$C3`, `$CB` | `OUTI`, `OUTD`, as the first of a run | none |
 | `$80` | far call into a code page; see `PAGE` | `u8` page, `u8` entry |
+| `$76` | `HALT` (ABI 9) | none |
+| `$FB` | `EI` then `HALT`: the 2 bytes `FB 76` (ABI 9) | none |
+| `$C9` | `HALT` then `RET`: the 2 bytes `76 C9` (ABI 9) | none |
+
+A patched `HALT` ends when the runtime enters the game's interrupt handler, for a frame event or a line event, as the `HALT` ends on the Master System. The runtime's own interrupts, which end a native `HALT` on the Next, do not end it. `$76` takes the game's interrupt state at the site; `$FB` turns interrupts on first. With interrupts off, `$76` and `$C9` halt as the native `HALT` does. The pause NMI does not end a patched `HALT`. `HALT` is one byte, so `$76` is for code of our own (an `asm` block or a code cave) that makes room for the `RST` and the code.
 
 ## Versions
 
 - The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip.
-- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, a file whose page code calls `jt_vwrite` needs ABI 7, and a file with `hsplit=1` in `CONF` needs ABI 8, so that a runtime that does not know the key refuses the file rather than run the game without it.
+- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, a file whose page code calls `jt_vwrite` needs ABI 7, a file with `hsplit=1` in `CONF` needs ABI 8, and a file that uses the inline codes `$76`, `$FB` or `$C9` (a patched `HALT`) needs ABI 9, a file with `collline=1` needs ABI 10, a file with `rastseg=1` needs ABI 11, and a file with `workline` needs ABI 12, so that a runtime that does not know the key or the code refuses the file rather than run the game without it.

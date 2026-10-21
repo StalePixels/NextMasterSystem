@@ -201,7 +201,22 @@ static uint8_t conf_is(const char *line, int16_t n, const char *s)
     return n == l && !memcmp(line, s, l);
 }
 
-/* CONF switches: priority=1, toppal=1, tilecache=1, hsplit=1, and hz=50 or hz=60.
+/* CONF workline=N: SMS line N, 1 to 191, else 0 (off). */
+static uint8_t conf_line(const char *line, int16_t n)
+{
+    uint16_t v = 0;
+    int16_t i;
+
+    if (n < 10 || memcmp(line, "workline=", 9)) return 0;
+    for (i = 9; i < n; i++) {
+        if (line[i] < '0' || line[i] > '9' || v > 191) return 0;
+        v = v * 10 + (line[i] - '0');
+    }
+    return v < 192 ? (uint8_t)v : 0;
+}
+
+/* CONF switches: priority=1, toppal=1, tilecache=1, hsplit=1, collline=1,
+ * rastseg=1, workline=N, and hz=50 or hz=60.
  * Unknown keys, and hz=any, are skipped.
  * Returns 0 or a failure code. */
 static uint8_t read_conf(const struct nms *f)
@@ -209,8 +224,10 @@ static uint8_t read_conf(const struct nms *f)
     struct rd r;
     char line[LINE_MAX];
     int16_t n;
+    uint8_t w;
 
     nm.launch.flags = 0;
+    nm.launch.wline = 0;
     if (!(f->seen & (1 << C_CONF))) return 0;
     if (open_chunk(&r, f, C_CONF)) return NM_E_BADOVL;
     while ((n = rd_line(&r, line)) >= 0) {
@@ -218,6 +235,9 @@ static uint8_t read_conf(const struct nms *f)
         if (conf_is(line, n, "toppal=1")) nm.launch.flags |= NM_FL_TOPPAL;
         if (conf_is(line, n, "tilecache=1")) nm.launch.flags |= NM_FL_TILECACHE;
         if (conf_is(line, n, "hsplit=1")) nm.launch.flags |= NM_FL_HSPLIT;
+        if (conf_is(line, n, "collline=1")) nm.launch.flags |= NM_FL_COLLLINE;
+        if (conf_is(line, n, "rastseg=1")) nm.launch.flags |= NM_FL_RASTSEG;
+        if ((w = conf_line(line, n)) != 0) nm.launch.wline = w;
         if (conf_is(line, n, "hz=50")) nm.launch.flags |= NM_FL_HZ;
         if (conf_is(line, n, "hz=60")) nm.launch.flags |= NM_FL_HZ | NM_FL_HZ60;
     }
