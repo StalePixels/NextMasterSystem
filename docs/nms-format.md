@@ -135,8 +135,10 @@ The section is text, with one `key=value` per line. The reader ignores unknown k
 | `rastseg` | `0`, `1` | in 224-line mode the `RASTER` routine's table is a list of (first line, H) segments (see `RASTER`). A file with `rastseg=1` needs runtime ABI 11. |
 | `workline` | `1` to `191` | the runtime's once-a-frame work runs from a line interrupt at this SMS line of the picture, not from the ULA interrupt below the picture. Without the key, or with another value, the work runs as before. A file with `workline` needs runtime ABI 12. |
 | `button1`, `button2`, `pause` | key or pad button names | the control map |
+| `ntdiff` | `0`, `1` | a register 2 write that moves the name table writes into the Next maps only the bytes that differ between the old and the new table, not the whole table. A file with `ntdiff=1` needs runtime ABI 13. |
+| `prichg` | `0`, `1` | with `priority`: a tile that priority cells show and that the game writes again marks those cells, so Layer 2 draws them again from the new tile. A file with `prichg=1` needs runtime ABI 13. |
 
-NextMasterSystem acts on `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
+NextMasterSystem acts on `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline`, `ntdiff`, `prichg` and `hz`. It does not act on the other keys yet. A runtime that does not know `tilecache` ignores it, and the game runs as with `tilecache=0`. A runtime that does not know `hz` ignores it, and the game runs at the rate the Next booted at.
 
 ## `META`: the game's details
 
@@ -219,6 +221,8 @@ Page code may do what it needs. It can turn interrupts off, switch to a stack of
 
 The source lies in `$0000-$DFFF`. For example, a name table column of 28 cells, 2 bytes each, from a copy in RAM with 64 bytes to a row: HL = the copy's first cell, DE = the VRAM address of the column's first cell, B = 2, C = 28, IX = IY = 64.
 
+The runtime reads IX and IY on every call, also when C is 1. With one run they do not change the bytes written, but they select which of the runtime's two write paths it takes, so set them to defined values.
+
 For each byte, `jt_vwrite` does what the runtime does for a write to the data port: it writes the VRAM copy, the Next tilemaps for a name table entry, the priority marks with the `priority` switch, the mark that a tile must be converted again, and the mark that the sprite table changed. It leaves the VDP state as the writes would: the address after the last byte of the last run, code 1 (a VRAM write), the control latch clear, and the read buffer holding the last byte written.
 
 It keeps BC, DE, HL, IX, IY, the alternate registers and the interrupt state; A and F change. It runs with interrupts off and on a stack of its own, so the game's interrupt handler cannot run in the middle of it. It writes VRAM only: CRAM writes go through the I/O `RST`.
@@ -258,4 +262,4 @@ A patched `HALT` ends when the runtime enters the game's interrupt handler, for 
 ## Versions
 
 - The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip.
-- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, a file whose page code calls `jt_vwrite` needs ABI 7, a file with `hsplit=1` in `CONF` needs ABI 8, and a file that uses the inline codes `$76`, `$FB` or `$C9` (a patched `HALT`) needs ABI 9, a file with `collline=1` needs ABI 10, a file with `rastseg=1` needs ABI 11, and a file with `workline` needs ABI 12, so that a runtime that does not know the key or the code refuses the file rather than run the game without it.
+- The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, a file whose page code calls `jt_vwrite` needs ABI 7, a file with `hsplit=1` in `CONF` needs ABI 8, and a file that uses the inline codes `$76`, `$FB` or `$C9` (a patched `HALT`) needs ABI 9, a file with `collline=1` needs ABI 10, a file with `rastseg=1` needs ABI 11, a file with `workline` needs ABI 12, and a file with `ntdiff=1` or `prichg=1` needs ABI 13, so that a runtime that does not know the key or the code refuses the file rather than run the game without it.

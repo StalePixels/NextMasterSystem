@@ -216,7 +216,7 @@ static uint8_t conf_line(const char *line, int16_t n)
 }
 
 /* CONF switches: priority=1, toppal=1, tilecache=1, hsplit=1, collline=1,
- * rastseg=1, workline=N, and hz=50 or hz=60.
+ * rastseg=1, ntdiff=1, prichg=1, workline=N, and hz=50 or hz=60.
  * Unknown keys, and hz=any, are skipped.
  * Returns 0 or a failure code. */
 static uint8_t read_conf(const struct nms *f)
@@ -228,6 +228,7 @@ static uint8_t read_conf(const struct nms *f)
 
     nm.launch.flags = 0;
     nm.launch.wline = 0;
+    nm.launch.flags2 = 0;
     if (!(f->seen & (1 << C_CONF))) return 0;
     if (open_chunk(&r, f, C_CONF)) return NM_E_BADOVL;
     while ((n = rd_line(&r, line)) >= 0) {
@@ -237,6 +238,8 @@ static uint8_t read_conf(const struct nms *f)
         if (conf_is(line, n, "hsplit=1")) nm.launch.flags |= NM_FL_HSPLIT;
         if (conf_is(line, n, "collline=1")) nm.launch.flags |= NM_FL_COLLLINE;
         if (conf_is(line, n, "rastseg=1")) nm.launch.flags |= NM_FL_RASTSEG;
+        if (conf_is(line, n, "ntdiff=1")) nm.launch.flags2 |= NM_FL2_NTDIFF;
+        if (conf_is(line, n, "prichg=1")) nm.launch.flags2 |= NM_FL2_PRICHG;
         if ((w = conf_line(line, n)) != 0) nm.launch.wline = w;
         if (conf_is(line, n, "hz=50")) nm.launch.flags |= NM_FL_HZ;
         if (conf_is(line, n, "hz=60")) nm.launch.flags |= NM_FL_HZ | NM_FL_HZ60;

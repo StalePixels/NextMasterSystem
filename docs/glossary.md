@@ -54,7 +54,7 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **Codemasters mapper.** A mapper used by some carts, for example Micro Machines. It switches banks by stores to `$0000`, `$4000` and `$8000`, not by the Sega registers at `$FFFC-$FFFF`. Spec line: `codem`. Read more: sitescan.md, "Running it" (`--mapper`).
 
-**`CONF`.** The chunk of settings in an `.nms` file: text lines of `key=value`. The keys the runtime acts on are `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline` and `hz`. Read more: nms-format.md, "`CONF`: settings".
+**`CONF`.** The chunk of settings in an `.nms` file: text lines of `key=value`. The keys the runtime acts on are `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline`, `ntdiff`, `prichg` and `hz`. Read more: nms-format.md, "`CONF`: settings".
 
 **Confidence.** The rating of a row in `NAME.sites.tsv`: `high`, `medium`, `low` or `very-low`. `high` is reached by proven control flow from the vectors, an `--entry` address or a dynamic log. `medium` is reached through something the scanner inferred, such as a guessed table length or a harvested address. The byte scans have their own scale. Read more: sitescan.md, "`NAME.sites.tsv`" and "Byte scans".
 
@@ -200,6 +200,8 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **`notrace`.** Spec line: no trace forms in this overlay. See "Trace". Read more: mknms.py spec lines (`python3 tools/mknms.py --help`).
 
+**`ntdiff`.** Spec line and `CONF` key. A register 2 write that moves the name table writes into the Next maps only the bytes that differ between the old and the new table, not the whole table: for games that keep two name tables and move between them. Code: `nt_diff` in `fw2.asm`, `r2_hk`. Read more: overlays.md, "Switches"; design.md, "Display off and on".
+
 **Once-a-frame work.** The work the runtime does once in each frame: the copper list, keyboard, map rebuild, tile conversion, priority tiles and sprites. It runs from the ULA interrupt, from a V counter read in the vertical blank, or from a handler exit past the interrupt's line; with the `workline` switch, from a line interrupt in the picture. Code: `vbl_work` in `fw.asm`, `fw2_vbl`. The game's own work in a frame, as in "frame work does not fit in a frame", is a different thing. Read more: design.md, "The once-a-frame work".
 
 **Operation (`PTCH`).** One entry in a `PTCH` chunk: `CHECK`, `PATCH`, `START`, `RAMSITES` or `RASTER`, ended by `END`. The loader reads them twice: the first pass checks, the second applies. Read more: nms-format.md, "`PTCH`: operations".
@@ -235,6 +237,8 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 **`poke`.** Spec line `poke ADDR OLD NEW` that replaces hex bytes at a cart offset. Use it for data. Code goes in an `asm` block. Read more: overlays.md, "Writing code in a spec".
 
 **Port class.** See "Class".
+
+**`prichg`.** Spec line and `CONF` key, with `priority`. When the game writes a tile again that priority cells show, Layer 2 draws those cells again from the new tile; without it they keep the old pixels until a whole rebuild. Code: `pc_chg` in `fw3.asm`, `cp_hk`, `pri_chg`. Read more: overlays.md, "Switches"; design.md, "Display off and on".
 
 **Primary CRC32.** The CRC32 of the cart an overlay was made for. It names the overlay file and is the first entry in `CRCS`. Read more: nms-format.md, "Header: 16 bytes".
 
@@ -294,7 +298,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **Streamer.** In `sitescan.py`, a loop that writes the VDP control port at least twice and the data port at least once in a pass and moves an address by `$40` (one name table row): a column or rectangle writer. Rule 3 of the pattern rules reports them. Read more: sitescan.md, "Rule 3: column and rectangle streamers".
 
-**Switch.** A spec line that turns on a runtime feature that costs time or memory and helps only some games: `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline`, `hz`. `mknms.py` writes it into `CONF`. Measurement decides which overlays turn which on. Read more: overlays.md, "Switches".
+**Switch.** A spec line that turns on a runtime feature that costs time or memory and helps only some games: `priority`, `toppal`, `tilecache`, `hsplit`, `collline`, `rastseg`, `workline`, `ntdiff`, `prichg`, `hz`. `mknms.py` writes it into `CONF`. Measurement decides which overlays turn which on. Read more: overlays.md, "Switches".
 
 **Task switch.** A `RET` that runs after the game loaded SP with a value the scanner does not know, so it returns to an address on another stack. Task schedulers do this. The scanner does not follow it. Read more: sitescan.md, "How it works".
 

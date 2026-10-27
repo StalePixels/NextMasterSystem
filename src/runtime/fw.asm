@@ -88,7 +88,7 @@ fw_jt:
 		jp fw_outi_run		; $E012 run of OUTIs to the end of an unrolled block (RST + inline count)
 		jp fw_io		; $E015 any I/O instruction (RST + inline op), ABI 2
 		jp fw_io0		; $E018 the same, as the RST $00 vector (ABI 3)
-FW_ABI		equ 12			; 6: code pages (far call, jt_far, jt_peek); 7: jt_vwrite; 8: hsplit; 9: HALT; 10: collline; 11: rastseg; 12: workline
+FW_ABI		equ 13			; 6: code pages (far call, jt_far, jt_peek); 7: jt_vwrite; 8: hsplit; 9: HALT; 10: collline; 11: rastseg; 12: workline; 13: ntdiff, prichg
 		public FW_ABI
 ; $E01B: a JP to the outer shell's resume entry. The shell writes its target
 ; (the two bytes at $E01C) before it starts a game. fw_quit jumps here.
@@ -183,6 +183,11 @@ vw_stack:	ds 64			; jt_vwrite: its own stack, in this page
 vw_stack_top:
 nr_saved	equ vw_stack		; NextReg values to restore on quit, from the
 					; loader: fw4_start keeps them in fw4 (nr_keep)
+fw_flags2	equ nr_saved+44		; more overlay switches, from the loader after
+					; wl_n: bit 0 ntdiff (nt_diff in fw2), bit 1
+					; prichg (pc_chg in fw3). Read by
+					; fw2_switches at game start, before jt_vwrite
+					; uses this room as its stack
 fw_stack:	ds 120
 fw_stack_top:
 G_B		equ fw_stack_top-1

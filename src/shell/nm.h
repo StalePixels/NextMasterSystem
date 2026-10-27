@@ -82,6 +82,8 @@ struct nm_launch {
     uint8_t  nr[43];     /* NextReg number and value pairs, then $FF */
     uint8_t  wline;      /* CONF workline=N: SMS line N (1-191), 0 = off. The
                             loader copies it with nr: the runtime's wl_n */
+    uint8_t  flags2;     /* more CONF switches, NM_FL2_x. The loader copies it
+                            with nr: the runtime's fw_flags2 */
 };
 /* nm_launch.flags, the runtime's fw_flags */
 #define NM_FL_PRIORITY  0x01   /* priority=1 */
@@ -92,6 +94,9 @@ struct nm_launch {
 #define NM_FL_HSPLIT    0x20   /* hsplit=1 */
 #define NM_FL_COLLLINE  0x40   /* collline=1 */
 #define NM_FL_RASTSEG   0x80   /* rastseg=1 */
+/* nm_launch.flags2, the runtime's fw_flags2 */
+#define NM_FL2_NTDIFF   0x01   /* ntdiff=1 */
+#define NM_FL2_PRICHG   0x02   /* prichg=1 */
 void nm_launch(struct nm_launch *p) __z88dk_fastcall;
 
 /* Leave for NextZXOS (glue.asm). Never returns. */

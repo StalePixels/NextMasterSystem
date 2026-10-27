@@ -818,7 +818,7 @@ vdp_reg_w__mode_check:	push de
 vdp_reg_w__r2:		ld a,e			; the same value again: the base, the page roles
 		cp d			; and the maps stand (nt_put keeps the maps), so
 		ret z			; no map_rebuild, nor Layer 2's whole rebuild after it
-		jp nt_base_set
+r2_hk:		jp nt_base_set		; ntdiff: nt_diff (fw2_switches)
 vdp_reg_w__r5:		ld a,e
 		and $7E
 		rrca
@@ -2790,6 +2790,85 @@ pg_ram:		ds CODE_MAX		; RAM page of each page number, 0 = none
 pg_n:		ds CODE_MAX		; its number of entries
 pg_first:	ds CODE_MAX		; its first entry in pg_ent
 pg_ent:		ds 2*CODE_ENTS		; entry addresses, in $2000-$3FFF
+
+; ----------------------------------------------------------------------
+; The ntdiff switch (fw_flags2 bit 0; fw2_switches points r2_hk here): a
+; register 2 write that moves the name table writes only the map cells
+; that differ between the old and the new table, not the whole map. The
+; map equals the table at nt_base, because every write to that table goes
+; through nt_put at once; so the cells to write are the bytes of the new
+; table that differ from the old one in the VRAM copy. Each goes through
+; nt_put, which marks its cell for Layer 2 (pri_mark1) with priority, so
+; no pri_full. nt_put puts slot 1 back from cur_mmu+1: that holds
+; FW2_PAGE meanwhile (a handler runs with interrupts off). nt_base_set
+; sets the base and the page roles (region_update) as without the switch.
+; Over ND_MAX differing bytes nt_dirty stays set and the once-a-frame work
+; rebuilds the map whole. With a rebuild already due (nt_dirty set) the
+; map is not the old table, and the write goes to nt_base_set alone.
+; ----------------------------------------------------------------------
+ND_MAX		equ 1200		; differing bytes: past them map_rebuild costs less
+nt_diff:	ld a,(nt_dirty)
+		or a
+		jp nz,nt_base_set
+		ld hl,(nt_base)
+		push hl
+		call nt_base_set
+		pop de			; DE = the old table, HL = the new one: low bytes 0
+		ld hl,(nt_base)
+		ld a,h
+		cp d
+		jr z,nt_diff__ok	; the same table (another bit of register 2)
+		ld a,(m224)
+		add a,$47		; the end: $700 bytes on ($800 in 224-line mode), + $4000
+		add a,h
+		ld (nt_diff__end+1),a
+		set 6,h			; the VRAM copy at $4000-$7FFF
+		set 6,d
+		ld bc,ND_MAX
+		ld (nd_left),bc
+		ld a,(cur_mmu+1)
+		ld (nt_diff__mmu+1),a
+		ld a,FW2_PAGE
+		ld (cur_mmu+1),a
+		nextreg $52,SHADOW_PAGE
+		nextreg $53,SHADOW_PAGE+1
+nt_diff__l:	ld a,(de)
+		cp (hl)
+		jr nz,nt_diff__p
+nt_diff__n:	inc e
+		inc l
+		jr nz,nt_diff__l
+		inc d
+		inc h
+		ld a,h
+nt_diff__end:	cp 0			; (the end's high byte)
+		jr nz,nt_diff__l
+		xor a
+		ld (nt_dirty),a		; the map is the new table
+nt_diff__mmu:	ld a,0			; (the game's slot 1 page)
+		ld (cur_mmu+1),a
+		ld a,(cur_mmu+2)
+		nextreg $52,a
+		ld a,(cur_mmu+3)
+		nextreg $53,a
+		ret
+nt_diff__p:	push de
+		ld c,(hl)
+		res 6,h
+		call nt_put		; keeps HL
+		set 6,h
+		pop de
+		ld bc,(nd_left)
+		dec bc
+		ld (nd_left),bc
+		ld a,b
+		or c
+		jr nz,nt_diff__n
+		jr nt_diff__mmu		; ND_MAX reached: nt_dirty stays set
+nt_diff__ok:	xor a
+		ld (nt_dirty),a
+		ret
+nd_left:	dw 0
 
 
 fw2_end:

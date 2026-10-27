@@ -57,6 +57,8 @@ static const char s_hs[]      = "scroll split";
 static const char s_cl[]      = "collision line";
 static const char s_rs[]      = "scroll segments";
 static const char s_wl[]      = "work line ";
+static const char s_nd[]      = "name table diff";
+static const char s_pc[]      = "priority tile changes";
 static const char s_sep[]     = ", ";
 static const char s_prompt[]  = "Press any key or fire to start.";
 
@@ -167,7 +169,7 @@ static void wait_key(void)
 
 void *info_show(void *unused)
 {
-    char buf[120];       /* the longest value is the list of every switch */
+    char buf[164];       /* the longest value is the list of every switch */
     char *p, *q;
     const char *name;
     uint32_t size;
@@ -249,6 +251,14 @@ void *info_show(void *unused)
     if (fl & NM_FL_RASTSEG) {
         if (q != buf) q = put_str(q, s_sep);
         q = put_str(q, s_rs);
+    }
+    if (nm.launch.flags2 & NM_FL2_NTDIFF) {
+        if (q != buf) q = put_str(q, s_sep);
+        q = put_str(q, s_nd);
+    }
+    if (nm.launch.flags2 & NM_FL2_PRICHG) {
+        if (q != buf) q = put_str(q, s_sep);
+        q = put_str(q, s_pc);
     }
     if (nm.launch.wline) {
         if (q != buf) q = put_str(q, s_sep);

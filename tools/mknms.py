@@ -122,6 +122,12 @@ first 32K it is also the Z80 address.
   workline N         CONF workline=N: the runtime's once-a-frame work runs
                      from SMS line N (1 to 191) of the picture, not below the
                      picture; needs ABI 12
+  ntdiff             CONF ntdiff=1: a register 2 write that moves the name
+                     table writes only the map cells that differ between the
+                     two tables, not the whole map; needs ABI 13
+  prichg             CONF prichg=1: a tile that a priority cell shows and
+                     that the game rewrites marks that cell, so Layer 2 draws
+                     it again from the new tile; needs priority and ABI 13
 
 Names that every asm block knows (the framework's jump table and the fixed
 state at $E000-$E07A, from src/runtime/fw.asm). Jump table entries:
@@ -149,7 +155,7 @@ an io vector, 2 with one, 3 with trace forms, fw_io0 or mapsthl, 4 with
 RAMSITES, RASTER or the ABI 4 mapper lines, 5 with LD I,A, LD A,I or a CONF
 switch, 6 with a page, 7 with a block that calls jt_vwrite, 8 with hsplit,
 9 with a patched HALT (eihalt, haltret, or halt_io and its kin in a block),
-10 with collline, 11 with rastseg, 12 with workline.
+10 with collline, 11 with rastseg, 12 with workline, 13 with ntdiff or prichg.
 """
 import argparse
 import csv
@@ -339,7 +345,7 @@ def chunk(tag, data):
 def parse(spec, cart, sjasmplus):
     """Run the spec over the cart. Returns a dict of what the file needs."""
     r = dict(name='', crc=None, ops=[], start=None, rcode=None, ramsites=[], ramcont=None,
-             priority=False, toppal=False, tilecache=False, hsplit=False, collline=False, rastseg=False, workline=0, hz='any', abi=1, pages={}, libpages={})
+             priority=False, toppal=False, tilecache=False, hsplit=False, collline=False, rastseg=False, ntdiff=False, prichg=False, workline=0, hz='any', abi=1, pages={}, libpages={})
     rst = {}
     outs = {}
     notrace, plain, io0, abi4, abi5, abi7, abi9 = False, set(), False, False, False, False, False
@@ -460,6 +466,10 @@ def parse(spec, cart, sjasmplus):
             r['collline'] = True
         elif word == 'rastseg':
             r['rastseg'] = True
+        elif word == 'ntdiff':
+            r['ntdiff'] = True
+        elif word == 'prichg':
+            r['prichg'] = True
         elif word == 'workline':
             rest = rest.strip()
             if not rest.isdigit() or not 1 <= int(rest) <= 191:
@@ -633,6 +643,10 @@ def parse(spec, cart, sjasmplus):
         r['abi'] = max(r['abi'], 11)
     if r['workline']:
         r['abi'] = max(r['abi'], 12)
+    if r['prichg'] and not r['priority']:
+        raise SystemExit('prichg needs priority')
+    if r['ntdiff'] or r['prichg']:
+        r['abi'] = max(r['abi'], 13)
     r['ntrace'] = ntrace
     return r
 
@@ -744,6 +758,8 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
             + ('hsplit=1\n' if r['hsplit'] else '')
             + ('collline=1\n' if r['collline'] else '')
             + ('rastseg=1\n' if r['rastseg'] else '')
+            + ('ntdiff=1\n' if r['ntdiff'] else '')
+            + ('prichg=1\n' if r['prichg'] else '')
             + (f'workline={r["workline"]}\n' if r['workline'] else '')).encode('ascii')
     meta = load_meta(crc, r['name'], compat, titles)
     metab = ''.join(f'{k}={v}\n' for k, v in meta.items()).encode('ascii')

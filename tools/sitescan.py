@@ -722,6 +722,11 @@ def subst(v, cs):
         if isinstance(b, int):
             return ('idx', b)
         return ('idx', b[1]) if is_addr_sym(b) else None
+    if isinstance(b, tuple) and b[0] == 'off' and b[2] == 0 and isinstance(b[1], tuple) \
+            and b[1][0] == 'argpair' and t in ('word', 'tb'):
+        # the caller passes on a table address it received itself (a stub such as
+        # RST $28 / JP (HL) entered with the caller's HL): the read is at the outer caller's base
+        return (t, b[1])
     if t == 'word':
         return ('word', b) + index_in_caller(v, cs) if isinstance(b, int) else None
     if t == 'tb':
@@ -1573,6 +1578,55 @@ class Scanner:
             if o is not None:
                 self.table_bases_cur.add(o)
 
+    @staticmethod
+    def _idx_high(s):
+        """The index symbol X when L is ('lo', X), X base plus an index, and H still holds the
+        high byte of X's base (the carry of the low-byte add not yet taken into H); else None."""
+        lo, h = s['L'], s['H']
+        if not (isinstance(lo, tuple) and lo[0] == 'lo' and isinstance(lo[1], tuple) and lo[1][0] == 'idx'):
+            return None
+        x = lo[1]
+        b = x[1]
+        if isinstance(b, int):
+            return x if h == b >> 8 else None
+        if b == ('argpair', 'HL') and as_half(h) == ('hi', ('off', ('argpair', 'HL'), 0)):
+            return x
+        return None
+
+    def carry_into_h(self, region, addr, ins, s):
+        """The carry form of an 8-bit add into HL: ADD A,r / JR NC,$+3 / INC H. It takes the
+        carry of an index add into H, as ADC A,H / SUB L / LD H,A does in the other 8-bit form.
+        At the JR NC, with L the low byte of base plus index and H the base's high byte, H
+        becomes the high byte of the same sum on both paths. At the INC H that the JR NC skips,
+        H keeps a high byte of base plus index, and before the base is added (ADD A,A / JR NC /
+        INC H, the doubling of the index) the carry belongs to the index, so H is kept.
+        Returns the state after ins, or None when ins is not part of this form."""
+        t = ins.sem[0]
+        if t == 'jr' and ins.sem[2] == 'NC' and ins.sem[1] == (addr + 3) & 0xFFFF:
+            nx = self.decode_node((region, (addr + 2) & 0xFFFF))
+            x = self._idx_high(s) if nx is not None and nx.sem == ('inc8', 'H') else None
+            if x is None:
+                return None
+            s1 = self.step(s, ins)
+            s1['H'] = ('hi', x)
+            return s1
+        if ins.sem == ('inc8', 'H'):
+            pj = self.decode_node((region, (addr - 2) & 0xFFFF))
+            if pj is None or pj.sem != ('jr', (addr + 1) & 0xFFFF, 'NC'):
+                return None
+            h = s['H']
+            if isinstance(h, tuple) and h[0] == 'hi' and isinstance(h[1], tuple) and h[1][0] == 'idx':
+                pass
+            elif getattr(self.decode_node((region, (addr - 3) & 0xFFFF)), 'sem', None) == ('alu', 'ADD', 'A'):
+                # ADD A,A / JR NC,$+3 / INC H: the doubling's carry, before the base is added
+                pass
+            else:
+                return None
+            s1 = dict(s)
+            s1['F'] = None
+            return s1
+        return None
+
     def flow(self, R, n, ins, s, final):
         region, addr = n
         sem = ins.sem
@@ -1596,7 +1650,8 @@ class Scanner:
                 if final:
                     self.bad_nodes.add(n)
                 return out
-        s1 = self.step(s, ins)
+        carry = self.carry_into_h(region, addr, ins, s)
+        s1 = carry if carry is not None else self.step(s, ins)
 
         def go(target, st, tag='d', why_ctx='jump'):
             nodes, why = self.resolve_target(R.entry, n, target, st)
@@ -5189,7 +5244,8 @@ class MinTime:
                 continue
             seen.add(n)
             ins = self.sc.decode_node(n)
-            if ins.sem[0] == 'halt' or n in self.wait:
+            if ins is None or ins.sem[0] == 'halt' or n in self.wait:
+                # no instruction here (the bytes run off the end of the cart), a HALT or a wait loop
                 continue
             callees = self.calls.get((c, n), ())
             if callees and not any(self.passable(x) for x in callees):

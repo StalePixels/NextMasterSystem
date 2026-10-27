@@ -1317,7 +1317,7 @@ conv_page__vn:		inc hl
 		ld a,(cv_mask)
 		and (hl)
 		jr z,conv_page__np
-		ld (pri_redo),a
+cp_hk:		ld (pri_redo),a		; prichg: jp pc_chg (fw2_switches)
 conv_page__np:		ld l,e
 		ld h,0
 		add hl,hl
@@ -2608,6 +2608,21 @@ fw2_switches__cl:	ld (vb_spr+1),hl
 		ld de,seg_inc
 fw2_switches__rs:	ld (rf_new+1),hl
 		ld (rf_inc+1),de
+		; ntdiff (fw_flags2 bit 0): r2_hk at nt_diff. prichg (bit 1): cp_hk
+		; becomes jp pc_chg; without it cp_hk keeps its own instruction.
+		ld a,(fw_flags2)
+		rra
+		ld hl,nt_base_set
+		jr nc,fw2_switches__nd
+		ld hl,nt_diff
+fw2_switches__nd:	ld (r2_hk+1),hl
+		rra
+		jr nc,fw2_switches__pc
+		ld a,$C3		; JP
+		ld (cp_hk),a
+		ld hl,pc_chg
+		ld (cp_hk+1),hl
+fw2_switches__pc:
 		; Layer 2 (priority tiles): 256x192 from L2_BANK, above the sprites;
 		; its transparent colour is one the SMS palette never makes
 		ld a,(fw_flags)
@@ -2739,6 +2754,17 @@ pic_ready3:	ld a,(nt_dirty)
 		or a
 		call nz,map_rebuild
 		jp pri_frame
+
+; The prichg switch (fw_flags2 bit 1; fw2_switches makes cp_hk in
+; conv_page a jump here). DE = the page, A = its converted tiles that
+; pri_tiles holds: those tiles also get their pri_chg bits, so pri_redraw
+; and p2_redraw draw their priority cells again.
+pc_chg:		ld (pri_redo),a
+		ld hl,pri_chg
+		add hl,de
+		or (hl)
+		ld (hl),a
+		jp conv_page__np
 
 fw3_end:
 ; assert fw3_end <= $2000, "fw3 overflows its page" (checked by tools/check-layout)
