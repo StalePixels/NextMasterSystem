@@ -720,3 +720,236 @@ sat:    push ix
         ret
 sbuf:   ds 192,0
 endpage
+# Race speed. The race loop's step ($191D-$1BEF) waits for the frame flag $C037 at $191D. On the
+# Master System the step's work (about 70,800 T-states in the one-player race, 63,400 in the
+# attract race) and the interrupt handlers (35,100 T-states a frame: the frame handler and 99 line
+# interrupts) leave the step longer than a frame, so the wait never waits: on a PAL Master System
+# (71,364 T-states a frame) a step takes its work / 36,269 frames, 1.95 in the race. On the Next
+# a step fits in one frame. The cave at $191D far-calls page 1 `pace`, which keeps the Master
+# System's time: it times each step's run on the Next, turns it into the step's Master System
+# time, and releases the next step at the frame event where that time has passed.
+asm 0191D 6   ; CALL $016F; LD HL,$C056
+    rst $00
+    db far_io, pg_pace, ent_pace
+endasm
+page 1 pace
+; pace: the race loop's frame wait, CALL $016F at $191D, and the LD HL,$C056 after it.
+;
+; The step's run. pace releases a step after the frame's once-a-frame work (the ULA interrupt at
+; line 248), so the step runs to its next call of pace with no interrupt. CTC channel 0 times it:
+; started at the release as a timer of 16 cycles a count, read and stopped here. The beam's line
+; at both ends gives the whole wraps of the 8-bit count (4,096 cycles each). A run with a frame
+; event in it ($C037 not 0 here) or of 256 lines or more is not a step that ran alone: the step
+; takes the time of the last one that did.
+;
+; The Master System time of a step, from the reference (sg1000m3) at the step's own instructions:
+; the run less OVH cycles (the far call and this page's code) is 1.4666 Next cycles a T-state
+; (attract race, paired step by step: spread 0.6%). A PAL Master System frame leaves 71,364 -
+; 35,095 = 36,269 T-states to the step, so a count of 16 cycles is 16 / 1.4666 / 36,269 * 256 =
+; 0.077005 in units of 1/256 frame (K = 5047 / 65536). The one-player race also runs the delay
+; loop at $1A2F, 26,005 T-states in 31,008 cycles, a lower ratio than the rest: DLY is the time
+; the run misses, 30 (fitted on the race paired step by step with the reference; the loop alone
+; gives 34).
+;
+; p_debt is the Master System time still owed before the next step starts, in 1/256 frame. Each
+; return here adds the step's time; each frame event takes 256 off. A step is released at the
+; first frame event where less than a frame is owed; owed time below 0 is dropped, as a Master
+; System never runs a step early to catch up. After a gap (fw_frames 16 or more past the last
+; release: the race starts, or comes back from the pre-race loop) nothing is owed.
+;
+; Returns as the game's code does: $C037 = 0, $C042/$C045 (new presses) and $C041/$C044 from the
+; game's routine at $0179, A and B as it leaves them, HL = $C056. Keeps C, DE, IX, IY. Interrupts
+; on, as at the call. Runs on its own stack with interrupts off, and waits on the game's stack
+; with interrupts on and no stack use.
+        OPT --zxnext            ; MUL D,E
+OVH     equ 171                 ; counts of 16 cycles
+DLY     equ 30
+pace:   di
+        ld (p_sp),sp
+        ld sp,p_stk
+        push bc
+        push de
+        ld bc,$183B             ; CTC channel 0: the count, then stop it
+        in e,(c)
+        ld a,$03
+        out (c),a
+        call rdline             ; HL = the beam's line
+        ld a,(p_ok)
+        or a
+        jp z,.gap
+        push hl
+        ld hl,(fw_frames)
+        ld bc,(p_fw)
+        or a
+        sbc hl,bc               ; frames since the release
+        ld a,h
+        or a
+        jp nz,.gap0
+        ld a,l
+        cp 16
+        jp nc,.gap0
+        pop hl
+        ld a,($C037)
+        or a
+        jp nz,.inv              ; a frame event in the step's run
+        ld bc,(p_l0)
+        or a
+        sbc hl,bc
+        jr nc,.pos
+        ld bc,311
+        add hl,bc
+.pos:   ld a,h
+        or a
+        jp nz,.inv              ; 256 lines or more
+        ld a,e
+        neg
+        ld e,a                  ; E = counts since the start, mod 256
+        ld d,l
+        ld l,e
+        ld e,114                ; counts in a line
+        mul d,e                 ; DE = lines * 114
+        ex de,hl                ; HL = lines * 114, DE = counts mod 256
+        or a
+        sbc hl,de
+        ld bc,128
+        add hl,bc               ; H = whole wraps
+        ld l,e                  ; HL = counts since the start
+        ld bc,OVH
+        or a
+        sbc hl,bc
+        jp c,.inv
+        ld b,h                  ; D = HL * 5047 / 65536 (5047 = 19 * 256 + 183)
+        ld c,l
+        ld d,c
+        ld e,183
+        mul d,e
+        ld a,d                  ; lo * 183 / 256
+        ld d,b
+        ld e,183
+        mul d,e
+        ex de,hl
+        ld d,c
+        ld e,19
+        mul d,e
+        add hl,de
+        ld e,a
+        ld d,0
+        add hl,de               ; hi * 183 + lo * 19 + lo * 183 / 256
+        ld e,h                  ; / 256
+        ld d,b
+        ld b,e
+        ld e,19
+        mul d,e                 ; hi * 19
+        ld l,b
+        ld h,0
+        add hl,de               ; HL = the step's time in 1/256 frame
+        ld a,($C06C)
+        or a
+        jr z,.one
+        ld de,DLY
+        add hl,de
+.one:   ld a,h                  ; a whole step (half a frame or more) is the fallback
+        or a
+        jr nz,.keep
+        ld a,l
+        cp 128
+        jr c,.add
+.keep:  ld (p_d),hl
+        jr .add
+.inv:   ld hl,(p_d)
+.add:   ld de,(p_debt)
+        add hl,de
+        ld (p_debt),hl
+        jr .wt
+.gap0:  pop hl
+.gap:   ld hl,0
+        ld (p_debt),hl
+.wt:    pop de
+        pop bc
+        ld (p_c),bc
+        ld sp,(p_sp)
+        ei
+; Wait for a frame event: $C037 not 0 (the frame handler takes 1 off it). No stack use.
+.fw:    ld hl,$C037
+.f1:    ld a,(hl)
+        or a
+        jr z,.f1
+        di
+        ld a,(hl)
+        ld (hl),0
+        neg                     ; frame events since the last look
+        ld l,a
+        ld a,(p_debt+1)
+        sub l
+        ld (p_debt+1),a
+        ei
+        jr z,.go                ; less than a frame owed
+        jp p,.fw                ; a frame or more owed
+        ld hl,0                 ; owed time below 0 is dropped
+        ld (p_debt),hl
+; Release after the once-a-frame work: not on lines 192-250, where the frame handler has run
+; and the ULA interrupt at 248 has not yet.
+.go:    di
+        ld sp,p_stk
+        call rdline
+        ld a,h
+        or a
+        jr nz,.rel              ; line 256 and on
+        ld a,l
+        cp 192
+        jr c,.rel
+        cp 251
+        jr nc,.rel
+        ld sp,(p_sp)
+        ei
+        jr .go
+.rel:   ld (p_l0),hl
+        ld hl,(fw_frames)
+        ld (p_fw),hl
+        ld a,1
+        ld (p_ok),a
+        ld bc,$183B             ; CTC channel 0: timer, 16 cycles a count, from 256
+        ld a,$07
+        out (c),a
+        xor a
+        out (c),a
+        call $0179              ; the game's new presses from $C040/$C043
+        ld hl,p_c
+        ld c,(hl)
+        ld sp,(p_sp)
+        ld hl,$C056
+        ei
+        ret
+; rdline: HL = the beam's Next line (0-310). Interrupts off. Uses A, BC.
+rdline: ld bc,$243B
+.r:     ld a,$1E
+        out (c),a
+        inc b
+        in h,(c)
+        dec b
+        ld a,$1F
+        out (c),a
+        inc b
+        in l,(c)
+        dec b
+        ld a,$1E
+        out (c),a
+        inc b
+        in a,(c)
+        dec b
+        cp h
+        jr nz,.r
+        ld a,h
+        and 1
+        ld h,a
+        ret
+p_sp:   dw 0
+p_c:    dw 0
+p_l0:   dw 0
+p_fw:   dw 0
+p_ok:   db 0
+p_debt: dw 0
+p_d:    dw 500                  ; a step of the one-player race (1.95 frames)
+        ds 32
+p_stk:
+endpage
