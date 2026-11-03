@@ -1,4 +1,6 @@
 # Golden Axe Warrior (USA, Europe, Brazil) (En), CRC32 C7DED988, 256K, Sega mapper, battery-backed cart RAM.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log.
 name Golden Axe Warrior
 cart C7DED988
@@ -1560,3 +1562,28 @@ agsp:   dw 0
         ds 32
 astack:
 endpage
+
+# Golden Axe Warrior (USA, Europe, Brazil).cht, "Infinite Gold"
+poke "Infinite gold"
+ar 00C0-DDFF
+endpoke
+
+# Golden Axe Warrior (USA, Europe, Brazil).cht, "Start With Maximum Life Hearts"
+poke "Max life hearts"
+ar 00C0-DA80
+endpoke
+
+# Golden Axe Warrior (USA, Europe, Brazil).cht, "Start With Maximum Magic Pots"
+poke "Max magic pots"
+ar 00C0-DC80
+endpoke
+
+# Golden Axe Warrior (USA, Europe, Brazil).cht, "Infinite Health"
+poke "Infinite health"
+ar 00C3-181F
+endpoke
+
+# Golden Axe Warrior (USA, Europe, Brazil).cht, "Hero Is Impervious To Most Attacks"
+poke "Impervious to attacks"
+ar 00C3-1B80
+endpoke

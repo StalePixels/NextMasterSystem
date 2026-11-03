@@ -2870,6 +2870,15 @@ nt_diff__ok:	xor a
 		ret
 nd_left:	dw 0
 
+; Pokes: the loader points the call at vb_kbd in fw2_vbl here when the
+; player turned on pokes with Action Replay codes, and back at kbd_scan
+; when not. pk_run (part 4) runs at $4000, in place of the VRAM copy's first
+; page, then the keyboard scan runs as before.
+pk_vbl:		nextreg $52,FW4_PAGE
+		call pk_run+$2000
+		nextreg $52,SHADOW_PAGE
+		jp kbd_scan
+
 
 fw2_end:
 ; assert fw2_end <= $3C00, "fw2 overflows into rast_code" (checked by tools/check-layout)

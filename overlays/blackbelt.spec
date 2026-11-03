@@ -1,4 +1,6 @@
 # Black Belt (USA, Europe, Brazil), DA3A2F57, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Black Belt
 cart DA3A2F57
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -188,3 +190,23 @@ site 00231   ; IN A,($BE)
 # A mapper store the draft missed: LD ($FFFF),A of bank $04 in bank 1, found
 # by sitescan's byte scan.
 mapst 056FE   ; LD ($FFFF),A
+
+# Black Belt (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00D9-AC09
+endpoke
+
+# Black Belt (USA, Europe, Brazil).cht, "Infinite Health"
+poke "Infinite energy"
+ar 00DB-9340
+endpoke
+
+# Black Belt (USA, Europe, Brazil).cht, "Infinite Time"
+poke "Infinite time"
+ar 00D9-A964
+endpoke
+
+# Black Belt (USA, Europe, Brazil).cht, "Start with 0? Lives"
+poke "Start lives"
+gg ??E-05F-E66
+endpoke

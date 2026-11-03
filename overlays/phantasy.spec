@@ -1,4 +1,6 @@
 # phantasy, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Phantasy Star
 cart 00BEF1D7
 hz any		; No-Intro regions USA, Europe
@@ -489,3 +491,54 @@ otir 06499   ; OUTI
 otir 064C9   ; OUTI
 otir 064F5   ; OUTI
 otir 06500   ; OUTI
+
+# Phantasy Star (USA, Europe).cht, "Gain 255 Meseta From Every Enemy"
+poke "Meseta per enemy"
+ar 00C4-E0FF
+endpoke
+
+# Phantasy Star (USA, Europe) (Rev 1).cht, "Infinite Meseta"
+poke "Infinite meseta"
+ar 00C4-E1FF
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "Infinite Magic"
+poke "Infinite magic"
+ar 00C4-02FF
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "Invincibility (Alis)"
+poke "Invincibility"
+ar 00C4-01FF
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "Max HP  [On Status Screen]"
+poke "Max HP"
+ar 00C4-06FF
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "Max MP  [On Status Screen]"
+poke "Max MP"
+ar 00C4-07FF
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "Max Attack"
+poke "Max attack"
+ar 00C4-08FF
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "Max Defense"
+poke "Max defense"
+ar 00C4-09FF
+endpoke
+
+# Phantasy Star (USA, Europe) (Rev 1).cht, "Level 30"
+poke "Level 30"
+ar 00C4-051E
+endpoke
+
+# Phantasy Star (USA, Europe).cht, "EXP" (the value bytes are $FF)
+poke "Max experience"
+ar 00C4-03FF
+ar 00C4-04FF
+endpoke

@@ -16,15 +16,21 @@
  * The overlay file is read in these steps:
  *   1. The walk reads every byte from the start of the file to END, in
  *      order, into the running CRC32. It checks the header and every chunk
- *      header and notes where CRCS, PTCH, CONF and META start. It puts the
+ *      header and notes where CRCS, PTCH, CONF, META, POKE and ICON start. It puts the
  *      code of each PAGE chunk into its RAM page and its entries into the
  *      framework's table. Other chunks are read only for the CRC32. END
  *      must be last and must match.
- *   2. CRCS, META and CONF are read again from their start (F_SEEK).
+ *   2. CRCS, META and CONF are read again from their start (F_SEEK), and
+ *      POKE and ICON are copied into INFO_PAGE for the information screen.
  *   3. PTCH, first pass: every CHECK runs against the cart, and every
  *      operation is checked. Nothing is written.
  *   4. PTCH, second pass: the operations are applied.
- * A file that fails at any step before the last changes nothing.
+ * A file that fails at any step before the last changes nothing. After the
+ * information screen, overlay_pokes applies the pokes the player turned on.
+ *
+ * With nm.boot set, the cart and the overlay file are read from the boot
+ * pages (BOOT_PAGE, BOOT_OVL_PAGE) through nm_mopen in place of the card,
+ * the index is not used, and the information screen is not shown.
  *
  * loader_load returns a failure code (NM_E_*). On success it does not
  * return: it calls nm_launch.
@@ -34,6 +40,7 @@
 
 #include "nm.h"
 #include "nms.h"
+#include "boot.h"      /* generated: BOOT_CART_SIZE, BOOT_OVL_SIZE */
 
 /* crc32.asm */
 struct crc_job {
@@ -61,7 +68,7 @@ uint32_t crc32_final(void);
 #define PG_ENT      (3 * CODE_MAX)
 #define PG_ORG      0x2000u
 
-static const char chunk_tags[] = "CRCSPTCHCONFMETA";
+static const char chunk_tags[] = "CRCSPTCHCONFMETAPOKEICON";
 
 /* The running CRC32 over len bytes at data. */
 static void crc_job_at(const uint8_t *data, uint16_t len)
@@ -80,15 +87,16 @@ static uint32_t crc_of(const uint8_t *data, uint16_t len)
     return crc32_final();
 }
 
-/* Read the cart into pages, compute its CRC32. Returns 0 or a failure code. */
-static uint8_t read_cart(void)
+/* Read the cart into pages, compute its CRC32: nm_name, or the boot pages
+ * when boot is 1. Returns 0 or a failure code. */
+static uint8_t read_cart(uint8_t boot)
 {
     uint8_t stat[16];
     uint32_t size;
     int16_t h, got;
     uint8_t np, page, code = 0;
 
-    h = nm_open(nm_name);
+    h = boot ? nm_mopen(BOOT_PAGE, BOOT_CART_SIZE) : nm_open(nm_name);
     if (h < 0) return NM_E_OPEN;
     if (nm_fstat((uint8_t)h, stat)) { code = NM_E_READ; goto out; }
     size = *(uint32_t *)(stat + 7);
@@ -296,16 +304,16 @@ void *loader_ramsite_old(void *arg)
     return (void *)(uintptr_t)ramsite_old(a->new, a->crc16, a->out);
 }
 
-/* Open the overlay file named in nm.ovl_name, check it and apply it.
- * Returns 0 or a failure code. */
-static uint8_t use_overlay(void)
+/* Open the overlay file named in nm.ovl_name, or the one in the boot page
+ * when boot is 1, check it and apply it. Returns 0 or a failure code. */
+static uint8_t use_overlay(uint8_t boot)
 {
     struct nms f;
     uint8_t stat[16];
     int16_t h;
     uint8_t code;
 
-    h = nm_open(nm.ovl_name);
+    h = boot ? nm_mopen(BOOT_OVL_PAGE, BOOT_OVL_SIZE) : nm_open(nm.ovl_name);
     if (h < 0) return NM_E_NOOVL;
     f.h = (uint8_t)h;
     code = nm_fstat(f.h, stat) ? NM_E_BADOVL : 0;
@@ -318,15 +326,18 @@ static uint8_t use_overlay(void)
 
 void *loader_load(void *unused)
 {
-    uint8_t code;
+    uint8_t code, boot = nm.boot;
 
     (void)unused;
-    code = read_cart();
-    if (!code) code = (uint8_t)(uintptr_t)NM_FAR(PAGE_OVERLAY, overlay_find, 0);
-    if (!code) code = use_overlay();
+    nm.boot = 0;
+    code = read_cart(boot);
+    if (!code && !boot) code = (uint8_t)(uintptr_t)NM_FAR(PAGE_OVERLAY, overlay_find, 0);
+    if (!code) code = use_overlay(boot);
     ZXN_WRITE_MMU6(0);
     if (code) return (void *)(uintptr_t)code;
-    NM_FAR(PAGE_INFO, info_show, 0);
+    if (boot) nm.pokes_on = 0;
+    else NM_FAR(PAGE_INFO, info_show, 0);
+    NM_FAR(PAGE_OVERLAY, overlay_pokes, 0);
     nm_launch(&nm.launch);
     return 0;
 }

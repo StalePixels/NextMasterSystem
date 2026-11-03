@@ -1,4 +1,6 @@
 # Ninja Gaiden (Europe, Brazil) (En), CRC32 1B1D8CC2, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log and these
 # extra entry points (the scanner does not follow them):
 #   the main state table at $0E92 (bank, address triples, called from $0099 through $0007):
@@ -3788,3 +3790,28 @@ p1no:
     ld a,(cur_mmu+1)
     ret
 endpage
+
+# Ninja Gaiden (Europe) (Action Replay).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00DF-C704
+endpoke
+
+# Ninja Gaiden (Europe) (Action Replay).cht, "Invincibility"
+poke "Infinite health"
+ar 00DF-C815
+endpoke
+
+# Ninja Gaiden (Europe) (Action Replay).cht, "Infinite Time"
+poke "Infinite time"
+ar 00DF-B106
+endpoke
+
+# Ninja Gaiden (Europe, Brazil).cht, "Start with ?? Lives"
+poke "Start lives"
+gg ??D-124-F7A
+endpoke
+
+# Ninja Gaiden (Europe, Brazil).cht, "Round Modifier"
+poke "Start round"
+ar 00DF-D0??
+endpoke

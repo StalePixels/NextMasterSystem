@@ -1,4 +1,6 @@
 # Micro Machines, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Micro Machines
 cart A577CE46
 hz 50		; No-Intro regions Europe
@@ -1836,3 +1838,8 @@ vadr:   dw 0
 vcnt:   dw 0
 vbuf:   ds 1024
 endpage
+
+# Micro Machines (Europe).cht, "Enable Track Select Menu"
+poke "Track select menu"
+ar 00D6-D009
+endpoke

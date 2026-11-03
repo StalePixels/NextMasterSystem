@@ -10,12 +10,15 @@
 #define WINDOW      ((uint8_t *)0xC000)   /* MMU 6 */
 #define PAGE_SIZE   0x2000u
 
-/* The chunks read after the walk, in the order of chunk_tags in loader.c. */
+/* The chunks read after the walk, in the order of chunk_tags in loader.c.
+ * Each may appear only once in a file. */
 #define C_CRCS      0
 #define C_PTCH      1
 #define C_CONF      2
 #define C_META      3
-#define C_N         4
+#define C_POKE      4
+#define C_ICON      5
+#define C_N         6
 
 /* An open overlay file and where its chunks are. at[] is the file offset
  * of a chunk's data, len[] its length, seen has bit 1 << C_x set for each
@@ -70,5 +73,18 @@ struct ramsite {          /* loader_ramsite_old: the original instruction of */
     uint16_t crc16;
     uint8_t *out;
 };
+
+/* ---- the copies that overlay_apply makes in INFO_PAGE for the information
+ * screen and overlay_pokes ------------------------------------------------ */
+#define INFO_ICON   0x0000u   /* the ICON chunk, 1024 bytes */
+#define ICON_SIZE   1024u
+#define INFO_POKE   0x0400u   /* the POKE chunk */
+#define POKE_SIZE   (PAGE_SIZE - INFO_POKE)
+/* POKE code types (docs/nms-format.md) */
+#define PK_AR       1         /* Action Replay: a RAM write once a frame */
+#define PK_GG       2         /* Game Genie without a reference byte */
+#define PK_GGREF    3         /* Game Genie with a reference byte */
+#define PK_VALUE    0x80      /* with a type: the value is the player's number */
+#define PK_CODE     5         /* bytes per code */
 
 #endif

@@ -1,4 +1,6 @@
 # Mortal Kombat (Europe, Brazil) (En), CRC32 302DC686, 512K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log, then extended.
 # The scanner loses slot 1 after the first store of a variable bank to $FFFE, so it does not follow
 # the calls into bank 1 ($4000-$7FFF), which is in slot 1 whenever code runs there; and bank 0 $73A4
@@ -3492,3 +3494,33 @@ mapst 7DAD3   # LD ($FFFF),A; after LD A,$1A; 32 bytes of valid code before it
 # CHECK low: site 7EF3F  OUT (C),C  (port in C; no valid code after it)
 # CHECK medium: site 7F54B  OUT ($DD),A  (no_effect; 19 bytes of valid code before it)
 # CHECK medium: site 7FF11  IN A,($DC)  (joypad_a; 26 bytes of valid code before it)
+
+# Mortal Kombat (Europe, Brazil).cht, "Infinite Health P1"
+poke "Infinite health P1"
+ar 00C4-8849
+endpoke
+
+# Mortal Kombat (Europe, Brazil).cht, "Infinite Time"
+poke "Infinite time"
+ar 00C4-3609
+endpoke
+
+# Mortal Kombat (Europe, Brazil).cht, "Infinite Continues"
+poke "Infinite continues"
+ar 00C4-0B07
+endpoke
+
+# Mortal Kombat (Europe, Brazil).cht, "No Health P2"
+poke "Opponent no health"
+ar 00C4-8A00
+endpoke
+
+# Mortal Kombat (Europe) (Action Replay).cht, "Level Select (Replace ? With 0-A)"
+poke "Start match"
+ar 00C4-24??
+endpoke
+
+# Mortal Kombat (Europe, Brazil).cht, "Start with ?? credits, instead of 6"
+poke "Start continues"
+gg ??B-BFA-F76
+endpoke

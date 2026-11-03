@@ -1,4 +1,6 @@
 # Super Monaco GP (Europe, Brazil) (En), CRC32 55BF81A0, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the reference I/O logs of
 # attract mode (30 minutes, no input) and play (10 minutes, start script and random input).
 # Byte scan I/O patterns judged code and patched (no recording ran them, and no call to them
@@ -953,3 +955,8 @@ p_d:    dw 500                  ; a step of the one-player race (1.95 frames)
         ds 32
 p_stk:
 endpage
+
+# Super Monaco GP (Europe, Brazil) (En).cht, "Freeze Lap Timer - Both Players"
+poke "Freeze lap timer"
+gg 009-E2F-3BA
+endpoke

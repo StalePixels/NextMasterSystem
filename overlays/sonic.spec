@@ -1,4 +1,6 @@
 # Sonic The Hedgehog, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Sonic The Hedgehog
 cart B519E833
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -453,3 +455,38 @@ artw:   push ix
         ret
 artbuf: ds 384
 endpage
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00D2-4609
+endpoke
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Infinite Rings"
+poke "Infinite rings"
+ar 00D2-AA98
+endpoke
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Infinite Time"
+poke "Infinite time"
+ar 00D2-CF00
+endpoke
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Level Select"
+poke "Level"
+ar 00D2-3E??
+endpoke
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Invincibility"
+poke "Invincibility"
+ar 00D2-0901
+endpoke
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Don't Lose Rings When Hit"
+poke "Keep rings when hit"
+gg 3A6-45C-2A2
+endpoke
+
+# Sonic The Hedgehog (USA, Europe, Brazil).cht, "Start with ?? Lives, instead of 3"
+poke "Start lives"
+gg ??C-4FE-E66
+endpoke

@@ -1,4 +1,6 @@
 # Teddy Boy (USA, Europe, Brazil), CRC32 2728FAA3, 32K, no mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # The game uses RST $08, $10, $18, $20 and $30, and its RST $20 routine
 # runs through $0028, so no RST vector is free except $00: $0000-$0002
 # (the game's interrupt-disable and interrupt mode 1 setup) becomes JP to the io entry and the game starts at $0003
@@ -303,3 +305,13 @@ asm 07BB8 6    ; unused $FF bytes: haltcave
     ld bc,$C049
     ret
 endasm
+
+# Teddy Boy (USA, Europe, Brazil) (En).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-1B04
+endpoke
+
+# Teddy Boy (USA, Europe, Brazil) (En).cht, "Invincibility"
+poke "Invincibility"
+gg 3A6-8FF-2A2
+endpoke

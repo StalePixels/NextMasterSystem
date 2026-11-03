@@ -1,4 +1,6 @@
 # Streets of Rage II (Europe, Brazil) (En), CRC32 04E9C089, 512K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s and 10 min reference I/O logs
 # and these extra entry points (the scanner does not follow them):
 #   the bank 0 jump table at $0090-$015F (70 x JP nn, the routines the banked modules call);
@@ -597,3 +599,19 @@ sline:  push bc
         pop bc
         ret
 endasm
+
+# Streets of Rage II (Europe, Brazil) (En).cht, "Infinite Lives P1"
+poke "Infinite lives"
+ar 00CC-FF09
+endpoke
+
+# Streets of Rage II (Europe, Brazil) (En).cht, "Infinite Time"
+poke "Infinite time"
+ar 00CD-F909
+ar 00CD-FA09
+endpoke
+
+# Streets of Rage II (Europe, Brazil) (En).cht, "Infinite Energy P1"
+poke "Infinite energy"
+ar 00CC-E727
+endpoke

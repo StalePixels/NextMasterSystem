@@ -1,4 +1,6 @@
 # Zillion, 5718762C, drafted by tools/mkspec.py from sitescan output (with the detector log).
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Zillion
 cart 5718762C
 hz any		; No-Intro regions USA, Europe
@@ -523,3 +525,8 @@ plup:   push ix
 .mir:   db 0
 .buf:   ds 32
 endpage
+
+# Zillion (USA, Europe) (Rev 1).cht, "Infinite Energy"
+poke "Infinite energy"
+ar 00C1-4370
+endpoke

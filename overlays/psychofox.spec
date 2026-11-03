@@ -1,4 +1,6 @@
 # Psycho Fox (USA, Europe, Brazil) (En), CRC32 97993479, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the reference I/O log
 # (reflogs/sweep/97993479, 60 s).
 name Psycho Fox
@@ -1915,3 +1917,28 @@ t_g:    db 0
 t_ctc:  db 0
 t_rem:  dw 0
 endpage
+
+# Psycho Fox (USA, Europe, Brazil).cht, "Infinite Lives": $0F33 DEC (HL) becomes DEC H
+poke "Infinite lives"
+gg 25F-33F-3BE
+endpoke
+
+# Psycho Fox (USA, Europe, Brazil).cht, "Start with ?? lives"
+poke "Start lives"
+gg ??E-F66-E66
+endpoke
+
+# Psycho Fox (USA, Europe) (Action Replay).cht, "Start As Hippo"
+poke "Start as Hippo"
+ar 00C0-1701
+endpoke
+
+# Psycho Fox (USA, Europe, Brazil).cht, "Level Select (Replace ?? With 00-14)"
+poke "Start level"
+ar 00C0-20??
+endpoke
+
+# Psycho Fox (USA, Europe, Brazil).cht, "Invulnerability"
+poke "Invulnerability"
+gg 019-9EE-A2E
+endpoke

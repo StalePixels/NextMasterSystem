@@ -1,4 +1,6 @@
 # Alex Kidd in Miracle World (USA, Europe, Brazil) (Rev 1), AED9AAC4, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Alex Kidd in Miracle World
 cart AED9AAC4
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -218,3 +220,23 @@ mapst 06DAF   # ran in the reference run
 mapst 07E46   ; LD ($FFFF),A
 mapst 07ED5   ; LD ($FFFF),A
 mapst 07EF3   ; LD ($FFFF),A
+
+# Alex Kidd in Miracle World (USA, Europe, Brazil) (Rev 1).cht, "Infinite Lives"
+poke "Infinite lives"
+gg 7EC-2F9-3B7
+endpoke
+
+# Alex Kidd in Miracle World (USA, Europe, Brazil) (Rev 1).cht, "Invincibility against Enemies"
+poke "Invincibility"
+gg C9D-C48-19D
+endpoke
+
+# Alex Kidd in Miracle World (USA, Europe, Brazil) (Rev 1).cht, "Start with Peticopter"
+poke "Start with Peticopter"
+ar 00C0-5409
+endpoke
+
+# Alex Kidd in Miracle World (USA, Europe) (Action Replay).cht, "Level Select (Replace ? With 0-F)"
+poke "Start level"
+ar 00C0-23??
+endpoke

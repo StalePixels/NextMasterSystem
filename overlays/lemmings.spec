@@ -1,4 +1,6 @@
 # Lemmings (Europe, Brazil) (En), CRC32 F369B2D8, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log.
 # The game writes ROM at $0007 (LD ($0007),A) as a delay between VDP port accesses; the scanner
 # reads on past it. On the Next the store writes the cart copy's byte at $0007, which nothing reads.
@@ -760,3 +762,36 @@ dlen:   dw 0
 dprev:  dw 0
 dleft:  dw 0
 endpage
+
+# Lemmings (Europe, Brazil).cht, "Infinite Climber"
+# Lemmings (Europe, Brazil).cht, "Infinite Floater"
+# Lemmings (Europe, Brazil).cht, "Infinite Bomber"
+# Lemmings (Europe, Brazil).cht, "Infinite Blocker"
+# Lemmings (Europe, Brazil).cht, "Infinite Builder"
+# Lemmings (Europe, Brazil).cht, "Infinite Basher"
+# Lemmings (Europe, Brazil).cht, "Infinite Miner"
+# Lemmings (Europe, Brazil).cht, "Infinite Digger"
+poke "Infinite skills"
+ar 00DB-720A
+ar 00DB-730A
+ar 00DB-740A
+ar 00DB-750A
+ar 00DB-760A
+ar 00DB-770A
+ar 00DB-780A
+ar 00DB-790A
+endpoke
+
+# Lemmings (Europe, Brazil).cht, "Infinite Time - One's Digit"
+# Lemmings (Europe, Brazil).cht, "Infinite Time - Ten's Digit"
+# Lemmings (Europe, Brazil).cht, "Infinite Time - Minutes' Digit"
+poke "Infinite time"
+ar 00DA-D309
+ar 00DA-D209
+ar 00DA-D109
+endpoke
+
+# Lemmings (Europe) (Action Replay).cht, "Level Select"
+poke "Level select"
+ar 00DB-9D??
+endpoke

@@ -1,9 +1,11 @@
 /* overlay.c: the overlay file's index and chunks. Banked (PAGE_OVERLAY).
  *
- * The loader (loader.c) far-calls this module twice for a picked cart:
- * overlay_find looks the cart up in the alias index, and, after the walk
- * has checked the whole file, overlay_apply reads CRCS, META and CONF and
- * runs the two passes over PTCH. The format is docs/nms-format.md; the
+ * The loader (loader.c) far-calls this module three times for a picked
+ * cart: overlay_find looks the cart up in the alias index; after the walk
+ * has checked the whole file, overlay_apply reads CRCS, META and CONF, runs
+ * the two passes over PTCH and copies POKE and ICON into INFO_PAGE; after
+ * the information screen, overlay_pokes applies the pokes the player
+ * turned on. The format is docs/nms-format.md; the
  * steps are listed in loader.c.
  *
  * The CRC32 code is in the loader's page, so the PTCH checks that need it
@@ -386,6 +388,136 @@ static uint8_t apply_ops(const struct nms *f)
     }
 }
 
+/* The POKE chunk into INFO_PAGE at INFO_POKE, checked; nm.npokes is the
+ * number of pokes, 0 without the chunk. Returns 0 or a failure code. */
+static uint8_t read_pokes(const struct nms *f)
+{
+    struct rd r;
+    const uint8_t *p, *end;
+    uint32_t len = f->len[C_POKE];
+    uint8_t n, i, k, c, ar = 0;
+
+    nm.npokes = 0;
+    if (!(f->seen & (1 << C_POKE))) return 0;
+    if (len < 1 || len > POKE_SIZE) return NM_E_BADOVL;
+    if (open_chunk(&r, f, C_POKE)) return NM_E_BADOVL;
+    ZXN_WRITE_MMU6(INFO_PAGE);
+    if (rd_copy(&r, WINDOW + INFO_POKE, (uint16_t)len)) return NM_E_BADOVL;
+    p = WINDOW + INFO_POKE;
+    end = p + (uint16_t)len;
+    n = *p++;
+    if (!n || n > NM_POKES_MAX) return NM_E_BADOVL;
+    for (i = 0; i < n; i++) {
+        /* u8 name length, the name, u8 number of codes, the codes */
+        if (p >= end) return NM_E_BADOVL;
+        k = *p++;
+        if (!k || k > NM_POKE_NAME || end - p < k + 1) return NM_E_BADOVL;
+        while (k--) {
+            if (*p < 0x20 || *p > 0x7E) return NM_E_BADOVL;
+            p++;
+        }
+        c = *p++;
+        if (!c || end - p < (uint16_t)c * PK_CODE) return NM_E_BADOVL;
+        while (c--) {
+            /* u8 type, u16 address, u8 value, u8 reference */
+            k = *p & ~PK_VALUE;
+            if (k == PK_AR) {
+                if (p[2] < 0xC0 || (p[2] == 0xFF && p[1] >= 0xFC)) return NM_E_BADOVL;
+                ar++;
+            } else if (k == PK_GG || k == PK_GGREF) {
+                if (p[2] >= 0xC0 || (k == PK_GG && rd16(p + 1) >= 0x0400)) return NM_E_BADOVL;
+            } else {
+                return NM_E_BADOVL;
+            }
+            p += PK_CODE;
+        }
+    }
+    if (p != end || ar > PK_MAX) return NM_E_BADOVL;
+    nm.npokes = n;
+    return 0;
+}
+
+/* An ICON chunk of 1024 bytes into INFO_PAGE at INFO_ICON, and nm.icon set.
+ * Any other length (an empty chunk) leaves nm.icon 0, and the information
+ * screen shows its own icon. Returns 0 or a failure code. */
+static uint8_t read_icon(const struct nms *f)
+{
+    struct rd r;
+
+    nm.icon = 0;
+    if (!(f->seen & (1 << C_ICON)) || f->len[C_ICON] != ICON_SIZE) return 0;
+    if (open_chunk(&r, f, C_ICON)) return NM_E_BADOVL;
+    ZXN_WRITE_MMU6(INFO_PAGE);
+    if (rd_copy(&r, WINDOW + INFO_ICON, ICON_SIZE)) return NM_E_BADOVL;
+    nm.icon = 1;
+    return 0;
+}
+
+/* A Game Genie code: value v at cart offset off when the reference ref is
+ * -1 or the byte there equals it. */
+static void gg_put(uint32_t off, uint8_t v, int16_t ref)
+{
+    uint8_t *b;
+
+    if (off >= nm.launch.size) return;
+    ZXN_WRITE_MMU6(CART_PAGE + (uint8_t)(off >> 13));
+    b = WINDOW + ((uint16_t)off & (PAGE_SIZE - 1));
+    if (ref < 0 || *b == (uint8_t)ref) *b = v;
+}
+
+/* The pokes in nm.pokes_on, after the information screen: each Game Genie
+ * code into the cart pages, each Action Replay code into the runtime's
+ * table (pk_tab in part 4), and the once-a-frame work's call at vb_kbd
+ * pointed at pk_vbl when the table has an entry, else at kbd_scan. */
+void *overlay_pokes(void *unused)
+{
+    uint8_t ar[3 * PK_MAX];
+    uint8_t code[PK_CODE];
+    uint16_t at = INFO_POKE + 1, a, fn;
+    uint8_t i, c, b, t, v, nar = 0;
+
+    (void)unused;
+    for (i = 0; i < nm.npokes; i++) {
+        ZXN_WRITE_MMU6(INFO_PAGE);
+        at += 1 + WINDOW[at];               /* the name */
+        c = WINDOW[at++];
+        while (c--) {
+            ZXN_WRITE_MMU6(INFO_PAGE);
+            memcpy(code, WINDOW + at, PK_CODE);
+            at += PK_CODE;
+            if (!(nm.pokes_on & (1u << i))) continue;
+            a = rd16(code + 1);
+            t = code[0] & ~PK_VALUE;
+            v = (code[0] & PK_VALUE) ? nm.poke_val[i] : code[3];
+            if (t == PK_AR) {
+                if (nar == PK_MAX) continue;
+                a = (a & 0x1FFF) | 0xC000;   /* the RAM and its mirror */
+                ar[3 * nar] = (uint8_t)a;
+                ar[3 * nar + 1] = (uint8_t)(a >> 8);
+                ar[3 * nar + 2] = v;
+                nar++;
+            } else if (a < 0x0400 || nm.launch.size <= 0xC000u) {
+                /* the first 1K of slot 0 is always bank 0, and a cart of
+                 * 48K or less fills the three slots with no banking */
+                gg_put(a, v, t == PK_GGREF ? code[4] : -1);
+            } else if (t == PK_GGREF) {
+                /* every 16K bank with the reference at the slot offset */
+                for (b = 0; (uint32_t)b << 14 < nm.launch.size; b++)
+                    gg_put(((uint32_t)b << 14) | (a & 0x3FFF), v, code[4]);
+            }
+        }
+    }
+    ZXN_WRITE_MMU6(FW4_PAGE);
+    WINDOW[PK_N - 0x2000u] = nar;
+    memcpy(WINDOW + PK_N - 0x2000u + 1, ar, 3 * nar);
+    fn = nar ? PK_VBL : KBD_SCAN;
+    ZXN_WRITE_MMU6(FW2_PAGE);
+    WINDOW[VB_KBD + 1 - 0x2000u] = (uint8_t)fn;
+    WINDOW[VB_KBD + 2 - 0x2000u] = (uint8_t)(fn >> 8);
+    ZXN_WRITE_MMU6(0);
+    return 0;
+}
+
 /* The cart's overlay file name in nm.ovl_name, from the index. Returns a
  * failure code. */
 void *overlay_find(void *unused)
@@ -394,8 +526,9 @@ void *overlay_find(void *unused)
     return (void *)(uintptr_t)find_overlay();
 }
 
-/* f has passed the walk: CRCS, META, CONF, then PTCH, checked and applied.
- * Returns 0 or a failure code. */
+/* f has passed the walk: CRCS, META, CONF, then PTCH, checked and applied,
+ * then the copies of POKE and ICON for the information screen. Returns 0
+ * or a failure code. */
 void *overlay_apply(void *arg)
 {
     const struct nms *f = (const struct nms *)arg;
@@ -406,5 +539,7 @@ void *overlay_apply(void *arg)
     if (!code) code = read_conf(f);
     if (!code) code = check_ops(f);
     if (!code) code = apply_ops(f);
+    if (!code) code = read_pokes(f);
+    if (!code) code = read_icon(f);
     return (void *)(uintptr_t)code;
 }

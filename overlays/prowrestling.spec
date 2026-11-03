@@ -1,4 +1,6 @@
 # Pro Wrestling, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Pro Wrestling
 cart FBDE42D3
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -175,3 +177,18 @@ mapst 06FDF   ; LD ($FFFF),A
 mapst 05BE5   # ran in the reference run
 mapst 05C0D   # ran in the reference run
 mapst 05C23   # ran in the reference run
+
+# Pro Wrestling (USA, Europe, Brazil).cht, "Infinite Life P1&P2 (Team 1)"
+poke "Infinite health"
+ar 00C6-0737
+endpoke
+
+# Pro Wrestling (USA, Europe, Brazil).cht, "Infinite Time"
+poke "Infinite time"
+ar 00C6-E250
+endpoke
+
+# Pro Wrestling (USA, Europe, Brazil).cht, "Round Select [Replace ??]"
+poke "Start round"
+ar 00C0-26??
+endpoke

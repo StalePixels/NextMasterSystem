@@ -1,4 +1,6 @@
 # Sonic The Hedgehog 2, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Sonic The Hedgehog 2
 cart 5B3B922C
 hz 50		; No-Intro regions Europe, Brazil
@@ -3452,3 +3454,43 @@ endpage
 page 2 d_none
 d_none: ret
 endpage
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00D2-9809
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Score 999000 For Every Act And Unlimited Timer"
+poke "Infinite time"
+ar 00D2-B9FF
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Level Select Zone"
+poke "Zone"
+ar 00D2-95??
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Invulnerability"
+poke "Invulnerability"
+ar 00D3-A972
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Always Have Invincibility"
+poke "Invincibility"
+ar 00D5-3202
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Start with ?? Lives, instead of 3"
+poke "Start lives"
+gg ??2-5CD-E66
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Start with some Rings most of the Time"
+poke "Start with rings"
+gg 222-92D-2A2
+endpoke
+
+# Sonic The Hedgehog 2 (Europe, Brazil).cht, "Don't Lose Rings when Hit"
+poke "Keep rings when hit"
+gg 3A7-DFC-2A2
+endpoke

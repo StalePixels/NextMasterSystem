@@ -8,6 +8,8 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **ABI (runtime ABI).** The version number of the runtime's interface to overlays: the jump table, the inline codes and the state variables at fixed addresses. An overlay file records the ABI it needs. The runtime refuses a file that needs a higher number than its own. Code: `FW_ABI` in `src/runtime/fw.asm`; header byte 6 of a `.nms` file. Read more: nms-format.md, "Versions".
 
+**Action Replay code.** A published cheat in the form `00AA-AAVV`: write the byte `$VV` to RAM address `$AAAA`. In a poke, the runtime writes it once a frame while the game runs. `??` in place of `VV` is a byte the player sets. Spec line: `ar` in a poke block. Code: `pk_run`, `pk_tab` in `fw4.asm`. Read more: overlays.md, "Pokes"; nms-format.md, "`POKE`: pokes".
+
 **Alias.** A second cart CRC32 that an overlay accepts, for another region, revision or dump of the same game. Aliases are listed in the file's `CRCS` chunk and collected in the index. The primary CRC32 and the aliases together are the overlay's accepted CRC32s. Read more: nms-format.md, "`CRCS`: accepted carts".
 
 **`asm` block.** A spec block that replaces game bytes with assembly. `asm ADDR LEN` starts it, `endasm` ends it. The lines between are assembled with `sjasmplus` as if at the Z80 address of cart offset `ADDR`. The code replaces `LEN` cart bytes; unused bytes become `NOP`. The cart supplies the `CHECK` for those bytes. Read more: overlays.md, "Writing code in a spec".
@@ -42,7 +44,7 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **`CHECK` (operation).** An operation in a `PTCH` chunk: the CRC32 of a range of the cart image must equal a stored value. The file holds only the CRC32, never the bytes. If a `CHECK` fails, the loader applies no change and reports a different dump. Every byte a `PATCH` writes must lie inside a checked range. Read more: nms-format.md, "`PTCH`: operations".
 
-**Chunk.** A tagged section of an `.nms` file: a four-character tag, a length and the data. A reader skips tags it does not know. Tags are `CRCS`, `PTCH`, `CONF`, `META`, `ICON`, `PAGE`, `SIGN` and `END `. Read more: nms-format.md, "Chunks".
+**Chunk.** A tagged section of an `.nms` file: a four-character tag, a length and the data. A reader skips tags it does not know. Tags are `CRCS`, `PTCH`, `CONF`, `META`, `ICON`, `POKE`, `PAGE`, `SIGN` and `END `. Read more: nms-format.md, "Chunks".
 
 **Class (port class).** One of eight groups of I/O port numbers, worked out from address lines A7, A6 and A0 as the Master System decodes them. The inline code of a patched `OUT (n),A` or `IN A,(n)` carries the class, not the port number. Read more: nms-format.md, "Inline codes"; sitescan.md, "`NAME.sites.tsv`" (port classes).
 
@@ -108,6 +110,8 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **`fw_resume`.** The jump table entry at `$E01B`: a `jp` whose target the shell sets before it starts a game. The runtime's quit routine jumps to it after it restores NextZXOS's pages and registers. Read more: design.md, "Coming back".
 
+**Game Genie code.** A published cheat in the form `DDA-AAA-RRR` or `DDA-AAA`: write the byte `$DD` at a cart address, where `RRR` gives a reference byte, the byte the code expects to replace. In a poke, the loader writes it into the cart image once, after the overlay's own changes, in every 16K bank that holds the reference byte at that place. `??` in place of `DD` is a byte the player sets. Spec line: `gg` in a poke block. Code: `overlay_pokes` in `src/shell/overlay/overlay.c`. Read more: overlays.md, "Pokes"; nms-format.md, "`POKE`: pokes".
+
 **H scroll, V scroll.** The VDP's horizontal and vertical scroll values. A `RASTER` routine computes the value of VDP register 8 (H scroll) for each line. Read more: nms-format.md, "`RASTER`".
 
 **HALT pacing.** A game loop that waits for the next interrupt with `HALT`, so that it runs once a frame or counts frames. On the Next a native `HALT` also ends on the runtime's own interrupts, so an overlay patches each such `HALT` into a wait for the game's own interrupt. Spec lines `eihalt` and `haltret`; inline codes `$76`, `$FB`, `$C9`. Code: `op_halt`, `hw_loop`, `hw_irq`. Read more: design.md, "HALT"; overlays.md, "HALT".
@@ -116,11 +120,11 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **`hz`.** Spec line and `CONF` key for the video rate of a game: `50`, `60` or `any`. With `50` or `60` the runtime sets the Next to that rate at game start. With `any`, or no line, the game runs at the rate the Next booted at. Code: `hz_setup` in `fw3.asm`. Read more: overlays.md, "Switches"; design.md, "The video rate".
 
-**`ICON`.** The chunk that holds a 32x32 icon. The runtime does not read it yet. Read more: nms-format.md, "`ICON`: the icon".
+**`ICON`.** The chunk that holds a 32x32 icon. The information screen shows it, or an NMS icon of its own when the chunk is absent or empty. Read more: nms-format.md, "`ICON`: the icon".
 
 **Index.** The file `ovl/index`. It maps every accepted CRC32 to the primary CRC32, which is the overlay's file name. The entries are sorted, so the loader finds a cart by binary search without opening each overlay. Built by `tools/mknmsindex.py`. Read more: nms-format.md, "The index".
 
-**Information screen.** The screen the shell shows after it loads a game and before it starts it: file name, CRC32, title, status, video rate and switches. Any key or fire starts the game. Code: `info_show` in `src/shell/info/info.c`. Read more: design.md, "The information screen".
+**Information screen.** The screen the shell shows on Layer 2 after it loads a game and before it starts it. Its main page shows the icon, title and status, with a menu to start the game, open the Pokes page and open the details page (file name, CRC32, size, title, status, video rate, format, ABI and switches). Code: `info_show` in `src/shell/info/info.c`. Read more: design.md, "The information screen".
 
 **Inline code.** The byte after an `RST` to the runtime that says which instruction the `RST` replaced, for example `$00-$07` for `OUT (n),A` and `$80` for a far call. The codes are part of the ABI and never change meaning. Read more: nms-format.md, "Inline codes".
 
@@ -136,7 +140,7 @@ Two kinds of number appear in the entries. A "cart offset" is a position in the 
 
 **Jump table.** The table of `JP` instructions at `$E000` that is the overlay ABI. Entries never move; new ones go at the end with a raised `FW_ABI`. Code: `fw_jt`; entries `jt_out_n`, `jt_in_n`, `jt_ed`, `jt_ld_de_a`, `jt_start`, `jt_fatal`, `jt_outi_run`, `jt_io`, `jt_io0`, `fw_resume`, `jt_far`, `jt_peek`, `jt_vwrite`. Read more: overlays.md, "Names that every block knows".
 
-**Kempston.** The Next's joystick interface that the shell polls, with the keyboard, to wait for a key or fire press on the information screen. Read more: design.md, "The information screen".
+**Kempston.** The Next's joystick interface that the shell polls, with the keyboard, for the directions and fire presses on the information screen. Read more: design.md, "The information screen".
 
 **`label`.** Spec line `label NAME ADDR` that gives a game address (a cart offset) a name for use in `asm` blocks. It is visible in every block of the spec. It may not reuse a name that every block already knows. Read more: overlays.md, "Labels".
 
@@ -234,7 +238,11 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **Pointer harvest.** `sitescan.py` takes a code-like address that the code stores into RAM as an entry point, with checks that refuse data values. Harvested code is `medium` confidence. Read more: sitescan.md, "How it works".
 
-**`poke`.** Spec line `poke ADDR OLD NEW` that replaces hex bytes at a cart offset. Use it for data. Code goes in an `asm` block. Read more: overlays.md, "Writing code in a spec".
+**`poke`.** Spec line `poke ADDR OLD NEW` that replaces hex bytes at a cart offset. Use it for data. Code goes in an `asm` block. A `poke` line with a name in quotes starts a poke block instead (see "Poke"). Read more: overlays.md, "Writing code in a spec".
+
+**Poke.** A cheat, such as infinite lives, that the player turns on in the information screen's Pokes page before the game starts. A poke has a name and one or more Action Replay or Game Genie codes, which go on and off together. Every poke is off each time the screen opens. Spec: a `poke "NAME"` block. Read more: overlays.md, "Pokes".
+
+**`POKE`.** The chunk of an `.nms` file that holds the pokes: each poke's name and codes. A runtime that does not know it skips it. Read more: nms-format.md, "`POKE`: pokes".
 
 **Port class.** See "Class".
 

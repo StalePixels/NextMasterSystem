@@ -1,4 +1,6 @@
 # After Burner (World), CRC32 1C951F8E, 512K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log.
 # The game checks the region at $08AF (port $3F, then $DD) and looks for the FM unit at $08DA
 # (port $F2); compare it with a reference forced to the export path and with no FM unit.
@@ -3708,3 +3710,13 @@ sv_b:   dw 0
 vl_m:   db 0
 vl_c:   db 0
 endpage
+
+# After Burner (World) (Action Replay).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-1809
+endpoke
+
+# After Burner (World) (Action Replay).cht, "Level Select (Replace ? To Play Different Levels)"
+poke "Start stage"
+ar 00C0-17??
+endpoke

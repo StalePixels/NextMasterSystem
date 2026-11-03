@@ -1,4 +1,6 @@
 # The Lion King (Europe, Brazil) (En), CRC32 C352C7EB, 512K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s and the bank-aware 600 s reference
 # I/O logs and these extra entry points (the scanner does not follow them): the object handler table
 # in bank 31 that $6B89 jumps through (JP (IX), bank 31 set at $6AF3): $6E39 and 1F:8570 8571 857E
@@ -1463,3 +1465,13 @@ mapst 013F0   # LD ($FFFF),A; after LD A,($C653); 32 bytes of valid code before 
 # CHECK low: site 7E956  IN A,($F0)  (joypad_a; 13 RST or NOP opcodes around it (looks like data); 32 bytes of valid code before it)
 # CHECK medium: site 7EE76  IN A,($C1)  (joypad_b_misc; 18 bytes of valid code before it)
 # CHECK medium: site 7F400  OUT ($7E),A  (psg; 32 bytes of valid code before it)
+
+# Lion King, The (Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C6-3D09
+endpoke
+
+# Lion King, The (Europe, Brazil).cht, "Invulnerability"
+poke "Invulnerability"
+ar 00C6-DD5E
+endpoke

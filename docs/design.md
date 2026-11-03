@@ -21,7 +21,7 @@ The Next has 8K pages. The CPU sees eight of them at a time, one in each 8K slot
 | `$A000` to `$A0FF` | 5 | `OVL_BUF`: the loader reads the overlay index and the overlay file through these 256 bytes (`OVL_BUFSIZE`). |
 | `$A100` to `$BDFF` | 5 | Free. |
 | `$BE00` to `$BFDF` | 5 | Stack. It grows down from `$BFE0`. |
-| `$C000` to `$DFFF` | 6 | A data window. The loader maps the cart's RAM pages here one at a time. |
+| `$C000` to `$DFFF` | 6 | A data window. The loader maps the cart's RAM pages here one at a time; the information screen maps its Layer 2 pages and `INFO_PAGE` here. |
 | `$E000` to `$FFFF` | 7 | The **banked code window**. A far call (`nm_far`) maps a module's page here. |
 
 Slots 4 and 5 are NEX bank 2. They are always mapped. Everything the shell hands to the operating system lives there. See "Pointers given to the operating system" below.
@@ -40,15 +40,18 @@ Page numbers are 8K pages. A NEX bank is two pages. So bank `n` is pages `2n` an
 | 32 and up | The cart, up to 512K. |
 | 96 to 99 | Cart RAM. |
 | 100, 101 | Runtime parts 3 and 4, in bank 50. Part 3 runs at `$0000` during the once-a-frame work only, part 4 at `$2000`. |
-| 102 to 107 | Layer 2, used for priority tiles in 192-line mode (256x192). |
+| 102 to 107 | Layer 2, used for priority tiles in 192-line mode (256x192), and by the information screen while the shell runs. |
 | 108 to 115 | The shell's banked C modules, in banks 54 to 57. |
 | 116 to 123 | The overlay's code pages: page number n of the file in page 116 + n. |
 | 124 | The trace cache. |
 | 125 | The tile cache (`tilecache`): the `kn_pages` marks and, per tile, where its converted copy is. |
-| 126, 127 | Free. |
+| 126 | `INFO_PAGE`: while the shell runs, the copies of the overlay's `ICON` chunk (from `$0000`) and `POKE` chunk (from `$0400`) for the information screen. Free while a game runs. |
+| 127 | Free. |
 | 128 to 191 | The converted cart (the tile cache): cart page n, converted to Next tile rows, in page 128 + n. |
 | 192 to 201 | Layer 2 for priority tiles in 224-line mode (320x256). |
-| 202 to 223 | Free. |
+| 202 to 205 | Boot: a 32K cart image (`BOOT_PAGE`). |
+| 206 | Boot: an overlay file (`BOOT_OVL_PAGE`). |
+| 207 to 223 | Free. |
 
 The NEX file asks for the 2 MB memory flag, because pages above 95 are used.
 
@@ -65,9 +68,9 @@ The game owns `$0000-$DFFF`: its cart pages in slots 0 to 5 and the SMS RAM in s
 | Page | Source | Mapped | Holds |
 |---|---|---|---|
 | 24, part 1 | `fw.asm`, `trace.asm` | `$E000`, always | the jump table and fixed state, every I/O handler entry and the hot handlers (VDP data and control, V counter, status, blocks, name table, `LD (DE),A` to the mapper), the interrupt entries, the trace run-time routines, the far call and `jt_vwrite`. Variables that only parts 2 and 3 use are in part 2, and those only part 4 uses are in part 4. Some code (`kn_entry`, `fw_quit`, the V counter's fast path `vc_fast`, `map_bank_fw2`) is in the rest of the page that holds `fw_stack`, up to the tables at `$E200` (`fw_gap_end`). The trace build's entries in `vdpcheck.asm` are at the end of the code. `$FB00-$FFFF` hold the trace code area (from `$FBC0` in the trace build), the IM2 table, the trace output buffer and the mapper registers. |
-| 25, part 2 | `fw2.asm` | `$2000`, by `fw2_call` from a handler, and during the once-a-frame work | the once-a-frame work's entry and its tile and sprite tables, the notes of tiles written whole from cart ROM (`kn_block`), VDP register writes and the display enable, mapper stores, CRAM extras (`toppal`, priority tiles), the transparent value and fallback colour, the priority tile redraw, the code page table, and from `$3C00` the overlay's `RASTER` routine or `RAMSITES` table. |
+| 25, part 2 | `fw2.asm` | `$2000`, by `fw2_call` from a handler, and during the once-a-frame work | the once-a-frame work's entry and its tile and sprite tables, the notes of tiles written whole from cart ROM (`kn_block`), VDP register writes and the display enable, mapper stores, CRAM extras (`toppal`, priority tiles), the transparent value and fallback colour, the priority tile redraw, the code page table, `pk_vbl` (pokes), and from `$3C00` the overlay's `RASTER` routine or `RAMSITES` table. |
 | 100, part 3 | `fw3.asm` | `$0000`, during the once-a-frame work, in `tflush2` and `pic_ready`, and at game start | the copper lists (the per-line H scroll list of a `RASTER` overlay and the 224-line list too), keyboard, map rebuild, tile conversion, sprites, the transparent value scans, the runtime's start state (`fw2_state`) and the overlay switches (`fw2_switches`), both run by `fw2_start`. |
-| 101, part 4 | `fw4.asm`, `trbuild.asm` | `$2000`, by `fw4_call` from a handler, by `fw_start` and `fw_quit`, by `jt_vwrite`, and by `cop_seg` in the once-a-frame work | game start (with the converted cart, `tc_build`, when `tilecache` is on) and quit, the NextReg values to restore on quit (`nr_keep`), the PSG, `LD A,I` (`ed_ldai4`), the trace builder with its instruction table, `jt_vwrite`'s one-byte form, the `collline` status read (`cl_read`, `cl_fresh`), the `rastseg` segment list (`cop_seg4`), the `workline` decisions (`wl_setup`, `wl_line4`, `wl_ula4`), and in the trace build the VDP check's work (`vdpcheck4.asm`). |
+| 101, part 4 | `fw4.asm`, `trbuild.asm` | `$2000`, by `fw4_call` from a handler, by `fw_start` and `fw_quit`, by `jt_vwrite`, and by `cop_seg` in the once-a-frame work | game start (with the converted cart, `tc_build`, when `tilecache` is on) and quit, the NextReg values to restore on quit (`nr_keep`), the PSG, `LD A,I` (`ed_ldai4`), the trace builder with its instruction table, `jt_vwrite`'s one-byte form, the `collline` status read (`cl_read`, `cl_fresh`), the `rastseg` segment list (`cop_seg4`), the `workline` decisions (`wl_setup`, `wl_line4`, `wl_ula4`), the pokes' RAM writes (`pk_run`, `pk_n`, `pk_tab`), and in the trace build the VDP check's work (`vdpcheck4.asm`). |
 
 The rules that keep this working:
 
@@ -101,6 +104,8 @@ The `workline` switch (`CONF` `workline=N`, `wl_n` in part 4) moves the work to 
 - `wl_line4`, at each line interrupt, tells the work line from the others: `wl_pend` 1, the beam in the picture and no SMS line event set. For the work line it sets `wl_pend` to 2, and `wl_line` goes on into `fw_ula_irq` with the registers as the line interrupt found them; there `wl_ula4` sees 2, puts the frame event back into NextReg `$23` and has the work run. For any other line interrupt it returns `hl_on` in A, and `fw_line_irq` goes on as without the switch.
 
 Without the switch the four places keep their instructions, `wl_setup` only puts them back at game start, and every frame runs the same instructions as before. With it, the work runs in the picture: the sprites, the copper list and the converted tiles change at line N, and in 224-line mode `cop_224` writes the head with the H written last before line N and writes X and Y straight into the registers at that line. `tools/mame/run.py --measure` logs the work line as a `V` entry from `fw_ula_irq`; the few hundred cycles from `fw_line_irq` to there are not counted.
+
+Pokes with Action Replay codes ([nms-format.md](nms-format.md), "`POKE`: pokes") are written in the once-a-frame work. Before the game starts, the loader (`overlay_pokes` in `overlay.c`) writes the codes of the pokes the player turned on into `pk_tab` in part 4, with their count in `pk_n`, and points the call at `vb_kbd` in `fw2_vbl` at `pk_vbl` in part 2; with no such code it points the call back at `kbd_scan`. `pk_vbl` maps part 4 at `$4000` in place of the VRAM copy's first page and calls `pk_run` there (its code uses only relative jumps), maps the VRAM copy back and jumps to `kbd_scan`. `pk_run` maps the SMS RAM in slot 6, writes each value to its address, and puts back the game's slot 6 page from `cur_mmu`. A game with no pokes on runs the same instructions as without the feature.
 
 `vbl_done` stops a second V counter read in the same blank from running the work again. A V counter read in the picture clears it. The frame event and SMS line events clear it only when they come on time, because one held by the game's `DI` can come after a V counter read that already did the work.
 
@@ -237,34 +242,38 @@ NextZXOS and esxDOS read and write through pointers while their own pages are ma
 
 ### The information screen
 
-After `loader_load` has read the cart, found the overlay and applied it without error, and before it starts the game, it far-calls `info_show`. `info_show` is in `src/shell/info/info.c`, in the page `PAGE_INFO`. A failure returns to the browser with its message, and the screen is not shown.
+After `loader_load` has read the cart, found the overlay and applied it without error, it far-calls `info_show`, then `overlay_pokes`, then starts the game. `info_show` is in `src/shell/info/info.c`, with its character drawing in `l2draw.asm`, in the page `PAGE_INFO`. A failure returns to the browser with its message, and the screen is not shown.
 
-`info_show` first leaves only the ULA screen showing: it hides all 128 hardware sprites and turns off the sprite layer, Layer 2, the tilemap and the copper, because a game ended with BREAK leaves its sprites in the attribute table. It writes 0 to port `$FF`, because the browser leaves a Timex mode on. It then clears the standard ULA screen and prints 32 columns of text. It takes the character shapes from the 48K ROM at `$3D00`, which is mapped while the shell runs. So the module has no font of its own. It prints:
+The screen is drawn on Layer 2 at 256x192, in pages 102 to 107 (`L2_PAGE`, the pages of the priority tiles in 192-line mode), one 8K page at a time through slot 6. `screen_on` saves the NextRegs it changes (`$12`, `$15`, `$16`, `$17`, `$43`, `$70`, `$71`), hides all 128 hardware sprites and turns off the sprite layer, the tilemap and the copper (a game ended with BREAK leaves its sprites in the attribute table), writes 0 to port `$FF` (the browser leaves a Timex mode on) and blacks out the ULA screen. It sets Layer 2 to 256x192 in bank 51 with no scroll and the whole clip window, the layer order sprites, Layer 2, ULA, and the first Layer 2 palette to the default colours, because the runtime's priority tiles write that palette. Layer 2 shows once the first page is drawn. Before `info_show` returns, `screen_off` turns Layer 2 off and puts the saved NextRegs back, with the sprites still off; the runtime sets every layer at game start.
 
-- the file name. It is `nm_lname`, the long name that the browser gives in DE. `glue.asm` copies it next to the short name, cut to 127 characters. If the browser gave no long name, it is `nm_name`.
-- the CRC32 and size, from `nm.launch`.
-- from the overlay file, as the loader read it into `nm`: the `title` from its `META` chunk (`nm.title`), cut to 48 characters and broken over lines at spaces; the format version from the header, as major.minor; and the runtime ABI the file needs (both in `nm.nms_ver`).
-- the game's status from the `META` chunk (`nm.status`): `working`, `imperfect`, `not working` or `untested`. A file with no `status` shows `untested`.
-- the video rate the game will use: `50 Hz` or `60 Hz` for an overlay with `hz=50` or `hz=60`, else `boot rate (50 Hz)` or `boot rate (60 Hz)`, from NextReg `$05` bit 2.
-- the flags, in words: `priority tiles`, `line-0 palette`, `tile cache`, `scroll split`, or `none`. They are the `CONF` switches as the loader read them, from `nm.launch.flags`.
+The look follows the white Master System box: a white background with a grey grid, a black title band with a red line under it, white panels with black frames. Everything is drawn in code. Text uses the character shapes of the 48K ROM at `$3D00`, which is mapped while the shell runs, so the module has no font of its own. The screen has three pages:
 
-It then waits. First it waits, for at most a short time, until no key and no joystick fire is held. This stops the key that picked the cart in the browser from counting. Then it polls every keyboard row, from port `$00FE`, and the Kempston joystick 1 fire bit, from port `$1F`, bit 4. It returns when one is pressed. Interrupts are off, so this is a polling loop. The game then starts as before.
+- The main page: the icon, the game's title from `META` (`nm.title`, broken over lines at spaces), its status (`nm.status`, `untested` when there is none) in a colour for each state, and a menu: "Start game", "Pokes" (only when the overlay has pokes, with the number turned on), "Details". The icon is the `ICON` chunk at twice its size; without one, or with an empty one, the screen draws an NMS icon.
+- The details page: the file name (`nm_lname`, the long name the browser gives in DE, or `nm_name`), the CRC32 and size from `nm.launch`, the title, the status, the video rate the game will use (`50 Hz` or `60 Hz` for an overlay with `hz=50` or `hz=60`, else `boot rate (50 Hz)` or `boot rate (60 Hz)` from NextReg `$05` bit 2), the format version and the runtime ABI from the header (`nm.nms_ver`), and the `CONF` switches in words from `nm.launch`. Any key goes back.
+- The Pokes page: one row for each poke, with its mark, then "Start game" and "Back". ENTER or fire on a poke turns it on or off. A poke with a code that takes the player's byte shows the byte in hex and decimal; ENTER or fire turns it on with the byte in edit, where up and down change it (held, they repeat), then ENTER or fire again leaves the edit with the poke on, and the next one turns it off.
+
+The keys: up and down are the cursor keys 7 and 6, Q and A, and the joystick; ENTER, SPACE and the joystick's fire buttons choose; D opens the details page from the main page. Any other key on the main page starts the game. A press counts when it is still there a little after the first read that saw it. Interrupts are off, so all of this is a polling loop. Before the first press the screen waits, for at most a short time, until no key is held, so the key that picked the cart in the browser does not count.
+
+Nothing is kept between runs: every poke is off, and every player's byte is `$00`, each time the screen opens (`nm.pokes_on`, `nm.poke_val`). The names come from the copy of the `POKE` chunk in `INFO_PAGE`, which `overlay_apply` makes and checks.
+
+`overlay_pokes` then applies the pokes turned on, from the same copy: each Game Genie code into the cart pages, each Action Replay code into the runtime's `pk_tab` (see "The once-a-frame work"). It always writes `pk_n` and the call at `vb_kbd`, so no poke of an earlier game stays on.
 
 ### Loading an overlay file
 
-`loader_load` in `src/shell/loader/loader.c` does this, in order. The file format is [nms-format.md](nms-format.md). The work is split over two modules: the loader (`PAGE_LOADER`) reads the cart, walks the file, and holds the CRC32 code; the overlay module (`src/shell/overlay/overlay.c`, `PAGE_OVERLAY`) does steps 2 and 4 to 7. The loader far-calls it for those (`overlay_find`, `overlay_apply`), and it far-calls the loader back for the two checks that need a CRC32 (`loader_check_range`, `loader_ramsite_old`). `src/shell/nms.h` has what they share.
+`loader_load` in `src/shell/loader/loader.c` does this, in order. The file format is [nms-format.md](nms-format.md). The work is split over two modules: the loader (`PAGE_LOADER`) reads the cart, walks the file, and holds the CRC32 code; the overlay module (`src/shell/overlay/overlay.c`, `PAGE_OVERLAY`) does steps 2 and 4 to 8, and after the information screen applies the pokes (`overlay_pokes`). The loader far-calls it for those (`overlay_find`, `overlay_apply`), and it far-calls the loader back for the two checks that need a CRC32 (`loader_check_range`, `loader_ramsite_old`). `src/shell/nms.h` has what they share.
 
 The loader never holds a whole file in memory. It reads the index and the overlay file through `OVL_BUF`, 256 bytes, so a file or a chunk can be of any size. A small reader, resident in `src/shell/rd.c` (`struct rd`), hands out the bytes of one run of the file in order: `rd_take` gives the next few bytes in one piece, and `rd_piece` gives the next bytes in pieces for long data such as a `PATCH` or a `RASTER` routine. An operation may cross the end of the buffer: the reader moves the bytes not yet used to the start and reads more after them. `nm_seek` (esxDOS `F_SEEK`) starts a run anywhere in the file.
 
 1. It reads the cart into pages 32 and up and computes its CRC32.
 2. It finds the overlay file in `ovl/index` in the start folder (the current directory, read with `F_GETCWD` in `session_init` before the browser first opens; `.nexload` does not handle paths, so it is the folder holding the NEX), if the file is there. It searches the index in place with a binary search: for each entry it probes, it seeks to the entry and reads its 8 bytes. The entry gives the primary CRC32, which names the overlay file. A cart that is not in the index has no overlay. Without an index, the overlay file is the one named after the cart's own CRC32.
-3. The walk. It reads `ovl/<CRC32>.nms` in the start folder once from the start to the end, and every byte up to the `END ` chunk goes through the running CRC32. It checks the header: the magic, format major version 1, and a runtime ABI not higher than `FW_ABI`. It reads each chunk header, checks that the chunk fits in the file, and notes where `CRCS`, `PTCH`, `CONF` and `META` start. It loads each `PAGE` chunk, as described below. It reads every other chunk only for the CRC32. `END ` must be last, with the right CRC32, and nothing may follow it. `CRCS` and `PTCH` must be there, and each of the four chunks may appear only once.
+3. The walk. It reads `ovl/<CRC32>.nms` in the start folder once from the start to the end, and every byte up to the `END ` chunk goes through the running CRC32. It checks the header: the magic, format major version 1, and a runtime ABI not higher than `FW_ABI`. It reads each chunk header, checks that the chunk fits in the file, and notes where `CRCS`, `PTCH`, `CONF`, `META`, `POKE` and `ICON` start. It loads each `PAGE` chunk, as described below. It reads every other chunk only for the CRC32. `END ` must be last, with the right CRC32, and nothing may follow it. `CRCS` and `PTCH` must be there, and each of those six chunks may appear only once.
 4. It seeks back to `CRCS` and checks that it lists the cart's CRC32. A list of any length works.
 5. It seeks to `META` and keeps the `title` in `nm.title` and the `status` in `nm.status`, and seeks to `CONF` and keeps the switches `priority=1`, `toppal=1`, `tilecache=1`, `hsplit=1`, `collline=1`, `rastseg=1`, `hz=50` and `hz=60` in the runtime's flags (`NM_FL_x` in `nm.h`), and `ntdiff=1` and `prichg=1` in the second byte of flags (`NM_FL2_x`).
 6. `PTCH`, first pass. It runs every `CHECK` operation against the cart pages, checks the bounds of every other operation, and works out the original instruction of every `RAMSITES` entry. Nothing is written yet, so a dump that fails a `CHECK` is left as it was read.
 7. `PTCH`, second pass. It seeks back to the start of `PTCH` and applies the operations: `PATCH` into the cart pages, `START` into the start address and stack pointer, and `RAMSITES` or `RASTER` into the runtime's part 2 from `$3C00`, through MMU6. For `RAMSITES` it writes the table the runtime reads: the continuation, the count, and for each entry the address, the two original bytes and the two new bytes. It sets the hook addresses that the runtime reads, `rast_hook` and `ramp_hook`.
+8. It copies `POKE` and `ICON` into `INFO_PAGE` for the information screen, and checks the copy of `POKE`.
 
-Only a failed read can stop the second pass. The cart is then part patched, and the loader reports the file as damaged. Picking the cart again reads it again from the card.
+Only a failed read, or a `POKE` chunk that breaks its rules, can stop steps 7 and 8. The cart is then part or wholly patched, and the loader reports the file as damaged. Picking the cart again reads it again from the card.
 
 The failure codes and their messages are in `src/shell/nm.h` and `src/shell/session/session.c`. "Unknown game" names the file that the loader looked for.
 
@@ -310,11 +319,13 @@ src/shell/               the C shell
     nms.h                what the loader, the overlay module and rd.c share
     glue.asm             nm_esx, nm_p3dos, nm_launch, nm_resume (resident)
     fwpages.asm          puts the runtime's pages into their banks
+    bootpages.asm        puts the boot pages into their banks
     zpragma.inc          linker settings (stack, start address)
     session/session.c    browser loop and messages (BANK_54_H)
     loader/loader.c      cart reading, the overlay file's walk (BANK_55_H)
     loader/crc32.asm     CRC32 (BANK_55_H)
     info/info.c          the information screen (BANK_56_H)
+    info/l2draw.asm      its character drawing on Layer 2 (BANK_56_H)
     overlay/overlay.c    the overlay index, chunks and patching (BANK_57_H)
 tools/check-layout       build-time layout checks
 tools/mknms.py           builds an overlay file from a spec and the cart

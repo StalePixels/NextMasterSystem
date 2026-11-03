@@ -1,4 +1,6 @@
 # My Hero, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name My Hero
 cart 62F0C23D
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -114,3 +116,18 @@ site 335E   ; OTIR
 # CHECK bank_unresolved at 1553: JP NZ,$8B15 $8B15
 # CHECK bank_unresolved at 480C: CALL M,$8088 $8088
 site 2A80   # low confidence in the scan; the 1bpp tile loop, real code
+
+# My Hero (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-4502
+endpoke
+
+# My Hero (USA, Europe, Brazil).cht, "Level Select"
+poke "Start round"
+ar 00C0-46??
+endpoke
+
+# My Hero (USA, Europe, Brazil).cht, "Invincibility"
+poke "Invincibility"
+gg C9E-A8E-C49
+endpoke

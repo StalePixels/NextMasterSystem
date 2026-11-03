@@ -1,4 +1,6 @@
 # Alien Syndrome, 5CBFE997, drafted by tools/mkspec.py from sitescan output (with the detector log).
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Alien Syndrome
 cart 5CBFE997
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -651,3 +653,18 @@ mapst 07E15   ; LD ($FFFF),A
 # not patched (data): mapst 0C831  LD ($FFFF),A  (17 RST or NOP opcodes around it (looks like data); 32 bytes of valid code before it)
 # not patched (data): mapst 0C8AD  LD ($FFFF),A  (32 bytes of valid code before it; no valid code after it)
 # not patched (data): mapsthl 11030  LD ($FFFC),HL  (7 RST or NOP opcodes around it (looks like data); 32 bytes of valid code before it)
+
+# Alien Syndrome (USA, Europe, Brazil).cht, "Unlimited Time"
+poke "Unlimited time"
+ar 00C0-7B06
+endpoke
+
+# Alien Syndrome (USA, Europe, Brazil).cht, "Invulnerability"
+poke "Invulnerability"
+ar 00C5-5502
+endpoke
+
+# Alien Syndrome (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-5409
+endpoke

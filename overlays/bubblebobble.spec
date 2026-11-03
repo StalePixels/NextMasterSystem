@@ -1,4 +1,6 @@
 # Bubble Bobble, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Bubble Bobble
 cart E843BA7E
 hz 50		; No-Intro regions Europe, Brazil
@@ -1300,3 +1302,13 @@ site 2FCF3   ; OUT ($BE),A
 # Bank 11: logged $21AA LD ($FFFF),A, then ... $BDF9 JR NZ,$BE0B > $BE0D JR NZ,$BE15 > $BE1A CALL $BCF8:
 site 2FCFE   ; OUT ($BE),A
 site 2FD03   ; OUT ($BE),A
+
+# Bubble Bobble (Europe) (Action Replay).cht, "Infinite Lives P1"
+poke "Infinite lives"
+ar 00CE-B709
+endpoke
+
+# Bubble Bobble (Europe) (Action Replay).cht, "Round Modifier"
+poke "Start round (value+1)"
+ar 00DB-00??
+endpoke

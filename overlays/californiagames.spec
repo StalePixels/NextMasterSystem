@@ -1,4 +1,6 @@
 # California Games (USA, Europe, Brazil) (En), CRC32 AC6009A7, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log and the
 # reference logs of each of the six events in practice mode (reflogs/events-AC6009A7).
 # The game runs each event's step in the foreground, then the frame handler ($13F4) does the
@@ -3555,3 +3557,13 @@ hp_sp:  dw 0
         ds 48
 hp_stk:
 endpage
+
+# California Games (USA, Europe, Brazil).cht, "Infinite Time (Events With Time That Goes Down)"
+poke "Infinite time"
+ar 00DC-A799
+endpoke
+
+# California Games (USA, Europe, Brazil).cht, "Freeze Timer"
+poke "Freeze timer"
+ar 00DC-A609
+endpoke

@@ -1413,5 +1413,28 @@ hw_hit:		ld a,hw_done-hw_wait
 		ld (frm_t2+1),hl
 		ret
 
+; The Action Replay writes of the pokes the player turned on, once a frame:
+; pk_n entries of (u16 SMS RAM address, $C000-$DFFF, u8 value) in pk_tab,
+; which the loader writes before the game starts (at least one entry when
+; it points vb_kbd at pk_vbl). pk_vbl (part 2) calls this code at $4000 in
+; the once-a-frame work, so it uses only relative jumps and reads the table
+; at its $4000 address. Slot 6 gets the game's page back from cur_mmu.
+pk_run:		nextreg $56,SMSRAM_PAGE
+		ld hl,pk_n+$2000
+		ld b,(hl)
+pk_run__l:	inc hl
+		ld e,(hl)
+		inc hl
+		ld d,(hl)
+		inc hl
+		ld a,(hl)
+		ld (de),a
+		djnz pk_run__l
+		ld a,(cur_mmu+6)
+		nextreg $56,a
+		ret
+pk_n:		db 0
+pk_tab:		defs 3*PK_MAX
+
 fw4_end:
 ; assert fw4_end <= $4000 (an overflow is an assembler error in runtime.asm)

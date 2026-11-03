@@ -1,4 +1,6 @@
 # Castle of Illusion Starring Mickey Mouse (USA, Europe, Brazil) (Rev 1), CRC32 953F42E1, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the reference I/O logs of
 # attract mode (30 minutes, no input) and play (10 minutes, start script and random input).
 # The byte scan's I/O patterns in bank 0 at $01DA-$022F (name table row and tile writers),
@@ -858,3 +860,20 @@ asm 00172 5          ; LD B,4 : EX AF,AF' : LD A,B : EX AF,AF': the routine is r
     ret
 endasm
 libpage 0 rle_tiles  ; overlays/lib/rle_tiles.asm
+
+# Castle of Illusion Starring Mickey Mouse (USA, Europe) (Action Replay).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-C809
+endpoke
+
+# Castle of Illusion Starring Mickey Mouse (Europe, Brazil).cht, "Infinite Health"
+poke "Infinite health"
+ar 00C0-BD03
+endpoke
+
+# Castle of Illusion Starring Mickey Mouse (USA, Brazil).cht, "Infinite Time (Seconds - Ten's & One's Digits)"
+# Castle of Illusion Starring Mickey Mouse (USA, Brazil).cht, "Infinite Time (Seconds - Hundred's Digit)"
+poke "Infinite time"
+ar 00DC-0099
+ar 00DC-0109
+endpoke

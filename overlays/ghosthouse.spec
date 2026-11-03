@@ -1,4 +1,6 @@
 # Ghost House, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Ghost House
 cart F1F8FF2D
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -101,3 +103,18 @@ asm 07EF8 8    ; unused $FF bytes: haltcave2
     ld ($C1F1),a
     ret
 endasm
+
+# Ghost House (USA, Europe, Brazil).cht, "Round Select"
+poke "Start round"
+ar 00C1-B9??
+endpoke
+
+# Ghost House (USA, Europe, Brazil).cht, "Infinite Health"
+poke "Infinite health"
+ar 00C1-F590
+endpoke
+
+# Ghost House (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C1-BA09
+endpoke

@@ -1,4 +1,6 @@
 # R-Type, BB54B6B0, drafted by tools/mkspec.py from sitescan output (with the detector log).
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name R-Type
 cart BB54B6B0
 hz any		; No-Intro regions World
@@ -1029,3 +1031,28 @@ site 176C6   ; OUT ($BF),A
 site 176CA   ; OUT ($BF),A
 site 176D0   ; OUT ($BE),A
 site 176D7   ; OUT ($BE),A
+
+# R-Type (World).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00CE-0103
+endpoke
+
+# R-Type (World).cht, "Infinite Credits (Continues)"
+poke "Infinite continues"
+ar 00CC-0409
+endpoke
+
+# R-Type (World).cht, "Invincibility (Flashing)"
+poke "Invincibility"
+ar 00CE-D8FF
+endpoke
+
+# R-Type (World).cht, "Start with ?? Lives, instead of 3"
+poke "Start lives"
+gg ??F-EBF-E66
+endpoke
+
+# R-Type (World).cht, "Start with ?? Continues, instead of 2"
+poke "Start continues"
+gg ??F-DEF-E62
+endpoke

@@ -1,4 +1,6 @@
 # Super Tennis, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Super Tennis
 cart 914514E3
 hz any		; No-Intro regions USA, Europe
@@ -100,3 +102,8 @@ site 7A58   ; OUT ($7F),A
 site 7A5C   ; OUT ($7F),A
 site 7DC5   ; OUT ($7F),A
 site 7DDF   ; OTIR
+
+# Super Tennis (USA, Europe).cht, "CPU/P2 Never Scores"
+poke "CPU never scores"
+ar 00C4-8900
+endpoke

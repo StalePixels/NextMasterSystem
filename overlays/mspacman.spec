@@ -1,4 +1,6 @@
 # Ms. Pac-Man (Europe, Brazil) (En), CRC32 3CD816C6, 128K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log.
 # The game measures the CPU against the frame at $4B03-$4B2C (10 HALTs, then a loop counted over
 # one frame) and stores 1 at $DF0F below 1800 counts (NTSC), 0 above (PAL). At 28 MHz the count is
@@ -4598,3 +4600,18 @@ c_th:   db $FF
 cbuf:   ds 64
 p_lf:   ds 256
 endpage
+
+# Ms. Pac-Man (Europe, Brazil).cht, "Infinite Lives - Both Players (except Alternating Game)"
+poke "Infinite lives"
+gg 00A-75D-3BE
+endpoke
+
+# Ms. Pac-Man (Europe, Brazil).cht, "Start with ?? Lives, instead of 3 - Both Players"
+poke "Start lives"
+gg ??B-02D-E66
+endpoke
+
+# Ms. Pac-Man (Europe, Brazil).cht, "Invincibility"
+poke "Invincibility"
+gg 185-9DC-2AA
+endpoke

@@ -1,4 +1,6 @@
 # Asterix (Europe, Brazil) (En,Fr) (Rev 1), CRC32 8C9D5BE8, 512K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the reference I/O logs of
 # attract mode (30 minutes, no input) and play (10 minutes, start script and random input).
 # Byte scan I/O patterns judged code and patched (no recording ran them):
@@ -905,3 +907,24 @@ asm 00625 5          ; LD B,4 : EX AF,AF' : LD A,B : EX AF,AF': the routine is r
     ret
 endasm
 libpage 0 rle_tiles  ; overlays/lib/rle_tiles.asm
+
+# Asterix (Europe, Brazil) (En,Fr) (Rev 1).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-9D09
+endpoke
+
+# Asterix (Europe, Brazil) (En,Fr) (Rev 1).cht, "Infinite Energy"
+poke "Infinite energy"
+gg B61-095-3BE
+endpoke
+
+# Asterix (Europe, Brazil) (En,Fr) (Rev 1).cht, "Infinite Time - Seconds Digits"
+poke "Infinite time"
+ar 00C0-A309
+ar 00C0-A299
+endpoke
+
+# Asterix (Europe, Brazil) (En,Fr) (Rev 1).cht, "Flying"
+poke "Flying"
+ar 00C2-0B11
+endpoke

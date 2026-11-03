@@ -61,9 +61,12 @@ HOW TO START
 3. NextMasterSystem reads the .sms dump, matches and patches it.
    A 512K cart takes a few seconds to load. Some games take
    longer, because they prepare their graphics while loading.
-4. The information screen shows the game, its state (see the
-   list below) and the video rate it will use. Press any key
-   or fire to start.
+4. The information screen shows the game, its icon and its
+   state (see the list below). ENTER or fire on "Start game"
+   starts the game; so does any key that is not a menu key.
+   "Details" (or D) shows the file, its CRC32 and the video
+   rate the game will use. "Pokes" is there when the game has
+   pokes (see POKES below).
 5. Press BREAK to leave the game. You go back to the browser
    and can pick another game. Press BREAK in the browser to
    leave NextMasterSystem and go back to NextZXOS.
@@ -93,6 +96,36 @@ Pause             pad Start, or ENTER
 Leave             BREAK (from the game to the browser,
                   from the browser to NextZXOS)
 
+POKES
+-----
+
+Pokes are cheats, such as infinite lives, that you turn on
+before the game starts. Not every game has them.
+
+1. On the information screen, choose "Pokes".
+2. Move with up and down (cursor keys 7 and 6, Q and A, or
+   the joystick). ENTER, SPACE or fire turns the poke you are
+   on, on or off.
+3. Some pokes take a number, such as a start round or a
+   number of lives. The number shows on the right, in hex and
+   in decimal, for example "05 / 5". When you turn such a
+   poke on, the number is ready to change: set it with up and
+   down, then press ENTER or fire. Press it once more to turn
+   the poke off.
+4. Choose "Start game" to play, or "Back" to go back to the
+   information screen.
+
+Every poke is off each time the information screen opens. To
+change the pokes, press BREAK in the game and pick the cart
+again.
+
+The codes come from the libretro-database cheat catalogue,
+https://github.com/libretro/libretro-database, under the
+Creative Commons Attribution-ShareAlike 4.0 licence
+(CC-BY-SA 4.0). Each one was tried on the cart dump in the
+list below before it went into an overlay.
+
+
 VIDEO RATE: 50 OR 60 HZ
 -----------------------
 
@@ -100,7 +133,8 @@ Master System games were made for 50 Hz (PAL, Europe) or
 60 Hz (NTSC, USA and Japan) consoles. When a game was made for
 one rate only, NextMasterSystem switches the Next to that rate
 when the game starts. A game sold for both runs at the rate
-your Next started with. The information screen shows which.
+your Next started with. The Details page of the information
+screen shows which.
 If you want to force a SMS game to start in a different mode
 switch to that mode before you launch the game.
 

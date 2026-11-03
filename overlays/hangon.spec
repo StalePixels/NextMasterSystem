@@ -1,4 +1,6 @@
 # hangon, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Hang On
 cart 071B045E
 hz 50		; No-Intro regions Europe
@@ -113,3 +115,18 @@ plain 003D1
 plain 003D4
 plain 003D8
 rastercode hangon-raster.asm
+
+# Hang-On (Europe).cht, "Course Select"
+poke "Course (value+1)"
+ar 00C0-10??
+endpoke
+
+# Hang-On (Europe).cht, "Area Select"
+poke "Area select"
+ar 00C0-07??
+endpoke
+
+# Hang-On (Europe).cht, "Infinite Time"
+poke "Infinite time"
+ar 00C0-0D3C
+endpoke

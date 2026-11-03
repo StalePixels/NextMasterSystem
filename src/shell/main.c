@@ -10,5 +10,6 @@ void nm_run(void)
 void main(void)
 {
     NM_FAR(PAGE_SESSION, session_init, 0);
+    if (nm.boot) nm.err = (uint8_t)(uintptr_t)NM_FAR(PAGE_LOADER, loader_load, 0);
     nm_run();
 }

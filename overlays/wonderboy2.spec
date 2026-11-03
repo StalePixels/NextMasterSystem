@@ -1,4 +1,6 @@
 # Wonder Boy in Monster Land (USA, Europe), 8CBEF0C1, drafted by tools/mkspec.py from sitescan output (with the detector log).
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Wonder Boy in Monster Land
 cart 8CBEF0C1
 hz any		; No-Intro regions USA, Europe
@@ -762,3 +764,19 @@ mapst 07F95   ; LD ($FFFF),A
 # CHECK low: site 3E382  IN A,($BF)  (vdp_status)
 # CHECK low: site 3E38A  IN A,($7F)  (h_counter)
 # CHECK low: site 3EAA5  OUT ($BD),A  (vdp_control)
+
+# Wonder Boy in Monster Land (USA, Europe).cht, "Always Have 99 Gold; Infinite Money"
+poke "Infinite gold"
+ar 00C0-B999
+ar 00C0-BA44
+endpoke
+
+# Wonder Boy in Monster Land (USA, Europe).cht, "Invincibility"
+poke "Invincibility"
+ar 00C0-BC14
+endpoke
+
+# Wonder Boy in Monster Land (USA, Europe).cht, "Infinite Time"
+poke "Infinite time"
+ar 00C1-9900
+endpoke

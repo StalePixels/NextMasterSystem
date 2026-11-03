@@ -1,4 +1,6 @@
 # Spy vs Spy, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Spy vs Spy
 cart 78D7FAAB
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -66,3 +68,8 @@ site 7A39   ; OUT ($7F),A
 site 7C99   ; OUT ($7F),A
 site 7D3E   ; OUT ($7F),A
 site 7D5E   ; OTIR
+
+# Spy vs Spy (USA, Europe, Brazil) (En).cht, "Round Modifier (0 - 7)"
+poke "Round"
+ar 00C1-12??
+endpoke

@@ -1,4 +1,6 @@
 # Space Harrier, CA1D3752, drafted by tools/mkspec.py from sitescan output (with the detector log).
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Space Harrier
 cart CA1D3752
 hz 50		; No-Intro regions Europe
@@ -15,12 +17,7 @@ site 00103   ; IN A,($DE)
 site 00161   ; OUT ($BF),A
 site 00165   ; OUT ($BF),A
 site 00170   ; IN A,($DD)
-site 00451   ; OUT ($BF),A
-site 00455   ; OUT ($BF),A
-site 0045A   ; OUT ($BE),A
-site 00463   ; OUT ($BF),A
-site 00467   ; OUT ($BF),A
-site 0046C   ; OUT ($BE),A
+# 00451-0046C: the line handler's CRAM writes, replaced by the asm block at 0044A (page 1, sh_gnd)
 site 004F4   ; OUT ($3F),A
 site 004F6   ; IN A,($DD)
 site 00500   ; OUT ($3F),A
@@ -375,6 +372,86 @@ asm 006D1 7          ; LD DE,($C155) : LD HL,($C153): the rest of the routine is
     db far_io, pg_sh_rle, ent_sh_rle
     ret
 endasm
+# Line handler at $044A (the line interrupt at line 127, register 10 = $7F): CRAM 0 and
+# CRAM 16 = ($C17B), the ground colour, which the SMS writes at line 128. Pixel value 0 is
+# the tilemap's transparent value here (CRAM 0 = CRAM 16), so the cells that use it show
+# the fallback colour (NextReg $4A). On the Next the handler starts at line 130 (the line
+# event and the status read at $0039 through the runtime), so the cells of row 16 with
+# pixel value 0, round objects and explosions at the horizon, showed the sky colour in
+# lines 128-130, and the border the ground colour from line 134. The frame handler writes
+# register 10 = $7B (line 123) in place of $7F, and page 1 entry sh_gnd waits for line 128,
+# then writes the fallback colour, the border and CRAM 0 and 16 at once.
+asm 0015F 2          ; LD A,$7F: register 10, written at $0161-$0165
+    ld a,$7B
+endasm
+asm 0044A 36         ; LD A,$07 : DEC A : JR NZ ... OUT ($BE),A: up to $046D
+    rst $10
+    db far_io, pg_sh_gnd, ent_sh_gnd
+    jr $046E
+endasm
+# The frame handler's palette upload, LD HL,$C15A : LD DE,$C000 : RST $08 : LD C,$BE :
+# CALL $4BA6 (32 OUTI): CRAM 0-31 from $C15A, CRAM 0 and 16 the sky colour. The counted
+# delay loops before it (two or three LD B,$E0 : DJNZ, with the sprite table upload in
+# the two-loop forms) put CRAM 0's write at SMS line 233-235, past the picture; at 28 MHz
+# they take about 5 lines, and the backdrop (the bottom border) turned to the sky colour
+# from line 218. Page 1 entry sh_pal waits for the line in A, the line of the SMS's
+# CRAM 0 write on each path (MAME sg1000m3, cycles from the handler's entry), then writes
+# the 32 entries.
+asm 001DE 12         ; after two loops, the display on and the sprite table: line 235
+    ld a,235
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 0024F 12         ; after three loops: line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 002B1 12         ; after three loops and $10E5: line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 002DA 12         ; after two loops, the sprite table and $10E5: line 235
+    ld a,235
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 0030D 12         ; after three loops and $10E5: line 234
+    ld a,234
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 0033C 12         ; after three loops and $10E5: line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 00366 12         ; after three loops and $10E5: line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 0038D 12         ; after three loops and $10E5: line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 003BC 12         ; after two loops and the sprite table: line 235
+    ld a,235
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 00410 12         ; after three loops: line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
+asm 00434 12         ; after three loops (the pause): line 233
+    ld a,233
+    rst $10
+    db far_io, pg_sh_pal, ent_sh_pal
+endasm
 page 0 sh_nt sh_sat sh_tiles sh_rle
 ; sh_nt: does what $0F99-$0FB1 does with interrupts off: name table rows 1-23,
 ; 32 cells each, from $CD20 + 128 * row to VRAM $3840 + 64 * row. Columns 0-7
@@ -693,3 +770,352 @@ tl_n:   dw 0
 tl_v:   dw 0
 buf:    ds 32*32
 endpage
+page 1 sh_gnd sh_pal
+; Mid-frame colours. The entries write CRAM as the runtime's data port writes with VDP
+; code 3 do (cram_set, cram_block and pal_out in fw.asm), straight into the Next
+; palettes at the line where the SMS writes them: for each entry e, the colour (low
+; 6 bits) into cram, into the first tilemap palette (index e) and, for e 16-31, into
+; the first sprite palette (e - 16), from pal_hi_table and pal_lo_table, with NextReg
+; $43 holding pal43's display bits. Then the VDP state as the game's writes leave it
+; (address, code 3, latch clear, read buffer), and fallback_update, which sets the
+; transparent value, the fallback colour and the backdrop (the border). With priority
+; or toppal (fw_flags bits 0 and 1) the writes go through the I/O RST instead, which
+; also does the Layer 2 and second palettes.
+; Both entries run in the game's interrupt handler with interrupts off. They keep the
+; game's stack as the game's code does: fallback_update maps part 2 of the runtime in
+; slot 1, so the entries' own stack cannot be in this page at $2000. They map this page
+; at $4000 as well (slot 2) and use a stack there, and put slot 2 back from cur_mmu + 2;
+; the I/O RST path runs on the game's stack, as the game's own writes.
+; Runtime internals (build/rt/runtime.map): pal43 $E09F, pal_hi_table $E300,
+; pal_lo_table $E340, fw_flags $E09E, fallback_update $F582 (calls fallback2 in fw2
+; through fw2_call, which puts back the page in slot 1 from cur_mmu + 1: this code
+; page while an entry runs).
+        OPT --zxnext
+S_PAL43 equ $E09F
+S_PHI   equ $E300
+S_PLO   equ $E340
+S_FLAGS equ $E09E
+S_FBUP  equ $F582
+
+; sh_gnd: does what $044A-$046D does: CRAM 0 and CRAM 16 = ($C17B), at line 128, where
+; the SMS writes them (the line interrupt comes 5 lines early: register 10 = $7B). It
+; waits for that line when the handler starts up to 16 lines before it. The fallback
+; colour goes first, when the transparent value (NextReg $4C) is 0: the cells with pixel
+; value 0 show it; then the border, when it shows CRAM 16 (register 7 = 0). Keeps BC,
+; DE, HL; returns A = ($C17B), as the game's code.
+GND_LINE equ 128
+sh_gnd: call enter
+        ld de,GND_LINE*256+GND_LINE-16
+        call wline
+        ld a,(S_FLAGS)
+        and 3
+        jr nz,.rst
+        ld bc,$243B
+        ld a,$4C
+        out (c),a
+        inc b
+        in b,(c)                ; the transparent value
+        ld a,($C17B)
+        and $3F
+        ld c,a
+        ld a,b
+        or a
+        jr nz,.nt
+        ld a,c
+        add a,S_PHI&255
+        ld l,a
+        ld h,S_PHI>>8
+        ld a,(hl)
+        nextreg $4A,a           ; the fallback colour
+.nt:    ld a,(vdp_regs+7)
+        and $0F
+        call z,ulab             ; the border shows CRAM 16
+        ld e,0
+        call c1
+        ld e,16
+        call c1
+        ld a,(S_PAL43)
+        nextreg $43,a
+        ld hl,$0011             ; after CRAM 16
+        ld (vdp_addr),hl
+        ld a,3
+        ld (vdp_code),a
+        xor a
+        ld (vdp_latch),a
+        ld a,($C17B)
+        ld (vdp_rbuf),a
+        call S_FBUP
+        call leave
+        jr .ret
+.rst:   call leave
+        xor a
+        rst $10
+        db $05                  ; OUT ($BF),A
+        ld a,$C0
+        rst $10
+        db $05
+        ld a,($C17B)
+        rst $10
+        db $04                  ; OUT ($BE),A
+        ld a,$10
+        rst $10
+        db $05
+        ld a,$C0
+        rst $10
+        db $05
+        ld a,($C17B)
+        rst $10
+        db $04
+.ret:   ld bc,(e_bc)
+        ld de,(e_de)
+        ld hl,(e_hl)
+        ld a,(e_ie)
+        or a
+        ld a,($C17B)
+        jr z,.di
+        ei
+.di:    ret
+
+; sh_pal: does what LD HL,$C15A : LD DE,$C000 : RST $08 : LD C,$BE : CALL $4BA6 does:
+; CRAM 0-31 from $C15A. A = the SMS line of the CRAM 0 write. It waits from line 192 for
+; line A, writes the border (the backdrop, CRAM 16 + register 7, which the SMS writes
+; about a line after CRAM 0), then entries 0-16, runs fallback_update, writes entries
+; 17-31 and runs it again.
+; Returns as that code does: HL = $C17A, DE = $C000, C = $BE, B = B - 32, A = $C0. The
+; flags are not those of the last OUTI: the code after each site does not read them.
+sh_pal: call enter
+        ld a,(e_a)
+        ld d,a                  ; the line to wait for
+        ld e,192
+        call wline
+        ld a,(S_FLAGS)
+        and 3
+        jr nz,.rst
+        ld a,(vdp_regs+7)
+        and $0F
+        add a,$6A
+        ld l,a
+        ld h,$C1                ; $C16A + register 7: the backdrop's entry
+        ld a,(hl)
+        and $3F
+        ld c,a
+        call ulab
+        ld hl,$C15A
+        ld e,0
+        ld b,17
+        call cn
+        push hl
+        push de
+        call S_FBUP
+        pop de
+        pop hl
+        ld b,15
+        call cn
+        ld a,(S_PAL43)
+        nextreg $43,a
+        ld hl,$0020             ; after CRAM 31
+        ld (vdp_addr),hl
+        ld a,3
+        ld (vdp_code),a
+        xor a
+        ld (vdp_latch),a
+        ld a,($C179)
+        ld (vdp_rbuf),a
+        call S_FBUP
+        call leave
+        jr .ret
+.rst:   call leave
+        xor a
+        rst $10
+        db $05                  ; OUT ($BF),A
+        ld a,$C0
+        rst $10
+        db $05
+        ld hl,$C15A
+        ld bc,$20BE
+        rst $10
+        db $B3                  ; OTIR
+.ret:   ld a,(e_bc+1)
+        sub 32
+        ld b,a                  ; B as the 32 OUTI leave it
+        ld c,$BE
+        ld hl,$C17A
+        ld de,$C000
+        ld a,(e_ie)
+        or a
+        ld a,$C0
+        jr z,.di
+        ei
+.di:    ret
+
+; enter: called first by each entry. Keeps the game's A, BC, DE, HL and SP in e_a to e_sp
+; and the interrupt state in e_ie, turns interrupts off, maps this page at $4000 too and
+; puts SP on e_stk there, with the return to the entry on it.
+enter:  ld (e_a),a
+        ld (e_bc),bc
+        ld (e_de),de
+        ld (e_hl),hl
+        ld a,i                  ; P/V = the interrupt state
+        di
+        ld a,0
+        jp po,.di
+        inc a
+.di:    ld (e_ie),a
+        pop hl                  ; the return to the entry, from the game's stack
+        ld (e_sp),sp
+        ld bc,$243B
+        ld a,$51
+        out (c),a
+        inc b
+        in a,(c)                ; this page
+        nextreg $52,a           ; and at $4000-$5FFF
+        ld sp,e_stk+$2000
+        jp (hl)
+
+; leave: back to the game's stack and slot 2 page (cur_mmu + 2). Uses A, HL.
+leave:  pop hl
+        ld a,(cur_mmu+2)
+        nextreg $52,a
+        ld sp,(e_sp)
+        jp (hl)
+
+; ulab: the border: the second ULA palette's 32 entries = colour C, as bd_update in
+; fw2.asm writes them (every entry holds the backdrop colour). bd_update writes them
+; again with its own note of the colour (bd_cur) when fallback_update runs. Uses A, B, HL.
+ulab:   ld a,(S_PAL43)
+        or %01000000            ; the second ULA palette
+        nextreg $43,a
+        nextreg $40,0
+        ld a,c
+        add a,S_PHI&255
+        ld l,a
+        ld h,S_PHI>>8
+        ld b,(hl)
+        ld a,c
+        add a,S_PLO&255
+        ld l,a
+        ld l,(hl)
+        ld h,32
+.w:     ld a,b
+        nextreg $44,a
+        ld a,l
+        nextreg $44,a
+        dec h
+        jr nz,.w
+        ld a,(S_PAL43)
+        nextreg $43,a
+        ret
+
+; cn: B entries from HL, from entry E, through c1. Returns HL and E past them.
+cn:     ld a,(hl)
+        and $3F
+        ld c,a
+        push bc
+        push hl
+        call c1
+        pop hl
+        pop bc
+        inc hl
+        inc e
+        djnz cn
+        ld a,(S_PAL43)
+        nextreg $43,a
+        ret
+
+; c1: CRAM entry E (0-31) = colour C (0-63): cram, the first tilemap palette, and for
+; E 16-31 the first sprite palette. Uses A, B, HL.
+c1:     ld hl,cram
+        ld a,e
+        add hl,a
+        ld (hl),c
+        ld a,c
+        add a,S_PHI&255
+        ld l,a
+        ld h,S_PHI>>8
+        ld b,(hl)
+        ld a,c
+        add a,S_PLO&255
+        ld l,a
+        ld l,(hl)               ; S_PLO has the same high byte
+        ld a,(S_PAL43)
+        or %00110000            ; the first tilemap palette
+        nextreg $43,a
+        ld a,e
+        nextreg $40,a
+        ld a,b
+        nextreg $44,a
+        ld a,l
+        nextreg $44,a
+        ld a,e
+        cp 16
+        ret c
+        ld a,(S_PAL43)
+        or %00100000            ; the first sprite palette
+        nextreg $43,a
+        ld a,e
+        sub 16
+        nextreg $40,a
+        ld a,b
+        nextreg $44,a
+        ld a,l
+        nextreg $44,a
+        ret
+
+; wline: waits while the Next's line is from E to D - 1 (lines 0-255; the Next's line
+; is the SMS line in 192-line mode). Uses A, BC, HL.
+wline:  call rline
+        ld a,h
+        or a
+        ret nz
+        ld a,l
+        cp e
+        ret c
+        cp d
+        ret nc
+        jr wline
+
+; rline: HL = the Next's line (NextReg $1E, $1F), read again when the high byte changed
+; between the reads. Uses A, BC.
+rline:  ld bc,$243B
+.a:     ld a,$1E
+        out (c),a
+        inc b
+        in h,(c)
+        dec b
+        ld a,$1F
+        out (c),a
+        inc b
+        in l,(c)
+        dec b
+        ld a,$1E
+        out (c),a
+        inc b
+        in a,(c)
+        dec b
+        xor h
+        and 1
+        jr nz,.a
+        ld a,h
+        and 1
+        ld h,a
+        ret
+
+e_a:    db 0
+e_ie:   db 0
+e_bc:   dw 0
+e_de:   dw 0
+e_hl:   dw 0
+e_sp:   dw 0
+        ds 64
+e_stk:
+endpage
+
+# Space Harrier (Europe).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C1-2309
+endpoke
+
+# Space Harrier (Europe).cht, "Invincibility (after dying)"
+poke "Invincibility"
+gg 3A5-EDD-2A2
+endpoke

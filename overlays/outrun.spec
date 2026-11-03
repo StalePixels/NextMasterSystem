@@ -1,4 +1,6 @@
 # OutRun, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name OutRun
 cart 5589D8D2
 hz any		; No-Intro regions World
@@ -1059,3 +1061,8 @@ mapld 04393   ; loads HL with $FFFF, then stores $0C through it
 # mapper loads at $1E54, $1E62 and $1E8A in the same routine are patched above). It sets the VRAM address
 # to $3F00 with RST $08 and writes $D0 there: the Y of the first sprite, which ends the sprite list.
 site 01E51   ; OUT ($BE),A
+
+# OutRun (World).cht, "Infinite Time"
+poke "Infinite time"
+ar 00DE-0199
+endpoke

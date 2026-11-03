@@ -1,4 +1,6 @@
 # Fantasy Zone (World) (Rev 1), 65D7E4E0, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Fantasy Zone
 cart 65D7E4E0
 hz any		; No-Intro regions World
@@ -149,3 +151,25 @@ site 1E3F1   ; OUT ($7F),A
 # on the Master System, not for the runtime's interrupts too.
 eihalt 00A17   ; EI : HALT
 eihalt 013CC   ; EI : HALT
+
+# Fantasy Zone (World).cht, "Infinite Lives"
+poke "Infinite lives"
+gg B65-DBD-3BE
+endpoke
+
+# Fantasy Zone (World).cht, "Infinite Money"
+poke "Infinite money"
+ar 00C0-6699
+ar 00C0-6799
+endpoke
+
+# Fantasy Zone (World).cht, "Invincibility"
+poke "Invincibility"
+gg 3A4-8ED-6EE
+gg 3A4-C3D-6EE
+endpoke
+
+# Fantasy Zone (World) (Action Replay).cht, "Level Select (Replace ? To Change Levels)"
+poke "Start level"
+ar 00C0-64??
+endpoke

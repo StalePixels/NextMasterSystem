@@ -57,6 +57,27 @@ first 32K it is also the Z80 address.
                      makes room for "rst <io vector> : db halt_io" (also
                      eihalt_io, haltret_io); all three need ABI 9
   poke ADDR OLD NEW  replace hex bytes OLD with NEW at ADDR
+  poke "NAME"        a poke (a cheat) the player can turn on in the
+  ar CODE            information screen's Pokes page: the lines up to a
+  gg CODE            line "endpoke" are its codes, all turned on together.
+  endpoke            NAME is what the page shows, 1 to 24 characters, with
+                     no " # or ;. ar CODE is an Action Replay code 00AA-AAVV:
+                     the runtime writes $VV to RAM address $AAAA ($C000-
+                     $FFFB) once a frame. gg CODE is a Game Genie code
+                     DDA-AAA-RRR or DDA-AAA: the loader writes $DD into the
+                     cart image once, after the overlay's patches. With the
+                     reference RRR it writes each 16K bank where the byte at
+                     the address's offset in its slot equals the reference;
+                     without one the address must be in $0000-$03FF, which
+                     is always bank 0. In a cart of 48K or less, which has
+                     no banking, the address is the cart offset. The build
+                     stops when a Game Genie
+                     code would change a byte that the spec changes, or no
+                     byte of this cart. At most 16 pokes, and 32 ar codes
+                     in all. The file goes into the POKE chunk.
+                     ?? in place of VV in an ar code, or of DD in a gg
+                     code, is a byte the player sets in the Pokes page with
+                     up and down, from 00 to FF.
   asm ADDR LEN       Z80 assembly instead of hex. The lines up to a line
   ...                "endasm" are assembled with sjasmplus, as if at the Z80
   endasm             address that cart offset ADDR runs at (the offset itself
@@ -177,6 +198,12 @@ PAGE_COUNT, PAGE_ENTS = 8, 64            # CODE_MAX, CODE_ENTS in src/runtime/me
 FAR_IO = 0x80                            # the far call's inline code
 # The inline codes of a patched HALT (ABI 9): HALT, EI then HALT, HALT then RET.
 HALT_IO = {'halt_io': 0x76, 'eihalt_io': 0xFB, 'haltret_io': 0xC9}
+# Pokes (the POKE chunk): the limits of the information screen and of the
+# runtime's table (NM_POKES_MAX, NM_POKE_NAME in src/shell/nm.h, PK_MAX in
+# src/runtime/memplan.inc), and the code types.
+POKES_MAX, POKE_NAME, AR_MAX = 16, 24, 32
+PK_AR, PK_GG, PK_GGREF = 1, 2, 3
+PK_VALUE = 0x80   # with a code type: the value byte is the player's number
 ENTRY = {'out_n': 0xE000, 'in_n': 0xE003, 'ed': 0xE006, 'ld_de_a': 0xE009, 'outi_run': 0xE012, 'io': 0xE015}
 # Names every asm block can use. The addresses are fixed by src/runtime/fw.asm
 # (the jump table, then "state that tools read from outside"). The jt_ names
@@ -338,6 +365,119 @@ def ascii_text(s):
     return ' '.join(s.split())
 
 
+def decode_ar(code):
+    """An Action Replay code 00AA-AAVV: (address, value), or None."""
+    m = re.fullmatch(r'00([0-9A-F]{2})-([0-9A-F]{2})([0-9A-F]{2})', code.upper())
+    if not m:
+        return None
+    a = int(m.group(1) + m.group(2), 16)
+    if not 0xC000 <= a <= 0xFFFB:
+        return None
+    return a, int(m.group(3), 16)
+
+
+def decode_gg(code):
+    """A Game Genie code DDA-AAA or DDA-AAA-RRR: (address, value, reference
+    or None), or None. www.smspower.org/Development/GameGenie: the value is
+    the first two digits; the address is digits 3 to 5 with the inverted
+    sixth digit above them; the reference is the seventh and ninth digits as
+    a byte, rotated right by 2 and XORed with $BA."""
+    m = re.fullmatch(r'([0-9A-F]{3})-([0-9A-F]{3})(?:-([0-9A-F]{3}))?', code.upper())
+    if not m:
+        return None
+    d = ''.join(x for x in m.groups() if x)
+    v = int(d[0:2], 16)
+    a = (int(d[5], 16) ^ 0xF) << 12 | int(d[2:5], 16)
+    ref = None
+    if len(d) == 9:
+        b = int(d[6], 16) << 4 | int(d[8], 16)
+        ref = ((b >> 2 | b << 6) & 0xFF) ^ 0xBA
+    if a >= 0xC000:
+        return None
+    return a, v, ref
+
+
+def gg_places(img, a, ref):
+    """The cart offsets a Game Genie code at address a with reference ref
+    writes, as the loader decides (overlay_pokes in src/shell/overlay)."""
+    if a < 0x0400 or len(img) <= 0xC000:
+        return [a] if a < len(img) and (ref is None or img[a] == ref) else []
+    if ref is None:
+        return []
+    return [off for off in range(a & 0x3FFF, len(img), 0x4000) if img[off] == ref]
+
+
+def read_poke_block(it, spec, n, rest):
+    """A poke block that starts on spec line N with the words REST after
+    poke: (name, [(type, address, value, reference)]). A type with PK_VALUE
+    set takes its value byte from the player."""
+    m = re.fullmatch(r'"([^"]*)"', rest.strip())
+    if not m:
+        raise SystemExit(f'{spec}:{n}: poke "NAME" (a block) or poke ADDR OLD NEW')
+    name = m.group(1)
+    if not 1 <= len(name) <= POKE_NAME or any(not ' ' <= ch <= '~' for ch in name):
+        raise SystemExit(f'{spec}:{n}: a poke name is 1 to {POKE_NAME} ASCII characters')
+    codes = []
+    for k, raw in it:
+        line = strip_comment(raw)
+        if not line:
+            continue
+        w = line.split()
+        if w == ['endpoke']:
+            if not codes:
+                raise SystemExit(f'{spec}:{n}: poke "{name}" has no codes')
+            return name, codes
+        if len(w) != 2 or w[0] not in ('ar', 'gg'):
+            raise SystemExit(f'{spec}:{k}: in a poke block: ar CODE, gg CODE or endpoke')
+        ask = PK_VALUE if '??' in w[1] else 0
+        if ask and not (w[0] == 'ar' and w[1].endswith('??') or w[0] == 'gg' and w[1].startswith('??')):
+            raise SystemExit(f'{spec}:{k}: ?? stands for the value byte: VV of an ar code, DD of a gg code')
+        w[1] = w[1].replace('??', '00')
+        if w[0] == 'ar':
+            d = decode_ar(w[1])
+            if d is None:
+                raise SystemExit(f'{spec}:{k}: ar {w[1]}: not an Action Replay code 00AA-AAVV for RAM $C000-$FFFB')
+            codes.append((PK_AR | ask, d[0], d[1], 0))
+        else:
+            d = decode_gg(w[1])
+            if d is None:
+                raise SystemExit(f'{spec}:{k}: gg {w[1]}: not a Game Genie code DDA-AAA[-RRR] for $0000-$BFFF')
+            a, v, ref = d
+            codes.append(((PK_GGREF if ref is not None else PK_GG) | ask, a, v, ref or 0))
+    raise SystemExit(f'{spec}:{n}: poke block has no endpoke')
+
+
+def check_pokes(pokes, cart, ops):
+    """Stop when a Game Genie code would write a byte that an operation of
+    the spec covers, or no byte of this cart."""
+    img = bytearray(cart)
+    covered = set()
+    for addr, new in ops:
+        img[addr:addr + len(new)] = new
+        covered.update(range(addr, addr + len(new)))
+    if len(pokes) > POKES_MAX:
+        raise SystemExit(f'more than {POKES_MAX} pokes')
+    if sum(t & 0x7F == PK_AR for _, codes in pokes for t, _, _, _ in codes) > AR_MAX:
+        raise SystemExit(f'more than {AR_MAX} ar codes in all')
+    for name, codes in pokes:
+        if len(codes) > 255:
+            raise SystemExit(f'poke "{name}": more than 255 codes')
+        for t, a, v, ref in codes:
+            t &= 0x7F
+            if t == PK_AR:
+                continue
+            ref = ref if t == PK_GGREF else None
+            if ref is None and a >= 0x0400 and len(img) > 0xC000:
+                raise SystemExit(f'poke "{name}": gg code for ${a:04X}: the address can be banked in a cart over 48K, so the code needs a reference')
+            hits = gg_places(img, a, ref)
+            if not hits:
+                raise SystemExit(f'poke "{name}": gg code for ${a:04X} = ${v:02X}: no byte of this cart matches')
+            near = set(hits) | set(gg_places(cart, a, ref))
+            if near & covered:
+                raise SystemExit(f'poke "{name}": gg code for ${a:04X} = ${v:02X}: cart offset '
+                                 f'{min(near & covered):05X} is a byte the spec changes')
+
+
 def chunk(tag, data):
     return tag.encode('ascii') + struct.pack('<I', len(data)) + data
 
@@ -345,7 +485,7 @@ def chunk(tag, data):
 def parse(spec, cart, sjasmplus):
     """Run the spec over the cart. Returns a dict of what the file needs."""
     r = dict(name='', crc=None, ops=[], start=None, rcode=None, ramsites=[], ramcont=None,
-             priority=False, toppal=False, tilecache=False, hsplit=False, collline=False, rastseg=False, ntdiff=False, prichg=False, workline=0, hz='any', abi=1, pages={}, libpages={})
+             priority=False, toppal=False, tilecache=False, hsplit=False, collline=False, rastseg=False, ntdiff=False, prichg=False, workline=0, hz='any', abi=1, pages={}, libpages={}, pokes=[])
     rst = {}
     outs = {}
     notrace, plain, io0, abi4, abi5, abi7, abi9 = False, set(), False, False, False, False, False
@@ -578,6 +718,8 @@ def parse(spec, cart, sjasmplus):
                 raise SystemExit(f'{spec}:{lineno}: {word} needs an io vector')
             patch(a, [rst['io'], HALT_IO[word + '_io']])
             abi9 = True
+        elif word == 'poke' and rest.startswith('"'):
+            r['pokes'].append(read_poke_block(it, spec, lineno, rest))
         elif word == 'poke':
             a, old, new = rest.split()
             a, old, new = int(a, 16), bytes.fromhex(old), bytes.fromhex(new)
@@ -647,6 +789,8 @@ def parse(spec, cart, sjasmplus):
         raise SystemExit('prichg needs priority')
     if r['ntdiff'] or r['prichg']:
         r['abi'] = max(r['abi'], 13)
+    if r['pokes']:
+        check_pokes(r['pokes'], cart, ops)
     r['ntrace'] = ntrace
     return r
 
@@ -764,11 +908,21 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     meta = load_meta(crc, r['name'], compat, titles)
     metab = ''.join(f'{k}={v}\n' for k, v in meta.items()).encode('ascii')
 
-    body = b'NMS\x1a' + bytes([1, 0, r['abi'], 0]) + struct.pack('<II', crc, len(cart))
+    poke = b''
+    if r['pokes']:
+        poke = bytes([len(r['pokes'])])
+        for name, codes in r['pokes']:
+            poke += bytes([len(name)]) + name.encode('ascii') + bytes([len(codes)])
+            poke += b''.join(struct.pack('<BHBB', t, a, v, ref) for t, a, v, ref in codes)
+
+    # format minor version 1: the file has a POKE chunk
+    body = b'NMS\x1a' + bytes([1, 1 if poke else 0, r['abi'], 0]) + struct.pack('<II', crc, len(cart))
     body += chunk('CRCS', struct.pack('<I', crc))
     body += chunk('PTCH', ptch)
     body += chunk('CONF', conf)
     body += chunk('META', metab)
+    if poke:
+        body += chunk('POKE', poke)
     pdata = {num: bytes([len(ents)]) + b''.join(struct.pack('<H', a) for a in ents) + code
              for num, (ents, code) in r['pages'].items()}
     for num in sorted(pdata):
@@ -781,7 +935,7 @@ def build(spec, cart_path, outdir, compat=None, titles=None, sjasmplus='sjasmplu
     open(out, 'wb').write(body)
     print(f'{out}: {meta.get("title", "")}, CRC32 {crc:08X}, {len(cart)} bytes, ABI {r["abi"]}, '
           f'{len(checks)} checks, {len(runs)} patches ({r["ntrace"]} trace sites), '
-          f'{len(r["pages"])} pages, {len(body)} bytes')
+          f'{len(r["pages"])} pages, {len(r["pokes"])} pokes, {len(body)} bytes')
     return out
 
 

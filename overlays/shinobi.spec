@@ -1,4 +1,6 @@
 # Shinobi (USA, Europe, Brazil) (En) (Rev 1), CRC32 0C6FAC4E, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log.
 # The game checks the region at $0003 (port $3F, then $DD); compare it with a reference forced
 # to the export path. Register 8 is written at $1ADB, in the frame handler's column streamer
@@ -550,3 +552,24 @@ mapst 07070   ; LD ($FFFF),A
 mapst 070DF   ; LD ($FFFF),A
 mapst 07156   ; LD ($FFFF),A
 mapst 07BDB   ; LD ($FFFF),A
+
+# Shinobi (USA, Europe, Brazil) (Rev 1).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-7A02
+endpoke
+
+# Shinobi (USA, Europe, Brazil) (Rev 1).cht, "Infinite/Max Health"
+poke "Infinite health"
+ar 00C0-6C14
+ar 00C0-6D12
+endpoke
+
+# Shinobi (USA, Europe, Brazil) (Rev 1).cht, "Start with ?? Health"
+poke "Start health"
+gg ??5-F0F-F72
+endpoke
+
+# Shinobi (USA, Europe, Brazil) (Rev 1).cht, "Start with ?? Lives, instead of 2"
+poke "Start lives"
+gg ??5-D7F-E62
+endpoke

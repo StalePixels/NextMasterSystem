@@ -59,7 +59,7 @@ endasm
 - A comment in the block starts with `;`. In the spec outside a block, both `#` and `;` start a comment.
 - Assembler errors are shown with the spec line number.
 
-`poke ADDR OLD NEW` still works. Use it for bytes that are not code, such as a data table.
+`poke ADDR OLD NEW` still works. Use it for bytes that are not code, such as a data table. A `poke` line with a name in quotes is something else: it starts a poke block (see "Pokes" below).
 
 ### Labels
 
@@ -205,7 +205,7 @@ A library page has the same bytes in every overlay that uses it. It must not dep
 
 ## Switches
 
-A switch is a spec line of one word, or for `hz` and `workline` a word and a value. It turns on a runtime feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1`, `hsplit`, `collline`, `rastseg`, `ntdiff` and `prichg` only as `hsplit=1`, `collline=1`, `rastseg=1`, `ntdiff=1` and `prichg=1` when they are on, `workline` only as `workline=N` when the spec has it, and `hz` as `hz=50`, `hz=60` or `hz=any` ([nms-format.md](nms-format.md)). The information screen lists the switches that are on and shows the video rate the game will use.
+A switch is a spec line of one word, or for `hz` and `workline` a word and a value. It turns on a runtime feature that helps some games and costs others, so each overlay turns on only the ones that measurements show it gains from. `mknms.py` writes the switches into the file's `CONF` chunk as `key=0` or `key=1`, `hsplit`, `collline`, `rastseg`, `ntdiff` and `prichg` only as `hsplit=1`, `collline=1`, `rastseg=1`, `ntdiff=1` and `prichg=1` when they are on, `workline` only as `workline=N` when the spec has it, and `hz` as `hz=50`, `hz=60` or `hz=any` ([nms-format.md](nms-format.md)). The information screen's details page lists the switches that are on and shows the video rate the game will use.
 
 | Spec line | `CONF` key | What it does | What it costs | When to turn it on |
 |---|---|---|---|---|
@@ -219,6 +219,37 @@ A switch is a spec line of one word, or for `hz` and `workline` a word and a val
 | `workline N` | `workline` | The once-a-frame work runs from a line interrupt at SMS line N of the picture (1 to 191), not from the ULA interrupt below the picture (line 248 at 50 Hz, 224 at 60 Hz), so the time from the frame event to line N of the next picture is the game's. The ULA interrupt only sets the line interrupt. V counter reads below the picture do not run the work. In a frame where the game has a line event set at the ULA interrupt, or the work line does not come before the next ULA interrupt (interrupts off past the frame event), the work runs at the ULA interrupt as without the switch ([design.md](design.md), "The once-a-frame work"). The file needs runtime ABI 12. | Each line interrupt and each ULA interrupt call part 4 of the runtime (a few hundred cycles). The sprites, the copper list and the converted tiles change at line N, in the picture: a sprite that moves across line N can show its old and new place for one frame. In 224-line mode the copper list's head (`cop_224`) takes the H scroll written last before line N, so a game that writes one H for the top of the picture in its frame handler and another one in the picture before line N shows the second one at the top too. With `collline`, the first status read in each picture works out the collision line again from the sprite table (about 5,000 cycles), because the work ran before the frame handler wrote the table. | The frame handler must reach a line of the next picture on time (a status bar split timed by the collision bit), and the once-a-frame work at the ULA interrupt runs in that time, so the split comes late. Set N a few lines after the split's last write (measure it with `tools/mame/run.py --bps`). |
 | `ntdiff` | `ntdiff` | A register 2 write that moves the name table to another base writes into the Next maps only the bytes that differ between the old and the new table in the VRAM copy, not the whole table (`map_rebuild`, about 815,000 cycles). With `priority`, Layer 2 draws only the changed cells again, not the whole layer. Past 1,200 differing bytes the maps are rebuilt whole, as without the switch. The maps change at the write, not in the next vertical blank ([design.md](design.md), "Display off and on"). The file needs runtime ABI 13. | Each write that moves the table compares the two tables, about 74,000 cycles, and each differing byte costs a name table write; all of it in the handler of the register 2 write, with interrupts off. Prince of Persia's flips, about 115 differing bytes with `priority` on, cost about 179,000 cycles each. A write that differs in more than 1,200 bytes costs that work and the whole rebuild. | The game keeps two name tables, writes the hidden one, then moves register 2 to it, less often than once a frame, and few bytes differ between the two (Prince of Persia: one move a game step, about 100-130 differing bytes). Not for games that move it every frame with most of the table different, or more than once in a picture (split screens): they pay for the compare at every move and still get the whole rebuild. |
 | `prichg` | `prichg` | With `priority`: when the game writes a tile again that a priority cell shows, the runtime marks the tile in `pri_chg` as well as in `pri_redo`, so the once-a-frame work draws that tile's priority cells in Layer 2 again from the new tile. Without the switch, Layer 2 keeps the cell's old pixels until the next whole rebuild. Needs `priority`. The file needs runtime ABI 13. | Two jumps and 4 instructions (55 T-states) each time a tile conversion hits a tile that priority cells show, and the redraw of those cells; on games that rewrite such tiles every frame the redraws come every frame. | The game rewrites tiles that priority cells show while those cells stay on the screen, and the old pixels show in front of the sprites (Prince of Persia: the "minutes left" text reuses the tiles of the password screen). |
+
+## Pokes
+
+A poke is a cheat, such as infinite lives, that the player turns on in the information screen's Pokes page before the game starts. A poke block in the spec gives its name and its codes. `mknms.py` writes the pokes into the file's `POKE` chunk ([nms-format.md](nms-format.md), "`POKE`: pokes").
+
+```
+poke "Infinite lives"
+gg 25F-33F-3BE
+endpoke
+
+poke "Start round"
+ar 00C0-46??
+endpoke
+```
+
+`poke "NAME"` starts the block and `endpoke` ends it. The name is what the Pokes page shows: 1 to 24 characters of ASCII, without `"`, `#` or `;`. Each line between is one code, and all the codes of a block go on and off together. A spec holds at most 16 pokes and at most 32 `ar` lines in all.
+
+- `ar 00AA-AAVV` is an Action Replay code. While the game runs, the runtime writes the byte `$VV` to RAM address `$AAAA` (`$C000-$FFFB`) once a frame. `00DB-720A` writes `$0A` to `$DB72`.
+- `gg DDA-AAA-RRR` and `gg DDA-AAA` are Game Genie codes. The loader writes the byte `$DD` into the cart once, after the overlay's own changes. The address is digits 3 to 5, with the sixth digit inverted above them: `25F-33F` is address `$0F33`. The last three digits are the reference byte, the byte the code expects to replace: digits 7 and 9 as a byte, rotated right by 2 bits and XORed with `$BA`. The decoding is from <https://www.smspower.org/Development/GameGenie>. With a reference byte, the loader writes every 16K bank of the cart that has the reference byte at the address's offset in its 16K slot. Without one, the address must lie in `$0000-$03FF`, which always shows bank 0. A cart of 48K or less has no banking, so for it the address is the cart offset, with or without a reference byte.
+- `??` in place of `VV` in an `ar` code, or of `DD` in a `gg` code, is a byte that the player sets on the Pokes page with up and down, from `00` to `FF`, for example a start round or a number of lives. The page shows it in hex and in decimal, for example `05 / 5`.
+
+The build stops when a `gg` code would change a byte that the spec itself changes, or matches no byte of the cart. Codes for a poke come from a published list and must be proven in a run on the cart's CRC32 before they go into a spec.
+
+A spec with pokes credits their source in a comment at the top of the file. Codes from the libretro-database cheat catalogue (<https://github.com/libretro/libretro-database>, `cht/Sega - Master System - Mark III/`) are under CC-BY-SA 4.0, and the comment says so:
+
+```
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
+```
+
+A comment above each poke block names the cheat file and the cheat's description there. `overlays/lemmings.spec` and `overlays/psychofox.spec` have pokes.
 
 ## 4. Build the overlay file and the index
 

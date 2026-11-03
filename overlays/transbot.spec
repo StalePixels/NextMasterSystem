@@ -1,4 +1,6 @@
 # TransBot, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name TransBot
 cart 4BC42857
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -86,3 +88,18 @@ site 34B0   ; OUT ($7F),A
 site 34B5   # low confidence in the scan; PSG mute routines, real code
 site 34BA   ; OUT ($7F),A
 site 34BF   ; OUT ($7F),A
+
+# TransBot (USA, Europe, Brazil) (En).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C1-5D09
+endpoke
+
+# TransBot (USA, Europe, Brazil) (En).cht, "Never Battle"
+poke "Never battle"
+ar 00C1-6F04
+endpoke
+
+# TransBot (USA, Europe, Brazil) (En).cht, "Infinite Energy"
+poke "Infinite energy"
+ar 00C5-F0F0
+endpoke

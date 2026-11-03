@@ -1,4 +1,6 @@
 # Pit Pot (Fushigi no Oshiro Pit Pot, Japan), CRC32 E6795C53, 32K, no mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from the sitescan output, then decided by hand
 # against the detector's dynamic I/O log.
 #
@@ -104,3 +106,8 @@ site 049D2   ; OTIR
 eihalt 02567   ; EI : HALT
 haltret 02784   ; HALT : RET
 eihalt 03203   ; EI : HALT
+
+# Astro Warrior _ Pit Pot (Europe).cht, "Infinite Lives (Pit Pot)"
+poke "Infinite lives"
+ar 00C0-2109
+endpoke

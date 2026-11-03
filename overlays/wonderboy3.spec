@@ -1,4 +1,6 @@
 # Wonder Boy III - The Dragon's Trap, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Sites from the batch 5 detector run with gameplay presses
 # (its dynamic I/O log), which also logged the
 # bank 0 VDP routines at $0AC6-$0B4C and $0F75-$0F83. The remaining CHECK low
@@ -196,3 +198,18 @@ mapst 0676F   ; LD ($FFFF),A
 mapst 067D1   ; LD ($FFFF),A
 mapst 07C08   ; LD ($FFFF),A
 mapst 07C91   ; LD ($FFFF),A
+
+# Wonder Boy III - The Dragon's Trap (USA, Europe).cht, "Infinite Health"
+poke "Infinite health"
+ar 00CF-52FF
+endpoke
+
+# Wonder Boy III - The Dragon's Trap (USA, Europe).cht, "Infinite Blue Potions"
+poke "Infinite potions"
+ar 00CF-4A09
+endpoke
+
+# Wonder Boy III - The Dragon's Trap (USA, Europe).cht, "Start As Lizard-Man"
+poke "Start as Lizard-Man"
+ar 00C2-4F01
+endpoke

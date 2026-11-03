@@ -1,4 +1,6 @@
 # Wonder Boy (USA, Europe, Brazil) (Rev 1), 73705C02, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Wonder Boy
 cart 73705C02
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -255,3 +257,13 @@ site 07156   ; OUT ($7F),A
 site 07170   ; OTIR
 mapst 00B13   ; LD ($FFFF),A
 # the other low-confidence byte patterns are data or instruction operands
+
+# Wonder Boy (USA, Europe, Brazil) (En) (Rev 1).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C1-4309
+endpoke
+
+# Wonder Boy (USA, Europe, Brazil) (En) (Rev 1).cht, "Invincibility + Stone Hammers"
+poke "Invincible + hammers"
+ar 00C1-2703
+endpoke

@@ -67,7 +67,18 @@ static void make_help(uint8_t code)
     d[HELP_WIDTH + sizeof msg_line2 - 1] = 0xFF;
 }
 
-/* Once, at start: full speed, and the NextRegs to restore on exit. */
+/* 1 when port $1F reads bits 3, 4 and 5 set (and is not $FF), or port
+ * $FBFE bit 0 and port $7FFE bits 0 and 2 all read 0. */
+static uint8_t boot_keys(void)
+{
+    uint8_t k = z80_inp(0x001F);
+
+    if (k != 0xFF && (k & 0x38) == 0x38) return 1;
+    return !(z80_inp(0xFBFE) & 0x01) && !(z80_inp(0x7FFE) & 0x05);
+}
+
+/* Once, at start: full speed, the NextRegs to restore on exit, and
+ * nm.boot from boot_keys. */
 void *session_init(void *unused)
 {
     uint8_t i, n, *o = nm.launch.nr;
@@ -91,6 +102,7 @@ void *session_init(void *unused)
     memcpy(nm.ovl_name + n, "ovl/00000000.nms", 17);
     nm.ovl_len = n + 4;
     nm.err = 0;
+    nm.boot = boot_keys();
     return 0;
 }
 

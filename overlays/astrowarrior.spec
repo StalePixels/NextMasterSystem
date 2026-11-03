@@ -1,4 +1,6 @@
 # Astro Warrior (Japan, USA, Brazil), 299CBB74, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Astro Warrior
 cart 299CBB74
 hz 60		; No-Intro regions Japan, USA, Brazil
@@ -211,3 +213,13 @@ site 0204D   ; OUT ($3F),A
 site 03952   ; OUT ($7F),A
 site 03957   ; OUT ($7F),A
 # the other low-confidence byte patterns are data or instruction operands
+
+# Astro Warrior (Japan, USA, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C2-3F03
+endpoke
+
+# Astro Warrior (Japan, USA, Brazil).cht, "Invincibility"
+poke "Invincibility"
+gg C9A-16E-C49
+endpoke

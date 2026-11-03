@@ -25,4 +25,9 @@ CODE_MAX	equ 8			; at most 8 code pages (pages 116-123)
 CODE_ENTS	equ 64			; at most 64 entries over all code pages
 TRC_PAGE	equ 124			; the trace cache (trace.asm), mapped at $0000 while it is used
 TKC_PAGE	equ 125			; tiles from cart ROM: kn_pages and the tk_ tables (fw2 kn_block)
+INFO_PAGE	equ 126			; while the shell runs: the overlay's ICON chunk ($0000) and POKE chunk ($0400) for the information screen
 CONVT_PAGE	equ 128			; the cart converted to Next tile rows, page n in CONVT_PAGE+n (128-191)
+BOOT_PAGE	equ 202			; boot: a 32K cart image, read as a file (pages 202-205, banks 101-102)
+BOOT_PAGES	equ 4
+BOOT_OVL_PAGE	equ 206			; boot: an overlay file, read as a file (page 206, bank 103 low)
+PK_MAX		equ 32			; at most 32 Action Replay writes once a frame (pk_tab in fw4.asm)

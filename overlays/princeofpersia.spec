@@ -1,4 +1,6 @@
 # Prince of Persia (Europe, Brazil) (En), CRC32 7704287D, 256K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the 60 s reference I/O log.
 # Priority: the health arrows in row 0 (and about 440 cells of each name table) are priority tiles
 # that cover the sprites of the gate column at x 32. The game flips register 2 between $3000 and
@@ -3892,3 +3894,8 @@ l2_y0:   db 0
 l2_t32:  dw 0
 l2_lf:   ds 256                 ; pri_lf and pri_tiles while cells are drawn
 endpage
+
+# Prince of Persia (Europe, Brazil).cht, "Infinite Life"
+poke "Infinite health"
+ar 00C2-9208
+endpoke

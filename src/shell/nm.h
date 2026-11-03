@@ -108,6 +108,10 @@ int8_t  nm_fstat(uint8_t handle, uint8_t *stat16);
 int16_t nm_read(uint8_t handle, void *dst, uint16_t n);
 int8_t  nm_seek(uint8_t handle, uint32_t pos);   /* from the start of the file */
 void    nm_close(uint8_t handle);
+/* A file held in RAM pages from page `page` on, of size bytes: the calls
+ * above read it through the handle nm_mopen returns. */
+#define NM_MEM_H      0xFF
+int16_t nm_mopen(uint8_t page, uint32_t size);
 
 /* The folder nms.nex was started from, with a trailing "/", then "ovl/" and
  * the 8 hex digits, ".nms" and the end byte. The folder comes from F_GETCWD
@@ -117,6 +121,8 @@ void    nm_close(uint8_t handle);
 int8_t  nm_getcwd(char *dst);   /* the current directory; 0, or -1 on failure */
 
 #define NM_TITLE_MAX  48
+#define NM_POKES_MAX  16      /* pokes in a POKE chunk */
+#define NM_POKE_NAME  24      /* characters in a poke's name */
 #define NM_STATUS_MAX 11      /* "not working" */
 
 /* ---- shared state --------------------------------------------------------
@@ -133,8 +139,13 @@ struct nm_state {
     uint8_t  nms_ver[3];      /* the .nms header: format major, minor, framework ABI */
     char     title[NM_TITLE_MAX + 1];   /* the META title, cut to fit; empty if none */
     char     status[NM_STATUS_MAX + 1]; /* the META status, cut to fit; empty if none */
+    uint8_t  npokes;          /* pokes in the overlay's POKE chunk, 0 if none */
+    uint16_t pokes_on;        /* bit n: poke n is on (the information screen) */
+    uint8_t  poke_val[NM_POKES_MAX];   /* the number the player picked for poke n */
+    uint8_t  icon;            /* 1 when INFO_PAGE holds the overlay's ICON */
     struct nm_launch launch;
     uint8_t  speed;           /* NextReg $07 at start, put back on exit */
+    uint8_t  boot;            /* 1: the next loader_load reads the boot pages */
 };
 extern struct nm_state nm;
 extern char nm_name[13];      /* the short file name the browser returned */
@@ -157,11 +168,12 @@ extern const char nm_filetypes[];
 void *session_init(void *unused);   /* once, at start */
 void *session_pass(void *unused);   /* one browser pass */
 void *loader_load(void *unused);    /* load nm_name; returns a failure code */
-void *info_show(void *unused);      /* show the cart information, wait for a key */
+void *info_show(void *unused);      /* the cart information screen; sets nm.pokes_on */
 void *loader_check_range(void *a);  /* struct crc_range *: 1 when the CRC32 matches */
 void *loader_ramsite_old(void *a);  /* struct ramsite *: a RAMSITES entry's original */
 void *overlay_find(void *unused);   /* nm.ovl_name from the index; returns a failure code */
-void *overlay_apply(void *f);       /* struct nms *: CRCS, META, CONF, PTCH; failure code */
+void *overlay_apply(void *f);       /* struct nms *: CRCS, META, CONF, PTCH, POKE, ICON; failure code */
+void *overlay_pokes(void *unused);  /* the pokes in nm.pokes_on into the cart and the runtime */
 
 /* ---- resident entry points ------------------------------------------------- */
 void nm_run(void);                  /* the main loop; also where a game's BREAK returns */

@@ -1,6 +1,6 @@
 # The `.nms` overlay file format
 
-An `.nms` file tells NextMasterSystem how to run one Master System game. The file holds the changes NextMasterSystem makes to the player's own cart, the settings for the game, the game's details for the browser, a 32x32 icon, and any code pages of our own that the game needs. The file never holds bytes copied from a game.
+An `.nms` file tells NextMasterSystem how to run one Master System game. The file holds the changes NextMasterSystem makes to the player's own cart, the settings for the game, the game's details for the browser, a 32x32 icon, the pokes (cheats) the player can turn on, and any code pages of our own that the game needs. The file never holds bytes copied from a game.
 
 Files live in the `ovl` folder next to `nms.nex` on the SD card. NextMasterSystem reads the current directory when it starts (esxDOS `F_GETCWD`), and that is the folder holding `nms.nex`. Each file is named after the CRC32 of the cart it was made for, in upper-case hex: `ovl/0123ABCD.nms`.
 
@@ -23,7 +23,7 @@ An `.nms` file has a fixed header, then a sequence of chunks, then the `END ` ch
 |---|---|---|
 | 0 | 4 | magic: `N`, `M`, `S`, `$1A` |
 | 4 | u8 | format major version: 1 |
-| 5 | u8 | format minor version: 0 |
+| 5 | u8 | format minor version: 0, or 1 for a file with a `POKE` chunk |
 | 6 | u8 | runtime ABI the file needs; see "Versions" |
 | 7 | u8 | reserved, 0 |
 | 8 | u32 | primary cart CRC32: the cart the file was made for |
@@ -40,7 +40,7 @@ Every chunk starts with an 8-byte chunk header:
 
 The chunk data follows the header. Chunks may appear in any order, but `END ` is always last. A reader skips any chunk whose tag it does not know, using the length. Each tag may appear only once. `PAGE` is the exception.
 
-A file has no size limit, and neither has a chunk. NextMasterSystem never holds a whole file in memory: it reads the file in order through a small buffer, and seeks back to the chunks it needs. It refuses a file that has `CRCS`, `PTCH`, `CONF` or `META` twice.
+A file has no size limit, and neither has a chunk. NextMasterSystem never holds a whole file in memory: it reads the file in order through a small buffer, and seeks back to the chunks it needs. It refuses a file that has `CRCS`, `PTCH`, `CONF`, `META`, `POKE` or `ICON` twice.
 
 | Tag | Required | Content |
 |---|---|---|
@@ -49,6 +49,7 @@ A file has no size limit, and neither has a chunk. NextMasterSystem never holds 
 | `CONF` | no | settings |
 | `META` | no | the game's details for the browser |
 | `ICON` | no | a 32x32 icon |
+| `POKE` | no | the pokes the player can turn on |
 | `PAGE` | no, any number | a whole 8K page of code of our own |
 | `SIGN` | no | reserved for a signature; readers ignore it for now |
 | `END ` | yes | the CRC32 of the file up to this chunk |
@@ -163,7 +164,42 @@ The icon is 1024 bytes: 32 rows of 32 pixels. The top row comes first. In each r
 
 All icons share this one palette, so the browser can show any number of icons at once.
 
-NextMasterSystem does not read the `ICON` chunk yet.
+The information screen shows the icon at twice its size. A chunk of any other length, an empty one included, counts as no icon, and the screen shows an NMS icon of its own.
+
+## `POKE`: pokes
+
+Pokes are cheats that the player turns on in the information screen before the game starts, such as infinite lives. Each poke has a name and one or more codes, which go on and off together. A code is an Action Replay code or a Game Genie code, the two forms in which Master System cheats are published. [overlays.md](overlays.md) ("Pokes") describes the text forms and how a spec gives them.
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | u8 | number of pokes, 1 to 16 |
+| 1 | rest | the pokes, one after the other |
+
+Each poke:
+
+| Size | Field |
+|---|---|
+| u8 | length n of the name, 1 to 24 |
+| n | the name, ASCII `$20-$7E` |
+| u8 | number of codes c, at least 1 |
+| 5 x c | the codes |
+
+Each code:
+
+| Size | Field |
+|---|---|
+| u8 | type: 1 Action Replay, 2 Game Genie without a reference byte, 3 Game Genie with a reference byte. Bit 7 set: the value is a byte the player sets. |
+| u16 | address |
+| u8 | value |
+| u8 | reference byte; 0 for types 1 and 2 |
+
+- **Action Replay (type 1).** The address is in the RAM, `$C000-$FFFB`; `$E000-$FFFB` is the RAM's mirror and means the address `$2000` lower. While the game runs, the runtime writes the value to the address once a frame, in the once-a-frame work. A file holds at most 32 codes of type 1.
+- **Game Genie (types 2 and 3).** The address is a Z80 address in the cart's slots, `$0000-$BFFF`. The loader writes the value into the cart image once, after the operations of `PTCH`, before the game starts. A code of type 2 has an address in `$0000-$03FF`, the part of slot 0 that always shows bank 0, and writes that byte of bank 0. In a cart of 48K or less, which has no banking, the address of a code of either type is the cart offset: the loader writes that one byte, for type 3 only when it equals the reference byte. A code of type 3 writes, in every 16K bank of the cart, the byte at the address's offset in its 16K slot (the address AND `$3FFF`) when that byte equals the reference byte; for an address in `$0000-$03FF`, bank 0 only.
+- **Bit 7.** The file holds 0 as the value. The player sets a byte from `$00` to `$FF` on the Pokes page, `$00` when the screen opens, and that byte is written in place of the value. Every code of the poke with bit 7 set takes the same byte.
+
+The tools refuse a Game Genie code that would change a byte that an operation in `PTCH` covers, and one that changes no byte of the cart. The loader refuses a file whose `POKE` breaks the rules above.
+
+A `POKE` chunk does not raise the runtime ABI that the file needs. A runtime that does not know the chunk skips it, and the game runs without pokes.
 
 ## `PAGE`: code pages
 
@@ -261,5 +297,5 @@ A patched `HALT` ends when the runtime enters the game's interrupt handler, for 
 
 ## Versions
 
-- The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip.
+- The **format version** in the header says how the file is laid out. A reader accepts a file with the same major version and any minor version. A minor version only adds chunks or keys that older readers can skip. Minor version 1 adds `POKE`.
 - The **runtime ABI** in the header says which inline codes and runtime features the file uses. A runtime accepts a file whose ABI is not higher than its own. A file with a `PAGE` chunk needs ABI 6, a file whose page code calls `jt_vwrite` needs ABI 7, a file with `hsplit=1` in `CONF` needs ABI 8, and a file that uses the inline codes `$76`, `$FB` or `$C9` (a patched `HALT`) needs ABI 9, a file with `collline=1` needs ABI 10, a file with `rastseg=1` needs ABI 11, a file with `workline` needs ABI 12, and a file with `ntdiff=1` or `prichg=1` needs ABI 13, so that a runtime that does not know the key or the code refuses the file rather than run the game without it.

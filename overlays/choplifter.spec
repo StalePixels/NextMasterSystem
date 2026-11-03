@@ -1,4 +1,6 @@
 # Choplifter (USA, Europe, Brazil), 4A21C15F, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Choplifter
 cart 4A21C15F
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -556,3 +558,8 @@ site 066AF   ; OUT ($BF),A
 site 066B5   ; OUT ($BF),A
 site 066BA   ; OUT ($BE),A
 # the other low-confidence byte patterns are data or instruction operands
+
+# Choplifter (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C2-9B0C
+endpoke

@@ -1,4 +1,6 @@
 # Fantasy Zone II, B8B141F9, drafted by tools/mkspec.py from sitescan output (with the detector log).
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Fantasy Zone II
 cart B8B141F9
 hz any		; No-Intro regions USA, Europe, Brazil
@@ -1591,3 +1593,32 @@ ncbuf:  ds 44
 zero256: ds 256                 ; never written
 ubuf:
 endpage
+
+# Fantasy Zone II (USA, Europe, Brazil).cht, "Infinite Lives"
+poke "Infinite lives"
+gg 006-6EB-3BE
+endpoke
+
+# Fantasy Zone II (USA, Europe, Brazil).cht, "Invincibility"
+poke "Infinite power"
+ar 00C0-AB0C
+endpoke
+
+# Fantasy Zone II (USA, Europe, Brazil).cht, "Have Extended Lifebar"
+poke "Extended power bar"
+ar 00C0-AA30
+endpoke
+
+# Fantasy Zone II - The Tears of Opa-Opa (USA, Europe) (Action Replay).cht, "Infinite Money (Ten Thousands Digit)"
+# Fantasy Zone II - The Tears of Opa-Opa (USA, Europe) (Action Replay).cht, "Infinite Money (Thousands Digit)"
+# Fantasy Zone II - The Tears of Opa-Opa (USA, Europe) (Action Replay).cht, "Infinite Money (Hundreds/Tens/Ones)"
+poke "Infinite money"
+ar 00C0-BA99
+ar 00C0-B999
+ar 00C0-B899
+endpoke
+
+# Fantasy Zone II (USA, Europe, Brazil).cht, "Start a new game with ?? Health (Power)"
+poke "Start power"
+gg ??D-42E-C4A
+endpoke
