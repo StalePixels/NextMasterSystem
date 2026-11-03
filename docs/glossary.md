@@ -182,7 +182,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **Memory plan.** The list of the 8K pages that the runtime and the shell use, in `src/runtime/memplan.inc`. The Makefile turns it into `build/memplan.h` for the C code. Read more: design.md, "Pages".
 
-**`META`.** The chunk of game details for the browser and the information screen: `title`, `id`, `dump`, `year`, `publisher`, `regions`, `status`, `flags`, `issues`, `tested`, `version`, `author`. Read more: nms-format.md, "`META`: the game's details".
+**`META`.** The chunk of game details for the browser and the information screen: `title`, `id`, `dump`, `year`, `publisher`, `regions`, `status`, `flags`, `issues`, `version`, `author`. Read more: nms-format.md, "`META`: the game's details".
 
 **MMU.** The Next hardware that maps 8K pages into the eight slots of the CPU address space. MMU0 to MMU7 are the slots; NextRegs `$50` to `$57` choose their pages. "MMU1" means slot 1, `$2000-$3FFF`. Read more: design.md, "Memory map".
 
@@ -302,7 +302,7 @@ Read more: nms-format.md, "Inline codes"; mknms.py spec lines (`python3 tools/mk
 
 **`START`.** A `PTCH` operation: the game starts at this address instead of `$0000`, with this stack pointer (0 means `$DFF0`). Spec line: `start ADDR [SP]`. Needed when the game's reset vector is the only free `RST` vector. Read more: nms-format.md, "`PTCH`: operations".
 
-**Status.** The overall state of a game: `working`, `imperfect`, `not working` or `untested`. `META` carries it and the information screen shows it. Read more: nms-format.md, "`META`: the game's details"; readme.txt, "THE GAMES".
+**Status.** The overall state of a game: `working`, `imperfect`, `not working` or `not supported`. A game is supported when it has an overlay. `META` carries it and the information screen shows it. Read more: nms-format.md, "`META`: the game's details"; readme.txt, "THE GAMES".
 
 **Streamer.** In `sitescan.py`, a loop that writes the VDP control port at least twice and the data port at least once in a pass and moves an address by `$40` (one name table row): a column or rectangle writer. Rule 3 of the pattern rules reports them. Read more: sitescan.md, "Rule 3: column and rectangle streamers".
 

@@ -274,7 +274,7 @@ python3 tools/build-overlays.py specs carts ovl
 
 With `--compat` and `--titles`, `mknms.py` and `build-overlays.py` put the game's details in the file's `META` chunk. The information screen shows the title. Both files are CSV with a header line:
 
-- the compatibility list: one row per cart dump. The tools read the columns `crc32`, `id`, `nointro_name` (or `dump_name`), `status`, `flags`, `issues`, `tested_on` and `tested_date`.
+- the compatibility list: one row per cart dump. The tools read the columns `crc32`, `id`, `nointro_name` (or `dump_name`), `status`, `flags` and `issues`.
 - the title list: one row per game. The tools read the columns `id`, `title`, `year`, `publisher` and `regions`. A row matches a compatibility row by `id`.
 
 Without them, or for a cart with no row, the title is the spec's `name` line.

@@ -21,6 +21,7 @@
 #define PAGE_LOADER    111   /* BANK_55_H: cart, CRC32 and the overlay file's walk */
 #define PAGE_INFO      113   /* BANK_56_H: the cart information screen */
 #define PAGE_OVERLAY   115   /* BANK_57_H: the overlay file's index and chunks */
+#define PAGE_SPLASH    207   /* BANK_103_H: the start screen */
 
 /* ---- resident memory ---------------------------------------------------- */
 #define NM_STACK_TOP   0xBFE0u   /* must equal REGISTER_SP in zpragma.inc */
@@ -169,6 +170,7 @@ void *session_init(void *unused);   /* once, at start */
 void *session_pass(void *unused);   /* one browser pass */
 void *loader_load(void *unused);    /* load nm_name; returns a failure code */
 void *info_show(void *unused);      /* the cart information screen; sets nm.pokes_on */
+void *splash_show(void *unused);    /* the start screen; returns 1 or 0 for nm.boot */
 void *loader_check_range(void *a);  /* struct crc_range *: 1 when the CRC32 matches */
 void *loader_ramsite_old(void *a);  /* struct ramsite *: a RAMSITES entry's original */
 void *overlay_find(void *unused);   /* nm.ovl_name from the index; returns a failure code */

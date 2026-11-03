@@ -858,7 +858,6 @@ def load_meta(crc, name, compat, titles):
         meta['status'] = row.get('status', '')
         meta['flags'] = row.get('flags', '')
         meta['issues'] = row.get('issues', '')
-        meta['tested'] = ' '.join(x for x in (row.get('tested_on', ''), row.get('tested_date', '')) if x)
     return {k: ascii_text(v) for k, v in meta.items() if v and ascii_text(v)}
 
 

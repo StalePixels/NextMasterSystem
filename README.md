@@ -25,7 +25,7 @@ Install NextMasterSystem with SPUN, the Next's package manager: on the Next, typ
 
 ### Playing
 
-Start `nms.nex` (for example `/NMS/nms.nex`), pick a `.sms` file in the browser, and press a key on the info screen. The info screen shows the game, its state (working, imperfect, not working, untested) and the video rate it will use.
+Start `nms.nex` (for example `/NMS/nms.nex`), pick a `.sms` file in the browser, and press a key on the info screen. The info screen shows the game, its state (working, imperfect, not working, not supported) and the video rate it will use.
 
 Games made for one rate only (50 Hz PAL or 60 Hz NTSC) switch the Next to that rate when the game starts. Games sold for both run at the rate the Next started with. The browser and the info screen always use the rate the Next started with, so BREAK always gets you back to a screen your monitor can show.
 

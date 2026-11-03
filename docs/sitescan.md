@@ -332,7 +332,7 @@ The search first uses only paths where each return matches a call on the path. O
 
 One row per mailbox with a pair under a Next frame. A pair has `medium` confidence when its SMS time is at least 0.1 SMS frames and under one frame, and `low` otherwise: with a shorter window the interrupt rarely lands between the stores, and with a longer one it lands between them on the SMS as well, so only the Next can lose the store. The row is the pair of highest confidence; among equals one with a known stack, then the one with the longest SMS time. `class` is `under a frame, SMS over` when that SMS time is a frame or more, else `under a frame, caller unknown` when the pair needs a return with no known stack, else `under a frame`. Both times are lower bounds. The summary lists up to six pairs per mailbox.
 
-Most rows are not races that lose a value; a row marks a place to check. Checked in MAME on the overlay carts, My Hero $C50C (0.51 SMS frames) is the known case, and it is `medium`.
+Most rows are not races that lose a value; a row marks a place to check. My Hero $C50C (0.51 SMS frames) is a known case, and it is `medium`.
 
 ### Rule 3: column and rectangle streamers
 

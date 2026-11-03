@@ -2,7 +2,7 @@
 
 NextMasterSystem runs Sega Master System games on the ZX Spectrum Next. The program is one NEX file, `nms.nex`. It has two parts.
 
-- The **outer shell** is C. It shows the NextZXOS file browser, reads the cart, finds the game's overlay, applies it, shows an information screen about the game, and starts the game. When the player presses BREAK in a game, control returns to the shell, and the browser opens again. BREAK in the browser leaves NextMasterSystem for NextZXOS. A future graphical interface will be added to the shell.
+- The **outer shell** is C. It shows a start screen once, then the NextZXOS file browser. It reads the cart, finds the game's overlay, applies it, shows an information screen about the game, and starts the game. When the player presses BREAK in a game, control returns to the shell, and the browser opens again. BREAK in the browser leaves NextMasterSystem for NextZXOS. A future graphical interface will be added to the shell.
 - The **runtime** is Z80 assembly. It runs while a game runs. It receives every I/O instruction the game makes. It drives the Next's tilemap, sprites, copper and sound chips. The build assembles the runtime separately, and puts it into the NEX as four ready-made 8K pages.
 
 This file describes the layout of both parts. It also covers how the shell is split over banked memory, and how to extend it.
@@ -16,7 +16,7 @@ The Next has 8K pages. The CPU sees eight of them at a time, one in each 8K slot
 | Address | Slot | Content |
 |---|---|---|
 | `$0000` to `$3FFF` | 0, 1 | NextZXOS ROM. The shell never changes it. |
-| `$4000` to `$7FFF` | 2, 3 | NextZXOS bank 5: screen and system variables. The shell writes here only on the information screen, and only to the ULA screen from `$4000` to `$5AFF`. |
+| `$4000` to `$7FFF` | 2, 3 | NextZXOS bank 5: screen and system variables. The shell writes here only on the start screen and the information screen, and only to the ULA screen from `$4000` to `$5AFF`. |
 | `$8000` to `$9FFF` | 4 | Resident part: C start-up code, `main`, far-call code, operating system glue, shared state, library routines. |
 | `$A000` to `$A0FF` | 5 | `OVL_BUF`: the loader reads the overlay index and the overlay file through these 256 bytes (`OVL_BUFSIZE`). |
 | `$A100` to `$BDFF` | 5 | Free. |
@@ -51,7 +51,8 @@ Page numbers are 8K pages. A NEX bank is two pages. So bank `n` is pages `2n` an
 | 192 to 201 | Layer 2 for priority tiles in 224-line mode (320x256). |
 | 202 to 205 | Boot: a 32K cart image (`BOOT_PAGE`). |
 | 206 | Boot: an overlay file (`BOOT_OVL_PAGE`). |
-| 207 to 223 | Free. |
+| 207 | The start screen's code (`PAGE_SPLASH`). |
+| 208 to 223 | Free. |
 
 The NEX file asks for the 2 MB memory flag, because pages above 95 are used.
 
@@ -240,6 +241,14 @@ NextZXOS and esxDOS read and write through pointers while their own pages are ma
 
 `nm_p3dos` also sets MMU6 and MMU7 to pages 0 and 1, which NextZXOS expects. It puts the old values back.
 
+### The start screen
+
+`session_init` far-calls `splash_show` once, after it has saved the NextRegs and before the browser first opens. The code is in `src/shell/splash/splash.c`, in page 207 (`PAGE_SPLASH`, the high half of bank 103), and nothing uses it after that. BREAK from a game comes back to `nm_run`, not to `session_init`, so the screen does not show again.
+
+The screen uses the information screen's Layer 2 set-up and background. `screen_on`, `screen_off`, `grid`, `fill` and `l2_row` are static functions in `src/shell/info/l2screen.h`, which `info.c` and `splash.c` both include, so each page has its own copy. On the grid background, one step a frame, a black band grows out from the middle, the name NextMasterSystem appears in it one character at a time (the ROM characters at twice their size), and a red line is drawn under the band from the left.
+
+Interrupts are off, so the screen counts frames by the video line (NextRegs `$1E` and `$1F`): a frame ends when the line reaches 192. The screen lasts 150 frames at 50 Hz and 180 at 60 Hz (NextReg `$05` bit 2), about 3 seconds. It reads the keys and the joystick once a frame. A key ends it only after a frame in which no key was down, so the ENTER that started `nms.nex` does not end it. After a key ends it, the screen stays until the key is let go, for at most 100 frames, so the browser does not get the key. `screen_off` then turns Layer 2 off and puts the NextRegs back, as at the end of the information screen.
+
 ### The information screen
 
 After `loader_load` has read the cart, found the overlay and applied it without error, it far-calls `info_show`, then `overlay_pokes`, then starts the game. `info_show` is in `src/shell/info/info.c`, with its character drawing in `l2draw.asm`, in the page `PAGE_INFO`. A failure returns to the browser with its message, and the screen is not shown.
@@ -248,7 +257,7 @@ The screen is drawn on Layer 2 at 256x192, in pages 102 to 107 (`L2_PAGE`, the p
 
 The look follows the white Master System box: a white background with a grey grid, a black title band with a red line under it, white panels with black frames. Everything is drawn in code. Text uses the character shapes of the 48K ROM at `$3D00`, which is mapped while the shell runs, so the module has no font of its own. The screen has three pages:
 
-- The main page: the icon, the game's title from `META` (`nm.title`, broken over lines at spaces), its status (`nm.status`, `untested` when there is none) in a colour for each state, and a menu: "Start game", "Pokes" (only when the overlay has pokes, with the number turned on), "Details". The icon is the `ICON` chunk at twice its size; without one, or with an empty one, the screen draws an NMS icon.
+- The main page: the icon, the game's title from `META` (`nm.title`, broken over lines at spaces), its status (`nm.status`, `not supported` when there is none) in a colour for each state, and a menu: "Start game", "Pokes" (only when the overlay has pokes, with the number turned on), "Details". The icon is the `ICON` chunk at twice its size; without one, or with an empty one, the screen draws an NMS icon.
 - The details page: the file name (`nm_lname`, the long name the browser gives in DE, or `nm_name`), the CRC32 and size from `nm.launch`, the title, the status, the video rate the game will use (`50 Hz` or `60 Hz` for an overlay with `hz=50` or `hz=60`, else `boot rate (50 Hz)` or `boot rate (60 Hz)` from NextReg `$05` bit 2), the format version and the runtime ABI from the header (`nm.nms_ver`), and the `CONF` switches in words from `nm.launch`. Any key goes back.
 - The Pokes page: one row for each poke, with its mark, then "Start game" and "Back". ENTER or fire on a poke turns it on or off. A poke with a code that takes the player's byte shows the byte in hex and decimal; ENTER or fire turns it on with the byte in edit, where up and down change it (held, they repeat), then ENTER or fire again leaves the edit with the poke on, and the next one turns it off.
 
@@ -326,6 +335,8 @@ src/shell/               the C shell
     loader/crc32.asm     CRC32 (BANK_55_H)
     info/info.c          the information screen (BANK_56_H)
     info/l2draw.asm      its character drawing on Layer 2 (BANK_56_H)
+    info/l2screen.h      the Layer 2 set-up and background (info.c and splash.c)
+    splash/splash.c      the start screen (BANK_103_H)
     overlay/overlay.c    the overlay index, chunks and patching (BANK_57_H)
 tools/check-layout       build-time layout checks
 tools/mknms.py           builds an overlay file from a spec and the cart
@@ -369,7 +380,7 @@ The VDP check counts the interrupt handlers that change the VDP address while th
 ## Adding a C module
 
 1. Make a directory `src/shell/<name>/`. Put the C and assembly files in it.
-2. Choose a free bank. Banks 54 to 57 are taken, and banks 58 to 61 are the overlay's code pages. Bank 62 would be pages 124 and 125. Keep the pages below page 224, and clear of the pages in the memory map.
+2. Choose a free bank. Banks 54 to 57 and the high half of bank 103 are taken, and banks 58 to 61 are the overlay's code pages. Bank 62 would be pages 124 and 125. Keep the pages below page 224, and clear of the pages in the memory map.
 3. In the `Makefile`, add the name to `MODULES`. Set `<name>_SEG` to the bank's high half, for example `BANK_62_H`.
 4. In `src/shell/nm.h`, add `PAGE_<NAME>`. Its value is the high half's page number, 125 for bank 62. Declare the entry points, each as `void *fn(void *arg)`.
 5. Call it with `NM_FAR(PAGE_<NAME>, fn, arg)`.

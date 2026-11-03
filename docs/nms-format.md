@@ -151,10 +151,9 @@ The section is text, with one `key=value` per line. The browser shows these valu
 | `id` | the game's id in the compatibility list |
 | `dump` | the dump's name in the No-Intro list |
 | `year`, `publisher`, `regions` | release details |
-| `status` | `working`, `imperfect`, `not working` or `untested` |
+| `status` | `working`, `imperfect` or `not working` |
 | `flags` | what is wrong, separated by `\|`: `graphics`, `colors`, `sound`, `controls`, `timing`, `frame overrun`, `crash`, `no saving`, `peripheral` |
 | `issues` | what a player sees, in plain words |
-| `tested` | where and when it was last tested |
 | `version` | the overlay's own version |
 | `author` | who made the overlay |
 

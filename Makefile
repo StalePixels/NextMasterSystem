@@ -35,11 +35,12 @@ Z80ASM = $(call Z88DK_RUN,$(ABS)/$(RT)) z88dk-z80asm
 # linked into the high half of one 16K bank. To add a module: add its name
 # here, set <name>_SEG, add its PAGE_ number to src/shell/nm.h. See
 # docs/design.md, "Adding a C module".
-MODULES := session loader info overlay
+MODULES := session loader info overlay splash
 session_SEG := BANK_54_H
 loader_SEG  := BANK_55_H
 info_SEG    := BANK_56_H
 overlay_SEG := BANK_57_H
+splash_SEG  := BANK_103_H
 # objects that must come first in their bank (the CRC32 table is page aligned)
 loader_FIRST := $(BUILD)/loader/crc32.o
 
@@ -123,6 +124,7 @@ $(BUILD)/res/%.o: $(SH)/%.asm $(BUILD)/memplan.h $(BUILD)/fwsyms.inc $(BUILD)/rt
 
 $(BUILD)/res/fwpages.o: $(RT_BINS)
 $(BUILD)/res/bootpages.o: $(BOOT_BINS)
+$(BUILD)/info/info.o $(BUILD)/splash/splash.o: $(SH)/info/l2screen.h
 
 $(BUILD)/nms.nex: $(RESIDENT_OBJ) $(BANK_OBJ) $(RT_BINS) $(BOOT_BINS) tools/check-layout
 	$(ZCC) $(CFLAGS) $(AFLAGS) -m $(RESIDENT_OBJ) $(BANK_OBJ) -o $(BUILD)/nms \

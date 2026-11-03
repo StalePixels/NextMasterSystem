@@ -55,7 +55,8 @@ HOW TO START
 ------------
 
 1. In the NextZXOS browser, go to the folder with nms.nex
-   (for example /NMS/) and start nms.nex.
+   (for example /NMS/) and start nms.nex. A splash screen
+   shows for about 3 seconds; any key skips it.
 2. NextMasterSystem opens the browser again, showing only .sms
    files. Go to your carts and press ENTER on a game.
 3. NextMasterSystem reads the .sms dump, matches and patches it.
@@ -122,8 +123,7 @@ again.
 The codes come from the libretro-database cheat catalogue,
 https://github.com/libretro/libretro-database, under the
 Creative Commons Attribution-ShareAlike 4.0 licence
-(CC-BY-SA 4.0). Each one was tried on the cart dump in the
-list below before it went into an overlay.
+(CC-BY-SA 4.0).
 
 
 VIDEO RATE: 50 OR 60 HZ
@@ -152,10 +152,9 @@ WHAT WORKS
   scrolling playfield).
 - Sprites, including tall (8x16) and double-size sprites.
 - "Priority" tiles that the game draws in front of sprites.
-- Master System sound on the AY chips. In tests, notes were
-  within about 10 cents of a real Master System. The sound is
-  close, not the same: the AY chip is not the Master System's
-  sound chip.
+- Master System sound on the AY chips. Notes are within about
+  10 cents of a real Master System. The sound is close, not the
+  same: the AY chip is not the Master System's sound chip.
 - Bank switching for carts up to 512K, the Codemasters type of
   cart (Micro Machines) and its taller 224-line picture.
 - Battery-backed cart RAM, as RAM only (see below).
@@ -183,8 +182,7 @@ THE GAMES
 ---------
 
 Each line gives the game, the CRC32 of the dump the overlay
-fits, and what is known. These states come from tests in the
-MAME emulator and on a real Next.
+fits, and what is known.
 
 "Working": reaches gameplay and plays like a real Master
 System, apart from the limits above.
