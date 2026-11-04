@@ -1498,15 +1498,25 @@ an_t:   dw 0
 ; write them (vram_put, fw.asm): the VRAM copy, the tiles' dirty_pages bits, tiles_dirty and
 ; tw_cnt; and the VDP state they leave (address after the last byte, code 1, latch clear, the
 ; read buffer the last byte). Through jt_vwrite's one-byte form this took about 20,000 cycles.
-; A source in $4000-$5FFF (slot 2, which takes the copy) goes through jt_vwrite. Leaves HL
-; past the bytes. Runtime internals: SHADOW_PAGE 28, 29, dirty_pages $E440, tiles_dirty $E082,
-; tw_cnt $E083.
+; The 4 tiles need not start on a 128-byte boundary (the rings of the zone that the scripted
+; input reaches are at $2DE0, tiles 7 of VRAM page $2D and 0-2 of page $2E), so each tile gets
+; the dirty_pages bit of its own address. A source in $4000-$5FFF (slot 2, which takes the
+; copy), or a destination that crosses an 8 KB page of the copy, goes through jt_vwrite.
+; Leaves HL past the bytes. Runtime internals: SHADOW_PAGE 28, 29, dirty_pages $E440,
+; tiles_dirty $E082, tw_cnt $E083.
 an_put: ld de,(an_va)
         ld a,h
         and $E0
         cp $40
+        jr z,.j
+        ld a,d                  ; DE AND $1FFF over $1F80: the bytes cross into the next page
+        and $1F
+        cp $1F
         jr nz,.d
-        ld bc,128
+        ld a,e
+        cp $81
+        jr c,.d
+.j:     ld bc,128
         xor a                   ; the source as the game sees it
         jp vw1
 .d:     ld a,d                  ; slot 2: the copy's page of VRAM DE
@@ -1528,17 +1538,32 @@ an_put: ld de,(an_va)
         ld a,(cur_mmu+2)
         nextreg $52,a
         push hl
-        ld hl,(an_va)           ; dirty_pages + VRAM page: 4 tiles, bits 0-3 or 4-7
-        ld a,$0F
-        bit 7,l
-        jr z,.lo
-        ld a,$F0
-.lo:    ld l,h
+        ld de,(an_va)           ; each tile: bit (address bits 5-7) of dirty_pages + VRAM page
+        ld b,4
+.t:     ld a,e
+        rlca
+        rlca
+        rlca
+        and 7
+        ld c,a
+        ld a,1
+        inc c
+.s:     dec c
+        jr z,.m
+        add a,a
+        jr .s
+.m:     ld l,d
         ld h,DIRTY>>8
         set 6,l                 ; dirty_pages = $E440 + page
         or (hl)
         ld (hl),a
         ld ($E082),a            ; tiles_dirty
+        ld a,e
+        add a,32
+        ld e,a
+        jr nc,.n
+        inc d
+.n:     djnz .t
         ld hl,($E083)           ; tw_cnt
         ld bc,128
         add hl,bc
