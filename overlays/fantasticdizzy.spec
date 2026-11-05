@@ -1,4 +1,6 @@
 # Fantastic Dizzy, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Fantastic Dizzy
 cart B9664AE1
 hz 50		; No-Intro regions Europe
@@ -4028,3 +4030,10 @@ eihalt 2C6F1   ; EI : HALT
 eihalt 30182   ; EI : HALT
 eihalt 30395   ; EI : HALT
 eihalt 305F7   ; EI : HALT
+
+# Fantastic Dizzy (Europe) (En,Fr,De,Es,It).cht, "Infinite Lives": the Game Genie form turns the
+# LD ($D961),A of the death routine's lives decrement into a load, so the spare lives never
+# fall and are not capped (the Action Replay form, 00D9-6102, holds them at 2)
+poke "Infinite lives"
+gg 3AC-05C-2A2
+endpoke

@@ -1,4 +1,6 @@
 # Ecco the Dolphin, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 name Ecco the Dolphin
 cart 6687FAB9
 hz 50		; No-Intro regions Europe, Brazil
@@ -378,3 +380,23 @@ ntcol:  res 4,(hl)
         ld bc,$003E
         ret
 endpage
+
+# Ecco the Dolphin (Europe) (Action Replay).cht, "Infinite Air"
+poke "Infinite air"
+ar 00CA-BF21
+endpoke
+
+# Ecco the Dolphin (Europe) (Action Replay).cht, "Infinite Health"
+poke "Infinite health"
+ar 00CA-C222
+endpoke
+
+# Ecco the Dolphin (Europe, Brazil).cht, "Swim Through Objects Cheat" (SMS Power: "Swim Through")
+poke "Swim through walls"
+ar 00D7-8B01
+endpoke
+
+# Ecco the Dolphin (Europe, Brazil).cht, "Unlimited Life Cheat"
+poke "Never die"
+ar 00D7-8C01
+endpoke

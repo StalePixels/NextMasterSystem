@@ -1,4 +1,5 @@
 # Cosmic Spacehead, drafted by tools/mkspec.py from sitescan output.
+# Pokes: codes from SMS Power, https://www.smspower.org/Cheats/CosmicSpacehead-GG
 name Cosmic Spacehead
 cart 29822980
 hz 50		; No-Intro regions Europe
@@ -560,3 +561,9 @@ site 3F5B7   ; OUT ($BF),A
 site 3F5BB   ; OUT ($BF),A
 site 3FF60   ; OUT ($BF),A
 site 3FF64   ; OUT ($BF),A
+
+# smspower CosmicSpacehead-GG, Action Replay "Infinite Lives": RAM $C23E is the number of
+# lives
+poke "Infinite lives"
+ar 00C2-3E09
+endpoke

@@ -15,6 +15,8 @@ start 0003
 # The line interrupt handler ($0F0C) sets H scroll to 0 for the status bar (line 159 event) in
 # play. Through the runtime that write lands about 2 lines late, and the top lines of the bar
 # show the playfield's scroll; the routine gives the scroll of every line.
+# It also sets Layer 2's X (NextReg $16) and clip (NextReg $18) for the priority tiles of the
+# longest run of lines with one H, as the runtime's pri_x (hscroll_set) and clip_update would.
 rastercode landofillusion-raster.asm
 site 0002A   ; OUT ($BF),A
 site 0002D   ; OUT ($BF),A

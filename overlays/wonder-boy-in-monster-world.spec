@@ -15,7 +15,16 @@
 #   the top lines of the copyright row showed the old H. The rastercode routine
 #   wonder-boy-in-monster-world-raster.asm works out each line's H from the same RAM,
 #   so the game gets no line events while a split is set.
-# - priority: name table cells with the priority bit are on screen in play.
+# - priority: name table cells with the priority bit are on screen in play: the status bar
+#   (rows 0-3, every cell, no pixel of colour 0), the waves of the beach (rows 20-21) and
+#   the story text box. While the rastercode table is valid the runtime does not move
+#   Layer 2's X (hscroll_set returns early, and its per-line copper list does not write
+#   NextReg $16), so the priority cells showed at a stale X: waves over the cliffs, the text
+#   box twice. The raster routine sets Layer 2's X for the playfield's H itself (as the
+#   runtime's pri_x, PIC_X = 2) and clips Layer 2 to the playfield's lines; it clips the
+#   sprites out of the status bar's lines instead, where on a Master System no sprite
+#   shows. Its clip values are the runtime's (clip_update); without a table it writes the
+#   runtime's full clips back.
 # - The byte-scan I/O patterns that no path reached are the unused bank 0 routines
 #   $0358, $04C4 and $04FB, the unused bank 21 routine $B318, and graphics and data
 #   (data/scan-verdicts.tsv).
