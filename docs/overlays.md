@@ -249,7 +249,13 @@ A spec with pokes credits their source in a comment at the top of the file. Code
 # Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 ```
 
-A comment above each poke block names the cheat file and the cheat's description there. `overlays/lemmings.spec` and `overlays/psychofox.spec` have pokes.
+Codes from the SMS Power cheat pages (<https://www.smspower.org/Cheats/Index>) are credited to the page:
+
+```
+# Pokes: codes from SMS Power, https://www.smspower.org/Cheats/RoadRash-SMS
+```
+
+A comment above each poke block names the cheat file or page and the cheat's description there. `overlays/lemmings.spec` and `overlays/psychofox.spec` have pokes.
 
 ## 4. Build the overlay file and the index
 

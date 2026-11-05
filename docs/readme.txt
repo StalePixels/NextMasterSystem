@@ -124,6 +124,8 @@ The codes come from the libretro-database cheat catalogue,
 https://github.com/libretro/libretro-database, under the
 Creative Commons Attribution-ShareAlike 4.0 licence
 (CC-BY-SA 4.0).
+Some codes come from the SMS Power cheat pages,
+https://www.smspower.org/Cheats/Index.
 
 
 VIDEO RATE: 50 OR 60 HZ
