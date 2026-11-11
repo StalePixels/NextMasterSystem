@@ -59,6 +59,7 @@
 - Added compatibility with Shinobi.
 - Added compatibility with Sonic Chaos.
 - Added compatibility with Sonic The Hedgehog 2.
+- Added compatibility with Sonic The Hedgehog 2 (Rev 1).
 - Added compatibility with Spider-Man.
 - Added compatibility with Spider-Man - Return of the Sinister Six.
 - Added compatibility with Streets of Rage.
