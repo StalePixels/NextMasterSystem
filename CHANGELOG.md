@@ -40,6 +40,7 @@
 - Added compatibility with Legend of Illusion Starring Mickey Mouse.
 - Added compatibility with Lemmings.
 - Added compatibility with The Lion King.
+- Added compatibility with Lord of the Sword.
 - Added compatibility with Marble Madness.
 - Added compatibility with Master of Darkness.
 - Added compatibility with Mortal Kombat.
