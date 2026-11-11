@@ -32,6 +32,7 @@
 - Added compatibility with Golden Axe.
 - Added compatibility with Golden Axe Warrior.
 - Added compatibility with Golvellius - Valley of Doom.
+- Added compatibility with Impossible Mission.
 - Added compatibility with Kenseiden.
 - Added compatibility with KLAX.
 - Added compatibility with Kung Fu Kid.
