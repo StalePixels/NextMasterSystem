@@ -45,6 +45,7 @@
 - Added compatibility with Lord of the Sword.
 - Added compatibility with Marble Madness.
 - Added compatibility with Master of Darkness.
+- Added compatibility with Miracle Warriors - Seal of The Dark Lord.
 - Added compatibility with Mortal Kombat.
 - Added compatibility with Mortal Kombat II.
 - Added compatibility with Ms. Pac-Man.
