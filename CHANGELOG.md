@@ -105,6 +105,7 @@
 - Added compatibility with Taz-Mania.
 - Added compatibility with Thunder Blade.
 - Added compatibility with Ultima IV - Quest of the Avatar.
+- Added compatibility with Vigilante.
 - Added compatibility with Wimbledon.
 - Added compatibility with Wimbledon II.
 - Added compatibility with Wonder Boy in Monster World.
