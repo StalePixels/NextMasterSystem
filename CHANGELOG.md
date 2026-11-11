@@ -35,6 +35,7 @@
 - Added compatibility with Enduro Racer.
 - Added compatibility with Fantastic Dizzy.
 - Added compatibility with Fantasy Zone - The Maze.
+- Added compatibility with Fire & Ice.
 - Added compatibility with Forgotten Worlds.
 - Added compatibility with Gain Ground.
 - Added compatibility with Ghouls'n Ghosts.
