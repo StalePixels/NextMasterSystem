@@ -93,6 +93,7 @@
 - Added compatibility with Super Monaco GP.
 - Added compatibility with Super Off Road.
 - Added compatibility with Super Smash T.V.
+- Added compatibility with Taz in Escape from Mars.
 - Added compatibility with Taz-Mania.
 - Added compatibility with Thunder Blade.
 - Added compatibility with Ultima IV - Quest of the Avatar.
