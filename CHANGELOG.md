@@ -18,6 +18,7 @@
 - Added compatibility with Cloud Master.
 - Added compatibility with Columns.
 - Added compatibility with Cosmic Spacehead.
+- Added compatibility with Deep Duck Trouble Starring Donald Duck.
 - Added compatibility with Desert Strike.
 - Added compatibility with Double Dragon.
 - Added compatibility with Dr. Robotnik's Mean Bean Machine.
