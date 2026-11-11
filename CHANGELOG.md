@@ -18,6 +18,7 @@
 - Added compatibility with Battle Out Run.
 - Added compatibility with Bomber Raid.
 - Added compatibility with Bonanza Bros.
+- Added compatibility with Buggy Run.
 - Added compatibility with California Games.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
 - Added compatibility with Chuck Rock II - Son of Chuck.
