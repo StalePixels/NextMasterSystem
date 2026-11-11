@@ -47,6 +47,7 @@
 - Added compatibility with Olympic Gold.
 - Added compatibility with Pac-Mania.
 - Added compatibility with Paperboy.
+- Added compatibility with Penguin Land.
 - Added compatibility with Power Strike.
 - Added compatibility with Power Strike II.
 - Added compatibility with Prince of Persia.
