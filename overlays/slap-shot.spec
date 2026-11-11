@@ -15,10 +15,13 @@
 # - $09F3 times one frame with a counted loop to tell a 60 Hz machine from a 50 Hz one
 #   ($C01E: 1 for 60 Hz). On the Next the loop ends before the frame does, so $C01E is 0 at
 #   both rates. $C01E only picks a short wait in the frame handler ($7412), so play is the same.
+# - priority: the score table after a goal is drawn with the priority bit, so it covers the
+#   players, as on a Master System.
 # - Bank 7 is the sound driver, with the FM sound chip's writes at $84E0 and $84E6.
 name Slap Shot
 cart 702C3E98
 hz any		; No-Intro regions USA, Europe, Brazil
+priority	; the score table after a goal (tiles $11: priority bit) covers the players
 vector 00 io
 start 0003
 label cv_reset 00018
