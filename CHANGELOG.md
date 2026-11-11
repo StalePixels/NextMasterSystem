@@ -71,6 +71,7 @@
 - Added compatibility with Ms. Pac-Man.
 - Added compatibility with Ninja Gaiden.
 - Added compatibility with Olympic Gold.
+- Added compatibility with The Ottifants.
 - Added compatibility with OutRun Europa.
 - Added compatibility with Pac-Mania.
 - Added compatibility with Paperboy.
