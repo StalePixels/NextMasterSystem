@@ -96,6 +96,7 @@
 - Added compatibility with Sensible Soccer.
 - Added compatibility with Shadow Dancer - The Secret of Shinobi.
 - Added compatibility with Shinobi.
+- Added compatibility with Slap Shot.
 - Added compatibility with Sonic Chaos.
 - Added compatibility with Sonic Spinball.
 - Added compatibility with Sonic The Hedgehog 2.
