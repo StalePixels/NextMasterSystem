@@ -120,6 +120,7 @@
 - Added compatibility with Wimbledon.
 - Added compatibility with Wimbledon II.
 - Added compatibility with Wonder Boy in Monster World.
+- Added compatibility with WWF Wrestlemania - Steel Cage Challenge.
 - Added compatibility with Zillion II - The Tri Formation.
 
 - Improved compatibility with Alien Syndrome.
