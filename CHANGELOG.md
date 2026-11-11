@@ -30,6 +30,7 @@
 - Added compatibility with Double Dragon.
 - Added compatibility with Dr. Robotnik's Mean Bean Machine.
 - Added compatibility with Dynamite Dux.
+- Added compatibility with E-SWAT.
 - Added compatibility with Ecco - The Tides of Time.
 - Added compatibility with Enduro Racer.
 - Added compatibility with Fantastic Dizzy.
