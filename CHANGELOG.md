@@ -47,6 +47,7 @@
 - Added compatibility with Lemmings.
 - Added compatibility with The Lion King.
 - Added compatibility with Lord of the Sword.
+- Added compatibility with The Lucky Dime Caper Starring Donald Duck.
 - Added compatibility with Marble Madness.
 - Added compatibility with Master of Darkness.
 - Added compatibility with Miracle Warriors - Seal of The Dark Lord.
