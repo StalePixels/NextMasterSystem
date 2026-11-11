@@ -69,6 +69,7 @@
 - Added compatibility with Rainbow Islands.
 - Added compatibility with Rampart.
 - Added compatibility with Rastan.
+- Added compatibility with Renegade.
 - Added compatibility with Sagaia.
 - Added compatibility with Scramble Spirits.
 - Added compatibility with Sensible Soccer.
