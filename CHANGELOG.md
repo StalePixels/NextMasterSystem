@@ -31,6 +31,7 @@
 - Added compatibility with Golden Axe Warrior.
 - Added compatibility with Golvellius - Valley of Doom.
 - Added compatibility with Kenseiden.
+- Added compatibility with KLAX.
 - Added compatibility with Kung Fu Kid.
 - Added compatibility with Land of Illusion Starring Mickey Mouse.
 - Added compatibility with Legend of Illusion Starring Mickey Mouse.
