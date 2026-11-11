@@ -15,6 +15,7 @@
 - Added compatibility with Aztec Adventure.
 - Added compatibility with Baku Baku.
 - Added compatibility with Bank Panic.
+- Added compatibility with Battle Out Run.
 - Added compatibility with Bomber Raid.
 - Added compatibility with Bonanza Bros.
 - Added compatibility with California Games.
