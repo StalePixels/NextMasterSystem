@@ -12,6 +12,7 @@
 - Added compatibility with Asterix and the Secret Mission.
 - Added compatibility with Ayrton Senna's Super Monaco GP II.
 - Added compatibility with Bank Panic.
+- Added compatibility with Bomber Raid.
 - Added compatibility with Bonanza Bros.
 - Added compatibility with California Games.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
