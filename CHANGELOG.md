@@ -28,6 +28,7 @@
 - Added compatibility with Dr. Robotnik's Mean Bean Machine.
 - Added compatibility with Dynamite Dux.
 - Added compatibility with Ecco - The Tides of Time.
+- Added compatibility with Enduro Racer.
 - Added compatibility with Fantastic Dizzy.
 - Added compatibility with Fantasy Zone - The Maze.
 - Added compatibility with Forgotten Worlds.
