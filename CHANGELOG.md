@@ -41,6 +41,7 @@
 - Added compatibility with Fire & Ice.
 - Added compatibility with Forgotten Worlds.
 - Added compatibility with Gain Ground.
+- Added compatibility with Gauntlet.
 - Added compatibility with Ghouls'n Ghosts.
 - Added compatibility with Golden Axe.
 - Added compatibility with Golden Axe Warrior.
