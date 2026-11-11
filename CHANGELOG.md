@@ -29,6 +29,7 @@
 - Added compatibility with Columns.
 - Added compatibility with Cool Spot.
 - Added compatibility with Cosmic Spacehead.
+- Added compatibility with Danan - The Jungle Fighter.
 - Added compatibility with Dragon Crystal.
 - Added compatibility with F1.
 - Added compatibility with G-LOC - Air Battle.
