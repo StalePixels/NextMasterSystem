@@ -35,6 +35,7 @@
 - Added compatibility with F1.
 - Added compatibility with G-LOC - Air Battle.
 - Added compatibility with Joe Montana Football.
+- Added compatibility with Shadow of the Beast.
 - Added compatibility with The Cyber Shinobi.
 - Added compatibility with Deep Duck Trouble Starring Donald Duck.
 - Added compatibility with Desert Strike.
