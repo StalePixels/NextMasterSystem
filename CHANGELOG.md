@@ -34,6 +34,7 @@
 - Added compatibility with Dragon Crystal.
 - Added compatibility with F1.
 - Added compatibility with G-LOC - Air Battle.
+- Added compatibility with Global Gladiators.
 - Added compatibility with Joe Montana Football.
 - Added compatibility with Shadow of the Beast.
 - Added compatibility with The Cyber Shinobi.
