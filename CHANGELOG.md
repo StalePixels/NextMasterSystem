@@ -11,6 +11,7 @@
 - Added compatibility with Asterix and the Great Rescue.
 - Added compatibility with Asterix and the Secret Mission.
 - Added compatibility with Ayrton Senna's Super Monaco GP II.
+- Added compatibility with Baku Baku.
 - Added compatibility with Bank Panic.
 - Added compatibility with Bomber Raid.
 - Added compatibility with Bonanza Bros.
