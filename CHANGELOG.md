@@ -23,6 +23,7 @@
 - Added compatibility with Chuck Rock II - Son of Chuck.
 - Added compatibility with Cloud Master.
 - Added compatibility with Columns.
+- Added compatibility with Cool Spot.
 - Added compatibility with Cosmic Spacehead.
 - Added compatibility with The Cyber Shinobi.
 - Added compatibility with Deep Duck Trouble Starring Donald Duck.
