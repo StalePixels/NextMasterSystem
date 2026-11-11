@@ -444,10 +444,17 @@ page 0 pw pm fx
 ; a frame lose it: each change is a Layer 2 draw of the cell, about 10,000 cycles, and a bit
 ; with no sprite over it changes nothing on the screen. Only cells
 ; whose VRAM copy still holds what the page wrote are changed (another writer has the cell
-; otherwise). Out: HL = $D57A, B = 0, C = $BE, as the game's code leaves them.
+; otherwise). The cells with the bit are kept in one set (trk); each frame looks at only NK of
+; them, from where the last frame stopped, so the work in the frame interrupt has a limit. The
+; game's frame interrupt runs with interrupts off, and the runtime's once-a-frame work waits for
+; it: work here that ends in the next picture moves the X scroll there, and the picture tears
+; at that line.
+; sts, a byte for each cell: bit 0 the bit is in VRAM, bit 1 the cell is in trk.
+; Out: HL = $D57A, B = 0, C = $BE, as the game's code leaves them.
 ; Runtime internals used: jt_vwrite, jt_peek, vdp_addr, vdp_regs, cur_mmu, and SHADOW_PAGE 29
 ; (the VRAM copy at $2000-$3FFF, in slot 0 while fx reads it; interrupts are off).
-NL      equ 300                 ; cells a list holds
+NL      equ 300                 ; cells the set holds
+NK      equ 48                  ; cells of the set looked at each frame
 pw:     ld (p_a),a
         ld a,1
         jr pw0
@@ -497,7 +504,10 @@ pw0:    ld (p_wm),a
         ld (hl),a
         ld hl,sts
         add hl,bc
-        ld (hl),0
+        ld a,(hl)
+        and 2
+        ld (hl),a               ; the bit off; a cell in the set stays there
+        ld a,(p_v)
         bit 4,a
         jr z,.wr
         ld hl,stp
@@ -505,11 +515,15 @@ pw0:    ld (p_wm),a
         ld a,(p_cur)
         cp (hl)
         jr nz,.clr
-        call app                ; covered: the bit stays
+        ld hl,sts               ; covered: the bit stays
+        add hl,bc
+        bit 1,(hl)
+        jr nz,.in
+        call app
         jr nc,.clr
         ld hl,sts
         add hl,bc
-        ld (hl),1
+.in:    ld (hl),3
 .raw:   ld a,(p_v)
         jr .wr
 .clr:   ld a,(p_v)
@@ -533,18 +547,18 @@ pw0:    ld (p_wm),a
         ret z
         ei
         ret
-; app: cell BC onto the current list. Carry set if it went on, clear if the list is full.
-app:    ld hl,(p_ln)
+; app: cell BC into the set. Carry set if it went in, clear if the set is full.
+app:    ld hl,(p_tn)
         ld de,NL
         or a
         sbc hl,de
         ret nc
-        ld hl,(p_ln)
+        ld hl,(p_tn)
         inc hl
-        ld (p_ln),hl
+        ld (p_tn),hl
         dec hl
         add hl,hl
-        ld de,(p_lp)
+        ld de,trk
         add hl,de
         ld (hl),c
         inc hl
@@ -584,19 +598,6 @@ cover:  ld a,(p_cur)            ; a new stamp
         ldir
         ld a,1
 .c1:    ld (p_cur),a
-        ld hl,(p_lp)            ; the last list becomes the old one
-        ld (p_op),hl
-        ld hl,(p_ln)
-        ld (p_on),hl
-        ld de,ls0
-        ld hl,(p_lp)
-        or a
-        sbc hl,de
-        jr nz,.c2
-        ld de,ls1
-.c2:    ld (p_lp),de
-        ld hl,0
-        ld (p_ln),hl
         ld hl,wq
         ld (p_wq),hl
         ld a,(vdp_regs+2)
@@ -664,52 +665,70 @@ cover:  ld a,(p_cur)            ; a new stamp
         ld hl,p_n
         dec (hl)
         jr nz,.sp
-.old:   xor a                   ; cells of the last list that no sprite covers now
+.old:   xor a                   ; NK cells of the set, from p_tc: the ones no sprite covers now
         ld (p_ncl),a
-        ld hl,(p_on)
+        ld a,NK
+        ld (p_k),a
+.ol:    ld hl,(p_tn)
         ld a,h
         or l
-        jr z,.done
-        ld ix,(p_op)
-.ol:    push hl
+        jr z,.done              ; the set is empty
+        ld de,(p_tc)
+        or a
+        sbc hl,de
+        jr z,.top
+        jr nc,.e1
+.top:   ld de,0                 ; past the end: from the first cell again
+        ld (p_tc),de
+.e1:    ld ix,trk
+        add ix,de
+        add ix,de
         ld c,(ix+0)
         ld b,(ix+1)
         ld hl,sts
         add hl,bc
-        ld a,(hl)
-        or a
-        jr z,.on2               ; the bit is off already
+        bit 0,(hl)
+        jr z,.rm                ; the bit is off already (a map writer wrote the cell)
         ld hl,stp
         add hl,bc
         ld a,(p_cur)
-        cp (hl)
-        jr z,.on2               ; covered: on the new list already
         sub (hl)
         cp 32
-        jr c,.keep              ; covered in the last 32 frames: the bit stays
+        jr c,.kp                ; covered in the last 32 frames: the bit stays
         ld a,(p_ncl)
         cp 3
-        jr nc,.keep             ; 3 cells cleared in this frame already
+        jr nc,.kp               ; 3 cells cleared in this frame already
         inc a
         ld (p_ncl),a
         ld hl,sts
         add hl,bc
         ld (hl),0
         call vchk               ; the copy as written, with the bit?
-        jr nz,.on2
+        jr nz,.rm2
         cp (hl)
-        jr nz,.on2
+        jr nz,.rm2
         and $EF
         call queue
-        jr .on2
-.keep:  call app                ; a full list leaves the bit on, untracked
-.on2:   inc ix
-        inc ix
-        pop hl
+        jr .rm2
+.rm:    res 1,(hl)
+.rm2:   ld hl,(p_tn)            ; out of the set: the last cell takes its place
         dec hl
-        ld a,h
-        or l
-        jr nz,.ol
+        ld (p_tn),hl
+        add hl,hl
+        ld de,trk
+        add hl,de
+        ld a,(hl)
+        ld (ix+0),a
+        inc hl
+        ld a,(hl)
+        ld (ix+1),a
+        jr .nk
+.kp:    ld hl,(p_tc)
+        inc hl
+        ld (p_tc),hl
+.nk:    ld hl,p_k
+        dec (hl)
+        jp nz,.ol
 .done:  ld a,(cur_mmu)
         db $ED,$92,$50          ; nextreg $50,a: the game's slot 0 back
 .wq:    ld hl,(p_wq)            ; the writes
@@ -775,22 +794,33 @@ mkc:    ld hl,stp
         add hl,bc
         ld a,(hl)
         or a
-        jr nz,.app              ; the bit is on already
-        call vchk               ; the copy as written, without the bit?
+        jr z,.off
+        bit 1,a
+        ret nz                  ; the bit is on, the cell in the set
+        call app                ; the bit is on, the set was full when it went on
+        ret nc
+        ld hl,sts
+        add hl,bc
+        set 1,(hl)
+        ret
+.off:   call vchk               ; the copy as written, without the bit?
         ret nz
         and $EF
         cp (hl)
         ret nz
-        call app
-        ret nc                  ; list full: left without the bit
         ld hl,sts
         add hl,bc
-        ld (hl),1
+        bit 1,(hl)
+        jr nz,.in               ; still in the set from before
+        call app
+        ret nc                  ; set full: left without the bit
+        ld hl,sts
+        add hl,bc
+.in:    ld (hl),3
         ld hl,gw
         add hl,bc
         ld a,(hl)
         jp queue
-.app:   jp app
 ; vchk: cell BC. Z set if the copy's low byte is glo's and its high byte is gw's; then A = gw.
 ; HL = the copy's high byte (slot 0 holds VRAM $2000-$3FFF).
 vchk:   ld hl,glo
@@ -844,17 +874,15 @@ p_n:    db 0
 p_wm:   db 0
 p_x:    db 0
 p_ncl:  db 0
+p_k:    db 0
 p_hl:   dw 0
 p_ssp:  dw 0
-p_lp:   dw ls0
-p_ln:   dw 0
-p_op:   dw 0
-p_on:   dw 0
+p_tn:   dw 0                    ; cells in trk
+p_tc:   dw 0                    ; the next cell of trk to look at
 p_wq:   dw 0
         ds 96
 stk:
-ls0:    ds 2*NL
-ls1:    ds 2*NL
+trk:    ds 2*NL
 wq:     ds 3*2*NL
         ds $3000-$
 gw:     ds 896
