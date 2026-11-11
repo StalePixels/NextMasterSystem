@@ -8,6 +8,7 @@
 - Added compatibility with Alex Kidd - High-Tech World.
 - Added compatibility with Alex Kidd - The Lost Stars.
 - Added compatibility with Alex Kidd in Shinobi World.
+- Added compatibility with Alien Storm.
 - Added compatibility with Asterix.
 - Added compatibility with Asterix and the Great Rescue.
 - Added compatibility with Asterix and the Secret Mission.
