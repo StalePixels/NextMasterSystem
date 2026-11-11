@@ -70,6 +70,7 @@
 - Added compatibility with Super Off Road.
 - Added compatibility with Super Smash T.V.
 - Added compatibility with Taz-Mania.
+- Added compatibility with Ultima IV - Quest of the Avatar.
 - Added compatibility with Wimbledon.
 - Added compatibility with Wonder Boy in Monster World.
 - Added compatibility with Zillion II - The Tri Formation.
