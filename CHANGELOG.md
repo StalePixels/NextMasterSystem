@@ -43,6 +43,7 @@
 - Added compatibility with Golden Axe Warrior.
 - Added compatibility with Golvellius - Valley of Doom.
 - Added compatibility with Impossible Mission.
+- Added compatibility with Indiana Jones and the Last Crusade.
 - Added compatibility with Kenseiden.
 - Added compatibility with King's Quest - Quest for the Crown.
 - Added compatibility with KLAX.
