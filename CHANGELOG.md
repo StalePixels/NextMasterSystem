@@ -21,6 +21,7 @@
 - Added compatibility with Buggy Run.
 - Added compatibility with California Games.
 - Added compatibility with California Games II.
+- Added compatibility with Casino Games.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
 - Added compatibility with Chuck Rock II - Son of Chuck.
 - Added compatibility with Cloud Master.
