@@ -50,6 +50,7 @@
 - Added compatibility with The Lucky Dime Caper Starring Donald Duck.
 - Added compatibility with Marble Madness.
 - Added compatibility with Master of Darkness.
+- Added compatibility with Masters of Combat.
 - Added compatibility with Miracle Warriors - Seal of The Dark Lord.
 - Added compatibility with Mortal Kombat.
 - Added compatibility with Mortal Kombat II.
