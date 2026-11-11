@@ -84,6 +84,7 @@
 - Added compatibility with Shadow Dancer - The Secret of Shinobi.
 - Added compatibility with Shinobi.
 - Added compatibility with Sonic Chaos.
+- Added compatibility with Sonic Spinball.
 - Added compatibility with Sonic The Hedgehog 2.
 - Added compatibility with Sonic The Hedgehog 2 (Rev 1).
 - Added compatibility with Spider-Man.
