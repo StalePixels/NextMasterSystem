@@ -43,6 +43,7 @@
 - Added compatibility with Golvellius - Valley of Doom.
 - Added compatibility with Impossible Mission.
 - Added compatibility with Kenseiden.
+- Added compatibility with King's Quest - Quest for the Crown.
 - Added compatibility with KLAX.
 - Added compatibility with Krusty's Fun House.
 - Added compatibility with Kung Fu Kid.
