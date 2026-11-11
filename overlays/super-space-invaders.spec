@@ -21,13 +21,72 @@
 # - LDIR at $3CC1-$3CC7 (HL = DE = 0, BC = 0) and at $07B2, $0831, $085E, $4A05, $4A27, $4A6D,
 #   $4A8F and bank 11 $AEF8 copy memory onto itself as delays; the mapper sees the same values
 #   again, so they are not patched.
+# - The handler saves AF', BC, DE, HL and IX, but not BC', DE' and HL'. The sound drivers it
+#   calls (bank 9 $AC23 from $C970, bank 11 $AE6E from $C99C and $C9B2) use EXX and change
+#   them, and the sprite builder at $09A2-$09F3 keeps its sprite count in C'. A frame interrupt
+#   inside the builder stores a wrong count at $C2C1, and the handler's JP (IX) into the sprite
+#   upload then runs into the developer monitor. The three calls go to caves in the $00 bytes at
+#   $0300 (no code runs there: $0292 JP NZ,$0400 always jumps, ROM $0007 is 1) that save BC',
+#   DE' and HL' in page 0 around the driver; the registers are kept in the page, not on the
+#   game's stack.
+# - The score panel (name table columns 24-31) has the priority bit: the saucer at the top of
+#   the screen passes behind it. The game loads new tiles under the panel's top border cells
+#   after they are on screen; prichg draws those cells again from the new tiles.
 name Super Space Invaders
 cart 1D6244EE
 hz 50		; No-Intro region Europe
 vector 10 io
+priority
+prichg
 asm 00276 2   ; IM 1 -> IM 2
     im 2
 endasm
+label altcave9 00300
+label altcave11 00308
+asm 00300 24  ; $00 bytes: the caves that keep BC', DE' and HL' across the sound drivers
+    call altsv
+    call $AC23          ; bank 9, put in slot 2 by the handler
+    jr altrs
+    call altsv
+    call $AE6E          ; bank 11, put in slot 2 by the handler
+altrs:
+    rst $10
+    db far_io, pg_alt_rest, ent_alt_rest
+    ret
+altsv:
+    rst $10
+    db far_io, pg_alt_save, ent_alt_save
+    ret
+endasm
+asm 3F4D2 3   ; CALL $AC23 at RAM $C970 in the handler
+    call altcave9
+endasm
+asm 3F4FE 3   ; CALL $AE6E at RAM $C99C in the handler
+    call altcave11
+endasm
+asm 3F514 3   ; CALL $AE6E at RAM $C9B2 in the handler
+    call altcave11
+endasm
+page 0 alt_save alt_rest
+; BC', DE' and HL' of the game, kept across the handler's sound driver calls
+alt_save:
+    exx
+    ld (sv_bc),bc
+    ld (sv_de),de
+    ld (sv_hl),hl
+    exx
+    ret
+alt_rest:
+    exx
+    ld bc,(sv_bc)
+    ld de,(sv_de)
+    ld hl,(sv_hl)
+    exx
+    ret
+sv_bc: dw 0
+sv_de: dw 0
+sv_hl: dw 0
+endpage
 mapst 00055   ; LD ($FFFF),A
 mapst 00278   ; LD ($FFFC),A
 mapst 0027B   ; LD ($FFFD),A
