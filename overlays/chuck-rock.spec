@@ -1,4 +1,6 @@
 # Chuck Rock (Europe, Brazil) (En), CRC32 DD0E2927, 512K, Sega mapper.
+# Pokes: codes from the libretro-database cheat catalogue (cht/Sega - Master System -
+# Mark III/), CC-BY-SA 4.0: https://github.com/libretro/libretro-database
 # Drafted by tools/mkspec.py from sitescan output with the reference I/O logs of the title
 # (300 s, no input), random input (600 s) and play (600 s, scripted).
 # The logs ran no I/O or mapper site that the scan with them did not find.
@@ -1103,3 +1105,24 @@ v_buf:  ds 28*64
         ds $3800-$
 msk:    ds $700                 ; at $3800: the mask, at the copy's address + $2000
 endpage
+
+# Chuck Rock (Europe, Brazil).cht and Chuck Rock (Europe) (Action Replay).cht, "Infinite Lives"
+poke "Infinite lives"
+ar 00C0-8E03
+endpoke
+
+# Chuck Rock (Europe, Brazil).cht and Chuck Rock (Europe) (Action Replay).cht, "Infinite Health"
+poke "Infinite health"
+ar 00C0-8F05
+endpoke
+
+# Chuck Rock (Europe, Brazil).cht, "Invulnerability"
+poke "Invincibility"
+ar 00C1-1102
+endpoke
+
+# Chuck Rock (Europe, Brazil).cht, "Level Select", and Chuck Rock (Europe) (Action Replay).cht,
+# "Level Select (2-4)": values 1 to 4 start levels 2 to 5; 5 and above draw a garbled screen
+poke "Start level"
+ar 00C0-8C??
+endpoke
