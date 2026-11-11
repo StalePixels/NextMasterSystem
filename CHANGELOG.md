@@ -43,6 +43,7 @@
 - Added compatibility with Ms. Pac-Man.
 - Added compatibility with Ninja Gaiden.
 - Added compatibility with Olympic Gold.
+- Added compatibility with Pac-Mania.
 - Added compatibility with Paperboy.
 - Added compatibility with Power Strike II.
 - Added compatibility with Prince of Persia.
