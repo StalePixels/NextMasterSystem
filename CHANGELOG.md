@@ -75,6 +75,7 @@
 - Added compatibility with Renegade.
 - Added compatibility with Sagaia.
 - Added compatibility with Scramble Spirits.
+- Added compatibility with Sega Chess.
 - Added compatibility with Sensible Soccer.
 - Added compatibility with Shadow Dancer - The Secret of Shinobi.
 - Added compatibility with Shinobi.
