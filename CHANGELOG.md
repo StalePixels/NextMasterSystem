@@ -74,6 +74,7 @@
 - Added compatibility with Psychic World.
 - Added compatibility with Psycho Fox.
 - Added compatibility with Putt & Putter.
+- Added compatibility with R.C. Grand Prix.
 - Added compatibility with Rainbow Islands.
 - Added compatibility with Rampage.
 - Added compatibility with Rampart.
