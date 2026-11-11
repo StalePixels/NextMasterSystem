@@ -79,6 +79,7 @@
 - Added compatibility with Taz-Mania.
 - Added compatibility with Ultima IV - Quest of the Avatar.
 - Added compatibility with Wimbledon.
+- Added compatibility with Wimbledon II.
 - Added compatibility with Wonder Boy in Monster World.
 - Added compatibility with Zillion II - The Tri Formation.
 
