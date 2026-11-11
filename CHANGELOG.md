@@ -17,6 +17,7 @@
 - Added compatibility with Bonanza Bros.
 - Added compatibility with California Games.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
+- Added compatibility with Chuck Rock II - Son of Chuck.
 - Added compatibility with Cloud Master.
 - Added compatibility with Columns.
 - Added compatibility with Cosmic Spacehead.
