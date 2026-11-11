@@ -29,6 +29,7 @@
 - Added compatibility with Columns.
 - Added compatibility with Cool Spot.
 - Added compatibility with Cosmic Spacehead.
+- Added compatibility with F1.
 - Added compatibility with The Cyber Shinobi.
 - Added compatibility with Deep Duck Trouble Starring Donald Duck.
 - Added compatibility with Desert Strike.
