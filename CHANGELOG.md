@@ -2,6 +2,7 @@
 
 ## Release 2 (unreleased)
 
+- Added compatibility with Action Fighter.
 - Added compatibility with After Burner.
 - Added compatibility with Aleste.
 - Added compatibility with Alex Kidd - High-Tech World.
