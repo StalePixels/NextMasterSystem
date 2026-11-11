@@ -67,6 +67,7 @@
 - Added compatibility with Psychic World.
 - Added compatibility with Psycho Fox.
 - Added compatibility with Rainbow Islands.
+- Added compatibility with Rampage.
 - Added compatibility with Rampart.
 - Added compatibility with Rastan.
 - Added compatibility with Renegade.
