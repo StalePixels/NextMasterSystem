@@ -20,6 +20,9 @@
 name Penguin Land
 cart F97E9875
 hz any		; No-Intro regions USA, Europe
+# Priority tiles: the block in a round that a drip sprite runs down from has the priority
+# bit, and the drip moves up behind it.
+priority
 # No free RST vector: $0000-$0002 (DI; LD SP part) becomes the vector,
 # the game starts at $0004 with the SP its LD SP,nn set.
 vector 00 io
