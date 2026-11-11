@@ -89,6 +89,7 @@
 - Added compatibility with Super Off Road.
 - Added compatibility with Super Smash T.V.
 - Added compatibility with Taz-Mania.
+- Added compatibility with Thunder Blade.
 - Added compatibility with Ultima IV - Quest of the Avatar.
 - Added compatibility with Wimbledon.
 - Added compatibility with Wimbledon II.
