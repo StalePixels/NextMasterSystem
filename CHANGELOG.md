@@ -79,6 +79,7 @@
 - Added compatibility with Streets of Rage.
 - Added compatibility with Streets of Rage II.
 - Added compatibility with Strider.
+- Added compatibility with Strider II.
 - Added compatibility with Super Monaco GP.
 - Added compatibility with Super Off Road.
 - Added compatibility with Super Smash T.V.
