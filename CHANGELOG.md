@@ -71,6 +71,7 @@
 - Added compatibility with Prince of Persia.
 - Added compatibility with Psychic World.
 - Added compatibility with Psycho Fox.
+- Added compatibility with Putt & Putter.
 - Added compatibility with Rainbow Islands.
 - Added compatibility with Rampage.
 - Added compatibility with Rampart.
