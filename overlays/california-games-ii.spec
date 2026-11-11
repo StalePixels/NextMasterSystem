@@ -25,6 +25,47 @@ endasm
 asm 004C1 2   ; IM 1 -> IM 2
     im 2
 endasm
+# The sound step at $114F keeps the slot 2 bank in $C726 while it maps bank 15
+# ($1165-$118D). Both the frame handler ($1197) and the main loop ($5405 in
+# snowboarding, among others) call it, the main loop with interrupts on. A frame
+# interrupt inside the main loop's call runs the step again: the inner call saves bank 15
+# in $C726, the outer call then restores bank 15, and the game runs bank 15 data as code
+# (it stops in snowboarding). Here the step refuses to start again while it runs: the inner
+# call returns at once and that frame has no sound step. sndbusy is set from the bank save
+# to after the bank restore. The caves are in the unused $FF bytes after the JP at $0038.
+label sndbusy 0003B
+label sndin 0003C
+label sndout 0004C
+asm 0003B 1   ; unused $FF byte: sndbusy
+    db 0
+endasm
+asm 0003C 16  ; unused $FF bytes: sndin, in place of LD A,($FFFF) at $1165
+    ld a,(sndbusy)
+    or a
+    jr nz,.skip
+    inc a
+    ld (sndbusy),a
+    ld a,($FFFF)
+    ret
+.skip:
+    pop af              ; the return to $1168
+    ret                 ; to the caller of $114F
+endasm
+asm 0004C 13  ; unused $FF bytes: sndout, in place of LD A,($C726) at $1188
+    ld a,($C726)
+    call $118B          ; LD ($FFFF),A (mapper site); RET
+    push af
+    xor a
+    ld (sndbusy),a
+    pop af
+    ret
+endasm
+asm 01165 3   ; LD A,($FFFF)
+    call sndin
+endasm
+asm 01188 3   ; LD A,($C726) (the restore at $118B and the RET follow)
+    jp sndout
+endasm
 site 0044C   ; OUT ($3F),A
 site 00496   ; OUT ($3F),A
 site 004A9   ; OTIR
@@ -1107,7 +1148,8 @@ vrmod:  db 0
 rptr:   dw 0
 rleft:  db 0
 rn:     db 0
-; sat: the sprite table at $0F2E: $3F00-$3F3F from $C000, $3F80-$3FFF from $C040. Out, as the
+; sat: the sprite table at $0F2E: $3F00-$3F3F from $C000 (through ybuf, where sbhide moves
+; the sprites the snowboarding slope covers), $3F80-$3FFF from $C040. Out, as the
 ; routine leaves them: HL = $C0C0, DE = $3F80, B = 0, A = ($C0BF), the flags of
 ; AND ($C739), the VDP address at $0000 (after $3FFF), interrupts as $0F50 leaves them.
 sat:    di
@@ -1119,11 +1161,18 @@ sat:    di
         ex af,af'
         push af
         ld hl,$C000
+        ld de,ybuf
+        ld bc,$40
+        ldir
+        ld a,($DFFF)            ; the slot 2 bank: 9 in snowboarding
+        cp 9
+        call z,sbhide
+        ld hl,ybuf
         ld de,$3F00
         ld bc,$4001
         ld ix,$40
         ld iy,$40
-        xor a
+        ld a,1                  ; the source is this page
         call jt_vwrite
         ld hl,$C040
         ld de,$3F80
@@ -1148,6 +1197,30 @@ sat:    di
         ei
         ret
 zero4:  db 0,0,0,0
+; sbhide: snowboarding draws the bridge at the bottom left with sprites from X 240 (X -16
+; meant). sat calls it when the slot 2 bank is 9 ($DFFF, the RAM copy of the last mapper
+; write), the snowboarding graphics bank. On the Master System the sprites at X 240-255 fall on slope cells with the
+; priority bit at the right edge (columns 28-31 from about line 144) and do not show. The
+; overlay runs without `priority`, so a sprite at X 240 or more with its top at line 145 or
+; below gets Y $E0 (below the picture) in the copy in ybuf. Stops at the $D0 end mark.
+sbhide: ld hl,ybuf
+        ld de,$C040
+        ld b,64
+.next:  ld a,(hl)
+        cp $D0
+        ret z
+        cp $90
+        jr c,.skip
+        ld a,(de)
+        cp $F0
+        jr c,.skip
+        ld (hl),$E0
+.skip:  inc hl
+        inc de
+        inc de
+        djnz .next
+        ret
+ybuf:   ds 64
 ; HL' += 2 (bg: the game's INC HL; INC HL on the shadow address; pipe keeps HL' at the
 ; row start)
 step2:  ld a,(doskip)
