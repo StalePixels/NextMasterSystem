@@ -2,10 +2,73 @@
 
 ## Release 2 (unreleased)
 
+- Added compatibility with After Burner.
+- Added compatibility with Aleste.
+- Added compatibility with Alex Kidd - High-Tech World.
+- Added compatibility with Alex Kidd - The Lost Stars.
+- Added compatibility with Alex Kidd in Shinobi World.
 - Added compatibility with Asterix.
+- Added compatibility with Asterix and the Great Rescue.
+- Added compatibility with Asterix and the Secret Mission.
+- Added compatibility with Ayrton Senna's Super Monaco GP II.
+- Added compatibility with Bank Panic.
+- Added compatibility with Bonanza Bros.
+- Added compatibility with California Games.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
+- Added compatibility with Cloud Master.
+- Added compatibility with Columns.
+- Added compatibility with Cosmic Spacehead.
+- Added compatibility with Desert Strike.
+- Added compatibility with Double Dragon.
+- Added compatibility with Dr. Robotnik's Mean Bean Machine.
+- Added compatibility with Ecco - The Tides of Time.
 - Added compatibility with Fantastic Dizzy.
+- Added compatibility with Fantasy Zone - The Maze.
+- Added compatibility with Forgotten Worlds.
+- Added compatibility with Gain Ground.
+- Added compatibility with Ghouls'n Ghosts.
+- Added compatibility with Golden Axe.
+- Added compatibility with Golden Axe Warrior.
+- Added compatibility with Golvellius - Valley of Doom.
+- Added compatibility with Kenseiden.
+- Added compatibility with Kung Fu Kid.
+- Added compatibility with Land of Illusion Starring Mickey Mouse.
+- Added compatibility with Legend of Illusion Starring Mickey Mouse.
+- Added compatibility with Lemmings.
+- Added compatibility with The Lion King.
+- Added compatibility with Marble Madness.
+- Added compatibility with Master of Darkness.
+- Added compatibility with Mortal Kombat.
+- Added compatibility with Mortal Kombat II.
+- Added compatibility with Ms. Pac-Man.
+- Added compatibility with Ninja Gaiden.
+- Added compatibility with Olympic Gold.
+- Added compatibility with Paperboy.
+- Added compatibility with Power Strike II.
+- Added compatibility with Prince of Persia.
+- Added compatibility with Psychic World.
+- Added compatibility with Psycho Fox.
+- Added compatibility with Rainbow Islands.
+- Added compatibility with Rampart.
+- Added compatibility with Rastan.
+- Added compatibility with Sagaia.
+- Added compatibility with Sensible Soccer.
+- Added compatibility with Shadow Dancer - The Secret of Shinobi.
+- Added compatibility with Shinobi.
+- Added compatibility with Sonic Chaos.
+- Added compatibility with Sonic The Hedgehog 2.
+- Added compatibility with Spider-Man.
+- Added compatibility with Spider-Man - Return of the Sinister Six.
+- Added compatibility with Streets of Rage.
+- Added compatibility with Streets of Rage II.
+- Added compatibility with Strider.
 - Added compatibility with Super Monaco GP.
+- Added compatibility with Super Off Road.
+- Added compatibility with Super Smash T.V.
+- Added compatibility with Taz-Mania.
+- Added compatibility with Wimbledon.
+- Added compatibility with Wonder Boy in Monster World.
+- Added compatibility with Zillion II - The Tri Formation.
 
 - Improved compatibility with Alien Syndrome.
 - Improved compatibility with Bubble Bobble.
