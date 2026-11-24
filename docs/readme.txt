@@ -1,5 +1,5 @@
 NEXTMASTERSYSTEM - Master System games on the ZX Spectrum Next
-Release 1, October 2026
+Release 2, November 2026
 ============================================================
 
 NextMasterSystem plays Sega Master System games on a Spectrum

@@ -1,6 +1,6 @@
 # Changelog
 
-## Release 2 (unreleased)
+## Release 2, November 2026
 
 - Added compatibility with Action Fighter.
 - Added compatibility with After Burner.
@@ -25,6 +25,7 @@
 - Added compatibility with California Games II.
 - Added compatibility with Casino Games.
 - Added compatibility with Castle of Illusion Starring Mickey Mouse.
+- Added compatibility with Chuck Rock.
 - Added compatibility with Chuck Rock II - Son of Chuck.
 - Added compatibility with Cloud Master.
 - Added compatibility with Columns.
